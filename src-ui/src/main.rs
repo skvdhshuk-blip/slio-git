@@ -13,7 +13,6 @@ pub mod components;
 pub mod views;
 pub mod widgets;
 
-use crate::components::status_icons::FileStatus;
 use crate::file_watcher::RepositoryWatchEvent;
 use crate::i18n::I18n;
 use crate::keyboard::{get_shortcuts, ShortcutAction};
@@ -43,7 +42,7 @@ use git_core::{
 use iced::widget::operation::{scroll_to, AbsoluteOffset};
 use iced::widget::Id;
 use iced::widget::{
-    container, mouse_area, opaque, stack, text, Button, Column, Container, Row, Space, Text,
+    mouse_area, opaque, stack, text, Button, Column, Container, Row, Space, Text,
 };
 use iced::{
     time, Alignment, Background, Border, Color, Element, Length, Point, Subscription, Task, Theme,
@@ -180,7 +179,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             i18n.cannot_open_repo_fmt.replace("{}", &error.to_string()),
                             "repository.open",
                             "repository.open",
-                        i18n,
+                            i18n,
                         );
                     }
                 }
@@ -221,7 +220,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             i18n.cannot_init_repo_fmt.replace("{}", &error.to_string()),
                             "repository.init",
                             "repository.init",
-                        i18n,
+                            i18n,
                         );
                     }
                 }
@@ -265,6 +264,42 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     Some(i18n.no_repo_open_detail.to_string()),
                     "repository.refresh",
                 );
+            }
+        }
+        Message::QuitMergeState => {
+            let Some(repo) = state.current_repository.clone() else {
+                state.set_error(i18n.no_repo_opened.to_string());
+                return Task::none();
+            };
+
+            match git_core::quit_merge(&repo) {
+                Ok(()) => {
+                    if let Err(error) = refresh_repository_after_action(state, &repo, false, i18n)
+                    {
+                        report_async_failure(
+                            state,
+                            i18n.refresh_failed,
+                            i18n.refresh_failed_fmt.replace("{}", &error.to_string()),
+                            "workspace.merge.quit",
+                            "workspace.merge.quit",
+                            i18n,
+                        );
+                    } else {
+                        state.set_success(
+                            i18n.merge_state_cleared,
+                            Some(i18n.merge_state_cleared_detail.to_string()),
+                            "workspace.merge.quit",
+                        );
+                    }
+                }
+                Err(error) => report_async_failure(
+                    state,
+                    i18n.quit_merge_failed,
+                    error.to_string(),
+                    "workspace.merge.quit",
+                    "workspace.merge.quit",
+                    i18n,
+                ),
             }
         }
         Message::AutoRefreshTick(now) => {
@@ -383,7 +418,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.conflicts",
                     "workspace.conflicts",
-                i18n,
+                    i18n,
                 );
             } else {
                 log_shell_navigation(
@@ -405,7 +440,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.stage_file",
                     "workspace.stage_file",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -420,7 +455,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.unstage_file",
                     "workspace.unstage_file",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -432,7 +467,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.stage_all",
                     "workspace.stage_all",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -444,7 +479,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.unstage_all",
                     "workspace.unstage_all",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -456,7 +491,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.select_change",
                     "workspace.select_change",
-                i18n,
+                    i18n,
                 );
             }
             update_editor_diff_model(state);
@@ -567,10 +602,14 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                                 );
                                                 state.close_conflict_merge();
                                                 state.merge_editor = None;
-                                                let _ = state.refresh_current_repository(true, i18n);
+                                                let _ =
+                                                    state.refresh_current_repository(true, i18n);
                                             }
                                             Err(e) => {
-                                                state.set_error(i18n.write_conflict_result_failed_fmt.replace("{}", &e.to_string()));
+                                                state.set_error(
+                                                    i18n.write_conflict_result_failed_fmt
+                                                        .replace("{}", &e.to_string()),
+                                                );
                                             }
                                         }
                                     }
@@ -581,7 +620,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
                 _ => {
                     if let Some(editor) = &mut state.merge_editor {
-                        let _task = editor.update(event);
+                        return editor.update(event).map(Message::MergeEditorMessage);
                     }
                 }
             }
@@ -612,7 +651,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         e.to_string(),
                         "workspace.stage_hunk",
                         "workspace.stage_hunk",
-                    i18n,
+                        i18n,
                     );
                 } else {
                     return update(state, Message::Refresh);
@@ -629,7 +668,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         e.to_string(),
                         "workspace.unstage_hunk",
                         "workspace.unstage_hunk",
-                    i18n,
+                        i18n,
                     );
                 } else {
                     return update(state, Message::Refresh);
@@ -667,7 +706,10 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         .current_upstream_remote()
                         .unwrap_or_else(|| "origin".to_string());
                     state.network_operation = Some(state::NetworkOperation {
-                        label: i18n.force_push_label_fmt.replace("{}", &branch).replacen("{}", &remote, 1),
+                        label: i18n
+                            .force_push_label_fmt
+                            .replace("{}", &branch)
+                            .replacen("{}", &remote, 1),
                         progress: None,
                         status: Some("--force-with-lease".to_string()),
                     });
@@ -688,7 +730,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 e.to_string(),
                                 "workspace.push.force",
                                 "workspace.push.force",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
@@ -705,7 +747,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         e.to_string(),
                         "workspace.push.upstream",
                         "workspace.push.upstream",
-                    i18n,
+                        i18n,
                     );
                 } else {
                     return update(state, Message::Push);
@@ -767,7 +809,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.project-switch",
                     "workspace.project-switch",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -804,7 +846,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error.to_string(),
                         "workspace.revert",
                         "workspace.revert",
-                    i18n,
+                        i18n,
                     );
                 } else {
                     state.refresh_changes();
@@ -821,7 +863,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.copy_path",
                     "workspace.copy_path",
-                i18n,
+                    i18n,
                 );
             } else {
                 state.set_success(i18n.path_copied, Some(path), "workspace.copy_path");
@@ -841,7 +883,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "keyboard.stage",
                                 "keyboard.stage",
-                            i18n,
+                                i18n,
                             );
                         }
                     } else {
@@ -862,7 +904,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "keyboard.unstage",
                                 "keyboard.unstage",
-                            i18n,
+                                i18n,
                             );
                         }
                     } else {
@@ -880,7 +922,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.stage_all",
                         "workspace.stage_all",
-                    i18n,
+                        i18n,
                     );
                 }
             }
@@ -892,7 +934,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.unstage_all",
                         "workspace.unstage_all",
-                    i18n,
+                        i18n,
                     );
                 }
             }
@@ -905,7 +947,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.commit",
                         "workspace.commit",
-                    i18n,
+                        i18n,
                     );
                 }
             }
@@ -917,7 +959,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.commit",
                         "workspace.commit.amend",
-                    i18n,
+                        i18n,
                     );
                 }
             }
@@ -929,7 +971,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.push",
                         "workspace.push",
-                    i18n,
+                        i18n,
                     );
                 } else {
                     state.set_info(i18n.remote_panel_opened, None, "keyboard.shortcut");
@@ -944,7 +986,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "keyboard.diff",
                             "keyboard.diff",
-                        i18n,
+                            i18n,
                         );
                     }
                 } else {
@@ -963,12 +1005,15 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.commit",
                         "workspace.commit",
-                    i18n,
+                        i18n,
                     );
                 }
             }
             ShortcutAction::SwitchToLogTab => {
-                return update(state, Message::SwitchGitToolWindowTab(GitToolWindowTab::Log));
+                return update(
+                    state,
+                    Message::SwitchGitToolWindowTab(GitToolWindowTab::Log),
+                );
             }
             ShortcutAction::SwitchToChangesTab => {
                 return update(
@@ -986,7 +1031,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.commit",
                     "workspace.commit",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -998,7 +1043,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.pull",
                     "workspace.pull",
-                i18n,
+                    i18n,
                 );
             } else {
                 // Switch to IDEA-style Pull dialog
@@ -1021,7 +1066,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.push",
                     "workspace.push",
-                i18n,
+                    i18n,
                 );
             } else {
                 // Switch to IDEA-style Push dialog
@@ -1044,7 +1089,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.remote.toolbar-menu",
                     "workspace.remote.toolbar-menu",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -1054,8 +1099,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::ToolbarRemoteActionSelected { action, remote } => {
             if let Err(error) = run_toolbar_remote_action(state, action, remote) {
                 let (title, source) = match action {
-                    ToolbarRemoteAction::Pull => (i18n.pull_remote_failed, "workspace.remote.toolbar.pull"),
-                    ToolbarRemoteAction::Push => (i18n.push_remote_failed, "workspace.remote.toolbar.push"),
+                    ToolbarRemoteAction::Pull => {
+                        (i18n.pull_remote_failed, "workspace.remote.toolbar.pull")
+                    }
+                    ToolbarRemoteAction::Push => {
+                        (i18n.push_remote_failed, "workspace.remote.toolbar.push")
+                    }
                 };
                 report_async_failure(state, title, error, source, source, i18n);
             }
@@ -1068,7 +1117,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.stash",
                     "workspace.stash",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -1115,7 +1164,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.remote",
                     "workspace.remote",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -1127,7 +1176,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.tags",
                     "workspace.tags",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -1139,7 +1188,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.rebase",
                     "workspace.rebase",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -1152,7 +1201,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.conflicts",
                     "workspace.conflicts",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -1175,7 +1224,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.conflicts",
                     "workspace.conflicts.merge",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -1193,7 +1242,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.conflicts",
                     "workspace.conflicts.accept_ours",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -1211,7 +1260,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     error,
                     "workspace.conflicts",
                     "workspace.conflicts.accept_theirs",
-                i18n,
+                    i18n,
                 );
             }
         }
@@ -1222,10 +1271,11 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     report_async_failure(
                         state,
                         i18n.refresh_conflicts_failed,
-                        i18n.refresh_conflicts_failed_fmt.replace("{}", &error.to_string()),
+                        i18n.refresh_conflicts_failed_fmt
+                            .replace("{}", &error.to_string()),
                         "workspace.conflicts",
                         "workspace.conflicts.refresh",
-                    i18n,
+                        i18n,
                     );
                 }
             }
@@ -1247,7 +1297,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.conflicts",
                         "workspace.conflicts.resolve",
-                    i18n,
+                        i18n,
                     );
                 }
             }
@@ -1314,7 +1364,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.commit",
                         "workspace.commit.submit",
-                    i18n,
+                        i18n,
                     );
                 }
             }
@@ -1333,7 +1383,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.commit",
                         "workspace.commit.amend",
-                    i18n,
+                        i18n,
                     );
                 }
             }
@@ -1348,7 +1398,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.commit_and_push",
                         "workspace.commit_and_push",
-                    i18n,
+                        i18n,
                     );
                 } else {
                     // Commit succeeded, now push
@@ -1493,7 +1543,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.commit_menu",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
@@ -1531,7 +1581,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
                 BranchPopupMessage::SelectBranchCommit(commit_id) => {
                     if let Ok(repo) = require_repository(state) {
-                        state.branch_popup.select_branch_commit(&repo, commit_id, i18n);
+                        state
+                            .branch_popup
+                            .select_branch_commit(&repo, commit_id, i18n);
                         state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
                         if let Some(error) = state.branch_popup.error.clone() {
                             report_async_failure(
@@ -1540,7 +1592,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.select_commit",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
@@ -1559,7 +1611,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.inline",
-                            i18n,
+                                i18n,
                             );
                         } else {
                             let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -1585,7 +1637,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.create",
-                            i18n,
+                                i18n,
                             );
                         } else {
                             let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -1609,7 +1661,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.delete",
-                            i18n,
+                                i18n,
                             );
                         } else {
                             let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -1643,7 +1695,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
                 BranchPopupMessage::CheckoutBranch(name) => {
                     if let Ok(repo) = require_repository(state) {
-                        state.branch_popup.checkout_branch(&repo, name.clone(), i18n);
+                        state
+                            .branch_popup
+                            .checkout_branch(&repo, name.clone(), i18n);
                         if let Some(error) = state.branch_popup.error.clone() {
                             // Detect uncommitted changes conflict → show smart checkout dialog
                             if error.contains("would be overwritten")
@@ -1662,7 +1716,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     error,
                                     "workspace.branches",
                                     "workspace.branches.checkout",
-                                i18n,
+                                    i18n,
                                 );
                             }
                         } else if let Err(error) =
@@ -1674,7 +1728,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.checkout",
-                            i18n,
+                                i18n,
                             );
                         } else if let Some(current) = state.current_repository.clone() {
                             state.branch_popup.load_branches(&current, i18n);
@@ -1707,7 +1761,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     error,
                                     "workspace.branches",
                                     "workspace.branches.checkout_remote",
-                                i18n,
+                                    i18n,
                                 );
                             }
                         } else if let Err(error) =
@@ -1719,7 +1773,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.checkout_remote",
-                            i18n,
+                                i18n,
                             );
                         } else if let Some(current) = state.current_repository.clone() {
                             state.branch_popup.load_branches(&current, i18n);
@@ -1753,7 +1807,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             }
                             Err(error) => {
                                 state.branch_popup.is_loading = false;
-                                let msg = i18n.smart_checkout_failed_fmt.replace("{}", &error.to_string());
+                                let msg = i18n
+                                    .smart_checkout_failed_fmt
+                                    .replace("{}", &error.to_string());
                                 state.branch_popup.error = Some(msg.clone());
                                 report_async_failure(
                                     state,
@@ -1761,7 +1817,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     msg,
                                     "workspace.branches",
                                     "workspace.branches.smart_checkout",
-                                i18n,
+                                    i18n,
                                 );
                             }
                         }
@@ -1790,7 +1846,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             }
                             Err(error) => {
                                 state.branch_popup.is_loading = false;
-                                let msg = i18n.force_checkout_failed_fmt.replace("{}", &error.to_string());
+                                let msg = i18n
+                                    .force_checkout_failed_fmt
+                                    .replace("{}", &error.to_string());
                                 state.branch_popup.error = Some(msg.clone());
                                 report_async_failure(
                                     state,
@@ -1798,7 +1856,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     msg,
                                     "workspace.branches",
                                     "workspace.branches.force_checkout",
-                                i18n,
+                                    i18n,
                                 );
                             }
                         }
@@ -1819,7 +1877,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.merge",
-                            i18n,
+                                i18n,
                             );
                         } else if let Err(error) =
                             refresh_repository_after_action(state, &repo, true, i18n)
@@ -1830,7 +1888,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.merge",
-                            i18n,
+                                i18n,
                             );
                         } else if state.has_conflicts() {
                             state.set_warning(
@@ -1861,7 +1919,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.checkout_rebase",
-                            i18n,
+                                i18n,
                             );
                         } else if let Err(error) =
                             refresh_repository_after_action(state, &repo, true, i18n)
@@ -1872,7 +1930,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.checkout_rebase",
-                            i18n,
+                                i18n,
                             );
                         } else if !state.has_conflicts() {
                             if let Some(current) = state.current_repository.clone() {
@@ -1900,14 +1958,15 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.compare",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
                 }
                 BranchPopupMessage::CompareWithWorktree(reference) => {
                     if let Ok(repo) = require_repository(state) {
-                        state.branch_popup.comparison_title = Some(i18n.worktree_label_fmt.replace("{}", &reference));
+                        state.branch_popup.comparison_title =
+                            Some(i18n.worktree_label_fmt.replace("{}", &reference));
                         state
                             .branch_popup
                             .compare_ref_to_workdir_preview(&repo, &reference, i18n);
@@ -1919,7 +1978,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.worktree_diff",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
@@ -1934,7 +1993,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.rebase",
-                            i18n,
+                                i18n,
                             );
                         } else if let Err(error) =
                             refresh_repository_after_action(state, &repo, true, i18n)
@@ -1945,7 +2004,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.rebase",
-                            i18n,
+                                i18n,
                             );
                         } else if !state.has_conflicts() {
                             if let Some(current) = state.current_repository.clone() {
@@ -1968,7 +2027,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.fetch",
-                            i18n,
+                                i18n,
                             );
                         } else {
                             let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -1994,7 +2053,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.push",
-                            i18n,
+                                i18n,
                             );
                         } else {
                             let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -2010,7 +2069,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
                 BranchPopupMessage::SetUpstream { branch, upstream } => {
                     if let Ok(repo) = require_repository(state) {
-                        state.branch_popup.set_upstream(&repo, &branch, &upstream, i18n);
+                        state
+                            .branch_popup
+                            .set_upstream(&repo, &branch, &upstream, i18n);
                         if let Some(error) = state.branch_popup.error.clone() {
                             report_async_failure(
                                 state,
@@ -2018,7 +2079,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.upstream",
-                            i18n,
+                                i18n,
                             );
                         } else {
                             let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -2044,7 +2105,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.tags",
                             "workspace.tags.open",
-                        i18n,
+                            i18n,
                         );
                     }
                 }
@@ -2056,7 +2117,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.branches",
                             "workspace.branches.copy_commit",
-                        i18n,
+                            i18n,
                         );
                     } else {
                         state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
@@ -2083,10 +2144,11 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 Err(error) => report_async_failure(
                                     state,
                                     i18n.export_patch_failed,
-                                    i18n.export_patch_failed_fmt.replace("{}", &error.to_string()),
+                                    i18n.export_patch_failed_fmt
+                                        .replace("{}", &error.to_string()),
                                     "workspace.branches",
                                     "workspace.branches.patch",
-                                i18n,
+                                    i18n,
                                 ),
                             }
                         }
@@ -2104,15 +2166,16 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.cherry_pick.prepare",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
                 }
                 BranchPopupMessage::PrepareRevertCommit(commit_id) => {
                     if let Ok(repo) = require_repository(state) {
-                        state.pending_commit_action =
-                            state.branch_popup.prepare_revert_commit(&repo, commit_id, i18n);
+                        state.pending_commit_action = state
+                            .branch_popup
+                            .prepare_revert_commit(&repo, commit_id, i18n);
                         if let Some(error) = state.branch_popup.error.clone() {
                             report_async_failure(
                                 state,
@@ -2120,7 +2183,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.revert.prepare",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
@@ -2137,7 +2200,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.reset.prepare",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
@@ -2154,14 +2217,16 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.push_to_here.prepare",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
                 }
                 BranchPopupMessage::ContinueInProgressCommitAction => {
                     if let Ok(repo) = require_repository(state) {
-                        state.branch_popup.continue_in_progress_commit_action(&repo, i18n);
+                        state
+                            .branch_popup
+                            .continue_in_progress_commit_action(&repo, i18n);
                         if let Some(error) = state.branch_popup.error.clone() {
                             report_async_failure(
                                 state,
@@ -2169,7 +2234,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.follow_up.continue",
-                            i18n,
+                                i18n,
                             );
                         } else if let Err(error) =
                             refresh_repository_after_action(state, &repo, true, i18n)
@@ -2180,7 +2245,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.follow_up.continue",
-                            i18n,
+                                i18n,
                             );
                         } else if state.has_conflicts() {
                             state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
@@ -2202,7 +2267,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
                 BranchPopupMessage::AbortInProgressCommitAction => {
                     if let Ok(repo) = require_repository(state) {
-                        state.branch_popup.abort_in_progress_commit_action(&repo, i18n);
+                        state
+                            .branch_popup
+                            .abort_in_progress_commit_action(&repo, i18n);
                         if let Some(error) = state.branch_popup.error.clone() {
                             report_async_failure(
                                 state,
@@ -2210,7 +2277,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.follow_up.abort",
-                            i18n,
+                                i18n,
                             );
                         } else if let Err(error) =
                             refresh_repository_after_action(state, &repo, false, i18n)
@@ -2221,7 +2288,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.follow_up.abort",
-                            i18n,
+                                i18n,
                             );
                         } else {
                             if let Some(current) = state.current_repository.clone() {
@@ -2250,9 +2317,11 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             let keep_branch_popup_open =
                                 state.auxiliary_view == Some(AuxiliaryView::Branches);
                             let keep_branch_dropdown_open = state.show_branch_dropdown;
-                            state
-                                .branch_popup
-                                .confirm_pending_commit_action(&repo, confirmation, i18n);
+                            state.branch_popup.confirm_pending_commit_action(
+                                &repo,
+                                confirmation,
+                                i18n,
+                            );
                             if let Some(error) = state.branch_popup.error.clone() {
                                 report_async_failure(
                                     state,
@@ -2260,7 +2329,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     error,
                                     "workspace.branches",
                                     "workspace.branches.commit_action",
-                                i18n,
+                                    i18n,
                                 );
                             } else if let Err(error) = refresh_repository_after_action(
                                 state,
@@ -2278,7 +2347,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                     error,
                                     "workspace.branches",
                                     "workspace.branches.commit_action",
-                                i18n,
+                                    i18n,
                                 );
                             } else if state.has_conflicts() {
                                 let detail = match action_kind {
@@ -2344,7 +2413,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 error,
                                 "workspace.branches",
                                 "workspace.branches.refresh",
-                            i18n,
+                                i18n,
                             );
                         }
                     }
@@ -2387,792 +2456,819 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
             }
         }
-        Message::HistoryMessage(message) => { let i18n = i18n::locale(state.git_settings.language.as_deref()); match message {
-            HistoryMessage::Refresh => {
-                if let Ok(repo) = require_repository(state) {
-                    let i18n = i18n::locale(state.git_settings.language.as_deref());
-                    state.history_view.load_history(&repo, i18n);
-                    state.history_view.context_menu_commit = None;
-                    if let Some(error) = state.history_view.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.load_history_failed,
-                            error,
-                            "workspace.history",
-                            "workspace.history.refresh",
-                        i18n,
-                        );
-                    }
-                }
-            }
-            HistoryMessage::SelectCommit(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    let i18n = i18n::locale(state.git_settings.language.as_deref());
-                    state.history_view.context_menu_commit = None;
-                    state.history_view.select_commit(&repo, commit_id, i18n);
-                    if let Some(error) = state.history_view.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.load_commit_detail_failed,
-                            error,
-                            "workspace.history",
-                            "workspace.history.select",
-                        i18n,
-                        );
-                    }
-                }
-            }
-            HistoryMessage::ViewDiff(_) => {
-                let i18n = i18n::locale(state.git_settings.language.as_deref());
-                state.set_info(
-                    i18n.commit_detail_loaded,
-                    Some(i18n.commit_detail_loaded_hint.to_string()),
-                    "workspace.history",
-                );
-            }
-            HistoryMessage::ViewCommitFileDiff(commit_id, file_path) => {
-                if let Ok(repo) = require_repository(state) {
-                    match load_history_commit_file_diff(&repo, &commit_id, &file_path) {
-                        Ok(history_diff) => {
-                            state.history_view.context_menu_commit = None;
-                            state.history_view.context_menu_anchor = None;
-                            show_history_commit_file_diff(
-                                state,
-                                commit_id,
-                                file_path,
-                                history_diff.diff,
-                                history_diff.editor_diff,
-                            );
-                        }
-                        Err(error) => {
-                            let i18n = i18n::locale(state.git_settings.language.as_deref());
+        Message::HistoryMessage(message) => {
+            let i18n = i18n::locale(state.git_settings.language.as_deref());
+            match message {
+                HistoryMessage::Refresh => {
+                    if let Ok(repo) = require_repository(state) {
+                        let i18n = i18n::locale(state.git_settings.language.as_deref());
+                        state.history_view.load_history(&repo, i18n);
+                        state.history_view.context_menu_commit = None;
+                        if let Some(error) = state.history_view.error.clone() {
                             report_async_failure(
                                 state,
-                                i18n.load_commit_file_diff_failed,
+                                i18n.load_history_failed,
                                 error,
                                 "workspace.history",
-                                "workspace.history.file_diff",
-                            i18n,
+                                "workspace.history.refresh",
+                                i18n,
                             );
                         }
                     }
                 }
-            }
-            HistoryMessage::ToggleCommitFileDisplayMode => {
-                state.history_view.toggle_commit_file_display_mode();
-            }
-            HistoryMessage::CommitFileTreeEvent(tree_message) => match tree_message {
-                crate::widgets::tree_widget::TreeMessage::SelectNode(node_id) => {
-                    if let Some(path) = node_id.strip_prefix("file:") {
-                        let Some(commit_id) = state.history_view.selected_commit.clone() else {
-                            return iced::Task::none();
-                        };
-                        return update(
-                            state,
-                            Message::HistoryMessage(HistoryMessage::ViewCommitFileDiff(
-                                commit_id,
-                                path.to_string(),
-                            )),
-                        );
+                HistoryMessage::SelectCommit(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        let i18n = i18n::locale(state.git_settings.language.as_deref());
+                        state.history_view.context_menu_commit = None;
+                        state.history_view.select_commit(&repo, commit_id, i18n);
+                        if let Some(error) = state.history_view.error.clone() {
+                            report_async_failure(
+                                state,
+                                i18n.load_commit_detail_failed,
+                                error,
+                                "workspace.history",
+                                "workspace.history.select",
+                                i18n,
+                            );
+                        }
                     }
-                    state.history_view.toggle_commit_file_tree_node(node_id);
                 }
-                crate::widgets::tree_widget::TreeMessage::ToggleNode(node_id) => {
-                    state.history_view.toggle_commit_file_tree_node(node_id);
-                }
-                crate::widgets::tree_widget::TreeMessage::NodeContextMenu(_, _) => {}
-            },
-            HistoryMessage::TrackContextMenuCursor(position) => {
-                state.history_view.track_context_menu_cursor(position);
-            }
-            HistoryMessage::OpenCommitContextMenu(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
+                HistoryMessage::ViewDiff(_) => {
                     let i18n = i18n::locale(state.git_settings.language.as_deref());
-                    state.history_view.select_commit(&repo, commit_id.clone(), i18n);
-                    state.history_view.context_menu_commit = Some(commit_id);
-                    state.history_view.context_menu_anchor =
-                        Some(state.history_view.context_menu_cursor);
-                    if let Some(error) = state.history_view.error.clone() {
+                    state.set_info(
+                        i18n.commit_detail_loaded,
+                        Some(i18n.commit_detail_loaded_hint.to_string()),
+                        "workspace.history",
+                    );
+                }
+                HistoryMessage::ViewCommitFileDiff(commit_id, file_path) => {
+                    if let Ok(repo) = require_repository(state) {
+                        match load_history_commit_file_diff(&repo, &commit_id, &file_path) {
+                            Ok(history_diff) => {
+                                state.history_view.context_menu_commit = None;
+                                state.history_view.context_menu_anchor = None;
+                                show_history_commit_file_diff(
+                                    state,
+                                    commit_id,
+                                    file_path,
+                                    history_diff.diff,
+                                    history_diff.editor_diff,
+                                );
+                            }
+                            Err(error) => {
+                                let i18n = i18n::locale(state.git_settings.language.as_deref());
+                                report_async_failure(
+                                    state,
+                                    i18n.load_commit_file_diff_failed,
+                                    error,
+                                    "workspace.history",
+                                    "workspace.history.file_diff",
+                                    i18n,
+                                );
+                            }
+                        }
+                    }
+                }
+                HistoryMessage::ToggleCommitFileDisplayMode => {
+                    state.history_view.toggle_commit_file_display_mode();
+                }
+                HistoryMessage::CommitFileTreeEvent(tree_message) => match tree_message {
+                    crate::widgets::tree_widget::TreeMessage::SelectNode(node_id) => {
+                        if let Some(path) = node_id.strip_prefix("file:") {
+                            let Some(commit_id) = state.history_view.selected_commit.clone() else {
+                                return iced::Task::none();
+                            };
+                            return update(
+                                state,
+                                Message::HistoryMessage(HistoryMessage::ViewCommitFileDiff(
+                                    commit_id,
+                                    path.to_string(),
+                                )),
+                            );
+                        }
+                        state.history_view.toggle_commit_file_tree_node(node_id);
+                    }
+                    crate::widgets::tree_widget::TreeMessage::ToggleNode(node_id) => {
+                        state.history_view.toggle_commit_file_tree_node(node_id);
+                    }
+                    crate::widgets::tree_widget::TreeMessage::NodeContextMenu(_, _) => {}
+                },
+                HistoryMessage::TrackContextMenuCursor(position) => {
+                    state.history_view.track_context_menu_cursor(position);
+                }
+                HistoryMessage::OpenCommitContextMenu(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        let i18n = i18n::locale(state.git_settings.language.as_deref());
+                        state
+                            .history_view
+                            .select_commit(&repo, commit_id.clone(), i18n);
+                        state.history_view.context_menu_commit = Some(commit_id);
+                        state.history_view.context_menu_anchor =
+                            Some(state.history_view.context_menu_cursor);
+                        if let Some(error) = state.history_view.error.clone() {
+                            report_async_failure(
+                                state,
+                                i18n.open_commit_action_failed,
+                                error,
+                                "workspace.history",
+                                "workspace.history.context_menu",
+                                i18n,
+                            );
+                        }
+                    }
+                }
+                HistoryMessage::CloseCommitContextMenu => {
+                    state.history_view.context_menu_commit = None;
+                    state.history_view.context_menu_anchor = None;
+                }
+                HistoryMessage::CopyCommitHash(commit_id) => {
+                    if let Err(error) = copy_text_to_clipboard(&commit_id) {
                         report_async_failure(
                             state,
-                            i18n.open_commit_action_failed,
+                            i18n.copy_commit_hash_failed,
                             error,
                             "workspace.history",
-                            "workspace.history.context_menu",
-                        i18n,
+                            "workspace.history.copy_commit",
+                            i18n,
+                        );
+                    } else {
+                        state.history_view.context_menu_commit = None;
+                        state.show_toast(
+                            crate::state::FeedbackLevel::Success,
+                            i18n.commit_hash_copied,
+                            Some(short_commit_id(&commit_id).to_string()),
                         );
                     }
                 }
-            }
-            HistoryMessage::CloseCommitContextMenu => {
-                state.history_view.context_menu_commit = None;
-                state.history_view.context_menu_anchor = None;
-            }
-            HistoryMessage::CopyCommitHash(commit_id) => {
-                if let Err(error) = copy_text_to_clipboard(&commit_id) {
-                    report_async_failure(
+                HistoryMessage::ExportCommitPatch(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        let default_name = default_patch_file_name(&repo, &commit_id);
+                        if let Some(path) = file_picker::save_file(&default_name) {
+                            match git_core::export_commit_patch(&repo, &commit_id, &path) {
+                                Ok(()) => {
+                                    state.history_view.context_menu_commit = None;
+                                    state.set_success(
+                                        i18n.patch_exported,
+                                        Some(path.display().to_string()),
+                                        "workspace.history.patch",
+                                    );
+                                }
+                                Err(error) => report_async_failure(
+                                    state,
+                                    i18n.export_patch_failed,
+                                    i18n.export_patch_failed_fmt
+                                        .replace("{}", &error.to_string()),
+                                    "workspace.history",
+                                    "workspace.history.patch",
+                                    i18n,
+                                ),
+                            }
+                        }
+                    }
+                }
+                HistoryMessage::CompareWithCurrent(commit_id) => {
+                    let Some(current_branch) = state.history_view.current_branch_name.clone()
+                    else {
+                        report_async_failure(
+                            state,
+                            i18n.cannot_compare_branch,
+                            i18n.detached_no_branch_compare.to_string(),
+                            "workspace.history",
+                            "workspace.history.compare_current",
+                            i18n,
+                        );
+                        return iced::Task::none();
+                    };
+                    if let Ok(repo) = require_repository(state) {
+                        state.history_view.context_menu_commit = None;
+                        state.branch_popup.load_branches(&repo, i18n);
+                    }
+                    return update(
                         state,
-                        i18n.copy_commit_hash_failed,
-                        error,
-                        "workspace.history",
-                        "workspace.history.copy_commit",
-                    i18n,
-                    );
-                } else {
-                    state.history_view.context_menu_commit = None;
-                    state.show_toast(
-                        crate::state::FeedbackLevel::Success,
-                        i18n.commit_hash_copied,
-                        Some(short_commit_id(&commit_id).to_string()),
+                        Message::BranchPopupMessage(BranchPopupMessage::CompareWithCurrent {
+                            selected: commit_id,
+                            current: current_branch,
+                        }),
                     );
                 }
-            }
-            HistoryMessage::ExportCommitPatch(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    let default_name = default_patch_file_name(&repo, &commit_id);
-                    if let Some(path) = file_picker::save_file(&default_name) {
-                        match git_core::export_commit_patch(&repo, &commit_id, &path) {
-                            Ok(()) => {
-                                state.history_view.context_menu_commit = None;
-                                state.set_success(
-                                    i18n.patch_exported,
-                                    Some(path.display().to_string()),
-                                    "workspace.history.patch",
+                HistoryMessage::CompareWithWorktree(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        state.history_view.context_menu_commit = None;
+                        state.branch_popup.load_branches(&repo, i18n);
+                    }
+                    return update(
+                        state,
+                        Message::BranchPopupMessage(BranchPopupMessage::CompareWithWorktree(
+                            commit_id,
+                        )),
+                    );
+                }
+                HistoryMessage::PrepareCreateBranch(commit_id) => {
+                    state.history_view.context_menu_commit = None;
+                    if let Ok(repo) = require_repository(state) {
+                        state.branch_popup.load_branches(&repo, i18n);
+                        state.branch_popup.prepare_create_from_selected(commit_id);
+                        state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
+                    }
+                }
+                HistoryMessage::PrepareTagFromCommit(commit_id) => {
+                    state.history_view.context_menu_commit = None;
+                    if let Ok(repo) = require_repository(state) {
+                        state.branch_popup.load_branches(&repo, i18n);
+                    }
+                    return update(
+                        state,
+                        Message::BranchPopupMessage(BranchPopupMessage::PrepareTagFromCommit(
+                            commit_id,
+                        )),
+                    );
+                }
+                HistoryMessage::PrepareCherryPickCommit(commit_id) => {
+                    state.history_view.context_menu_commit = None;
+                    if let Ok(repo) = require_repository(state) {
+                        // Check for merge commit
+                        match git_core::commit::get_commit(&repo, &commit_id) {
+                            Ok(info) if info.parent_ids.len() > 1 => {
+                                state.set_error(i18n.merge_no_cherry_pick.to_string());
+                                return iced::Task::none();
+                            }
+                            Err(e) => {
+                                state.set_error(
+                                    i18n.read_commit_detail_failed_fmt
+                                        .replace("{}", &e.to_string()),
                                 );
+                                return iced::Task::none();
+                            }
+                            _ => {}
+                        }
+                        // Execute cherry-pick directly (IDEA-style, no confirmation)
+                        match git_core::cherry_pick_commit(&repo, &commit_id) {
+                            Ok(()) => {
+                                state.show_toast(
+                                    crate::state::FeedbackLevel::Success,
+                                    i18n.cherry_picked_fmt
+                                        .replace("{}", short_commit_id(&commit_id)),
+                                    None,
+                                );
+                                if let Err(e) =
+                                    refresh_repository_after_action(state, &repo, true, i18n)
+                                {
+                                    state.set_error(
+                                        i18n.refresh_repo_state_failed_fmt
+                                            .replace("{}", &e.to_string()),
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                state.set_error(
+                                    i18n.cherry_pick_failed_fmt.replace("{}", &e.to_string()),
+                                );
+                            }
+                        }
+                    }
+                }
+                HistoryMessage::PrepareRevertCommit(commit_id) => {
+                    state.history_view.context_menu_commit = None;
+                    if let Ok(repo) = require_repository(state) {
+                        // Check for merge commit first
+                        match git_core::commit::get_commit(&repo, &commit_id) {
+                            Ok(info) if info.parent_ids.len() > 1 => {
+                                state.set_error(i18n.no_merge_revert.to_string());
+                                return iced::Task::none();
+                            }
+                            Err(e) => {
+                                state.set_error(
+                                    i18n.read_commit_detail_failed_fmt
+                                        .replace("{}", &e.to_string()),
+                                );
+                                return iced::Task::none();
+                            }
+                            _ => {}
+                        }
+                        // Execute revert directly (IDEA-style, no confirmation)
+                        match git_core::revert_commit(&repo, &commit_id) {
+                            Ok(()) => {
+                                state.show_toast(
+                                    crate::state::FeedbackLevel::Success,
+                                    i18n.reverted_commit_fmt
+                                        .replace("{}", short_commit_id(&commit_id)),
+                                    None,
+                                );
+                                if let Err(e) =
+                                    refresh_repository_after_action(state, &repo, true, i18n)
+                                {
+                                    state.set_error(
+                                        i18n.refresh_repo_state_failed_fmt
+                                            .replace("{}", &e.to_string()),
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                state.set_error(
+                                    i18n.revert_commit_failed_fmt.replace("{}", &e.to_string()),
+                                );
+                            }
+                        }
+                    }
+                }
+                HistoryMessage::PrepareResetCurrentBranchToCommit(commit_id) => {
+                    state.history_view.context_menu_commit = None;
+                    if let Ok(repo) = require_repository(state) {
+                        state.pending_commit_action = state
+                            .branch_popup
+                            .prepare_reset_current_branch_to_commit(&repo, commit_id, i18n);
+                        if let Some(error) = state.branch_popup.error.clone() {
+                            state.set_error(error);
+                        }
+                    }
+                }
+                HistoryMessage::PreparePushCurrentBranchToCommit(commit_id) => {
+                    state.history_view.context_menu_commit = None;
+                    if let Ok(repo) = require_repository(state) {
+                        state.pending_commit_action = state
+                            .branch_popup
+                            .prepare_push_current_branch_to_commit(&repo, commit_id, i18n);
+                        if let Some(error) = state.branch_popup.error.clone() {
+                            state.set_error(error);
+                        }
+                    }
+                }
+                HistoryMessage::EditCommitMessage(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        match git_core::edit_commit_message(&repo, &commit_id) {
+                            Ok(execution) => {
+                                state.history_view.context_menu_commit = None;
+                                if let Err(error) =
+                                    refresh_repository_after_action(state, &repo, true, i18n)
+                                {
+                                    report_async_failure(
+                                        state,
+                                        i18n.refresh_repo_state_failed,
+                                        error,
+                                        "workspace.history",
+                                        "workspace.history.reword",
+                                        i18n,
+                                    );
+                                } else if state.has_conflicts() {
+                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
+                                    state.set_warning(
+                                        i18n.reword_conflict,
+                                        Some(i18n.reword_conflict_detail.to_string()),
+                                        "workspace.history.reword",
+                                    );
+                                } else if matches!(
+                                    execution,
+                                    git_core::RewriteExecution::InProgress
+                                ) {
+                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
+                                    if let Err(error) = switch_commit_dialog_to_amend(state) {
+                                        report_async_failure(
+                                            state,
+                                            i18n.cannot_open_commit_edit_panel,
+                                            error,
+                                            "workspace.history",
+                                            "workspace.history.reword",
+                                            i18n,
+                                        );
+                                    } else {
+                                        state.set_info(
+                                            i18n.stopped_at_commit,
+                                            Some(i18n.reword_hint_detail.to_string()),
+                                            "workspace.history.reword",
+                                        );
+                                    }
+                                } else {
+                                    state.set_success(
+                                        i18n.prepared_reword_fmt
+                                            .replace("{}", short_commit_id(&commit_id)),
+                                        Some(i18n.history_refreshed_detail.to_string()),
+                                        "workspace.history.reword",
+                                    );
+                                }
                             }
                             Err(error) => report_async_failure(
                                 state,
-                                i18n.export_patch_failed,
-                                i18n.export_patch_failed_fmt.replace("{}", &error.to_string()),
+                                i18n.start_reword_failed,
+                                error.to_string(),
                                 "workspace.history",
-                                "workspace.history.patch",
-                            i18n,
+                                "workspace.history.reword",
+                                i18n,
                             ),
                         }
                     }
                 }
-            }
-            HistoryMessage::CompareWithCurrent(commit_id) => {
-                let Some(current_branch) = state.history_view.current_branch_name.clone() else {
-                    report_async_failure(
-                        state,
-                        i18n.cannot_compare_branch,
-                        i18n.detached_no_branch_compare.to_string(),
-                        "workspace.history",
-                        "workspace.history.compare_current",
-                    i18n,
-                    );
-                    return iced::Task::none();
-                };
-                if let Ok(repo) = require_repository(state) {
-                    state.history_view.context_menu_commit = None;
-                    state.branch_popup.load_branches(&repo, i18n);
-                }
-                return update(
-                    state,
-                    Message::BranchPopupMessage(BranchPopupMessage::CompareWithCurrent {
-                        selected: commit_id,
-                        current: current_branch,
-                    }),
-                );
-            }
-            HistoryMessage::CompareWithWorktree(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    state.history_view.context_menu_commit = None;
-                    state.branch_popup.load_branches(&repo, i18n);
-                }
-                return update(
-                    state,
-                    Message::BranchPopupMessage(BranchPopupMessage::CompareWithWorktree(commit_id)),
-                );
-            }
-            HistoryMessage::PrepareCreateBranch(commit_id) => {
-                state.history_view.context_menu_commit = None;
-                if let Ok(repo) = require_repository(state) {
-                    state.branch_popup.load_branches(&repo, i18n);
-                    state.branch_popup.prepare_create_from_selected(commit_id);
-                    state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
-                }
-            }
-            HistoryMessage::PrepareTagFromCommit(commit_id) => {
-                state.history_view.context_menu_commit = None;
-                if let Ok(repo) = require_repository(state) {
-                    state.branch_popup.load_branches(&repo, i18n);
-                }
-                return update(
-                    state,
-                    Message::BranchPopupMessage(BranchPopupMessage::PrepareTagFromCommit(
-                        commit_id,
-                    )),
-                );
-            }
-            HistoryMessage::PrepareCherryPickCommit(commit_id) => {
-                state.history_view.context_menu_commit = None;
-                if let Ok(repo) = require_repository(state) {
-                    // Check for merge commit
-                    match git_core::commit::get_commit(&repo, &commit_id) {
-                        Ok(info) if info.parent_ids.len() > 1 => {
-                            state.set_error(i18n.merge_no_cherry_pick.to_string());
-                            return iced::Task::none();
-                        }
-                        Err(e) => {
-                            state.set_error(i18n.read_commit_detail_failed_fmt.replace("{}", &e.to_string()));
-                            return iced::Task::none();
-                        }
-                        _ => {}
-                    }
-                    // Execute cherry-pick directly (IDEA-style, no confirmation)
-                    match git_core::cherry_pick_commit(&repo, &commit_id) {
-                        Ok(()) => {
-                            state.show_toast(
-                                crate::state::FeedbackLevel::Success,
-                                i18n.cherry_picked_fmt.replace("{}", short_commit_id(&commit_id)),
-                                None,
-                            );
-                            if let Err(e) = refresh_repository_after_action(state, &repo, true, i18n) {
-                                state.set_error(i18n.refresh_repo_state_failed_fmt.replace("{}", &e.to_string()));
-                            }
-                        }
-                        Err(e) => {
-                            state.set_error(i18n.cherry_pick_failed_fmt.replace("{}", &e.to_string()));
-                        }
-                    }
-                }
-            }
-            HistoryMessage::PrepareRevertCommit(commit_id) => {
-                state.history_view.context_menu_commit = None;
-                if let Ok(repo) = require_repository(state) {
-                    // Check for merge commit first
-                    match git_core::commit::get_commit(&repo, &commit_id) {
-                        Ok(info) if info.parent_ids.len() > 1 => {
-                            state.set_error(i18n.no_merge_revert.to_string());
-                            return iced::Task::none();
-                        }
-                        Err(e) => {
-                            state.set_error(i18n.read_commit_detail_failed_fmt.replace("{}", &e.to_string()));
-                            return iced::Task::none();
-                        }
-                        _ => {}
-                    }
-                    // Execute revert directly (IDEA-style, no confirmation)
-                    match git_core::revert_commit(&repo, &commit_id) {
-                        Ok(()) => {
-                            state.show_toast(
-                                crate::state::FeedbackLevel::Success,
-                                i18n.reverted_commit_fmt.replace("{}", short_commit_id(&commit_id)),
-                                None,
-                            );
-                            if let Err(e) = refresh_repository_after_action(state, &repo, true, i18n) {
-                                state.set_error(i18n.refresh_repo_state_failed_fmt.replace("{}", &e.to_string()));
-                            }
-                        }
-                        Err(e) => {
-                            state.set_error(i18n.revert_commit_failed_fmt.replace("{}", &e.to_string()));
-                        }
-                    }
-                }
-            }
-            HistoryMessage::PrepareResetCurrentBranchToCommit(commit_id) => {
-                state.history_view.context_menu_commit = None;
-                if let Ok(repo) = require_repository(state) {
-                    state.pending_commit_action = state
-                        .branch_popup
-                        .prepare_reset_current_branch_to_commit(&repo, commit_id, i18n);
-                    if let Some(error) = state.branch_popup.error.clone() {
-                        state.set_error(error);
-                    }
-                }
-            }
-            HistoryMessage::PreparePushCurrentBranchToCommit(commit_id) => {
-                state.history_view.context_menu_commit = None;
-                if let Ok(repo) = require_repository(state) {
-                    state.pending_commit_action = state
-                        .branch_popup
-                        .prepare_push_current_branch_to_commit(&repo, commit_id, i18n);
-                    if let Some(error) = state.branch_popup.error.clone() {
-                        state.set_error(error);
-                    }
-                }
-            }
-            HistoryMessage::EditCommitMessage(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    match git_core::edit_commit_message(&repo, &commit_id) {
-                        Ok(execution) => {
-                            state.history_view.context_menu_commit = None;
-                            if let Err(error) = refresh_repository_after_action(state, &repo, true, i18n)
-                            {
-                                report_async_failure(
-                                    state,
-                                    i18n.refresh_repo_state_failed,
-                                    error,
-                                    "workspace.history",
-                                    "workspace.history.reword",
-                                i18n,
-                                );
-                            } else if state.has_conflicts() {
-                                open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                state.set_warning(
-                                    i18n.reword_conflict,
-                                    Some(
-                                        i18n.reword_conflict_detail
-                                            .to_string(),
-                                    ),
-                                    "workspace.history.reword",
-                                );
-                            } else if matches!(execution, git_core::RewriteExecution::InProgress) {
-                                open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                if let Err(error) = switch_commit_dialog_to_amend(state) {
+                HistoryMessage::FixupCommitToPrevious(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        match git_core::fixup_commit_to_previous(&repo, &commit_id) {
+                            Ok(execution) => {
+                                state.history_view.context_menu_commit = None;
+                                if let Err(error) =
+                                    refresh_repository_after_action(state, &repo, true, i18n)
+                                {
                                     report_async_failure(
                                         state,
-                                        i18n.cannot_open_commit_edit_panel,
+                                        i18n.refresh_repo_state_failed,
                                         error,
                                         "workspace.history",
-                                        "workspace.history.reword",
-                                    i18n,
+                                        "workspace.history.fixup",
+                                        i18n,
+                                    );
+                                } else if state.has_conflicts() {
+                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
+                                    state.set_warning(
+                                        i18n.fixup_conflict,
+                                        Some(i18n.fixup_conflict_detail.to_string()),
+                                        "workspace.history.fixup",
+                                    );
+                                } else if matches!(
+                                    execution,
+                                    git_core::RewriteExecution::InProgress
+                                ) {
+                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
+                                    state.set_info(
+                                        i18n.fixup_in_progress,
+                                        Some(i18n.rewrite_in_progress_detail.to_string()),
+                                        "workspace.history.fixup",
                                     );
                                 } else {
-                                    state.set_info(
-                                        i18n.stopped_at_commit,
-                                        Some(
-                                            i18n.reword_hint_detail
-                                                .to_string(),
-                                        ),
-                                        "workspace.history.reword",
+                                    state.set_success(
+                                        i18n.fixup_done_fmt
+                                            .replace("{}", short_commit_id(&commit_id)),
+                                        Some(i18n.history_refreshed_continue.to_string()),
+                                        "workspace.history.fixup",
                                     );
                                 }
-                            } else {
-                                state.set_success(
-                                    i18n.prepared_reword_fmt.replace("{}", short_commit_id(&commit_id)),
-                                    Some(i18n.history_refreshed_detail.to_string()),
-                                    "workspace.history.reword",
-                                );
                             }
-                        }
-                        Err(error) => report_async_failure(
-                            state,
-                            i18n.start_reword_failed,
-                            error.to_string(),
-                            "workspace.history",
-                            "workspace.history.reword",
-                        i18n,
-                        ),
-                    }
-                }
-            }
-            HistoryMessage::FixupCommitToPrevious(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    match git_core::fixup_commit_to_previous(&repo, &commit_id) {
-                        Ok(execution) => {
-                            state.history_view.context_menu_commit = None;
-                            if let Err(error) = refresh_repository_after_action(state, &repo, true, i18n)
-                            {
-                                report_async_failure(
-                                    state,
-                                    i18n.refresh_repo_state_failed,
-                                    error,
-                                    "workspace.history",
-                                    "workspace.history.fixup",
+                            Err(error) => report_async_failure(
+                                state,
+                                i18n.fixup_failed,
+                                error.to_string(),
+                                "workspace.history",
+                                "workspace.history.fixup",
                                 i18n,
-                                );
-                            } else if state.has_conflicts() {
-                                open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                state.set_warning(
-                                    i18n.fixup_conflict,
-                                    Some(
-                                        i18n.fixup_conflict_detail
-                                            .to_string(),
-                                    ),
-                                    "workspace.history.fixup",
-                                );
-                            } else if matches!(execution, git_core::RewriteExecution::InProgress) {
-                                open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                state.set_info(
-                                    i18n.fixup_in_progress,
-                                    Some(
-                                        i18n.rewrite_in_progress_detail
-                                            .to_string(),
-                                    ),
-                                    "workspace.history.fixup",
-                                );
-                            } else {
-                                state.set_success(
-                                    i18n.fixup_done_fmt.replace("{}", short_commit_id(&commit_id)),
-                                    Some(
-                                        i18n.history_refreshed_continue.to_string(),
-                                    ),
-                                    "workspace.history.fixup",
-                                );
-                            }
+                            ),
                         }
-                        Err(error) => report_async_failure(
-                            state,
-                            i18n.fixup_failed,
-                            error.to_string(),
-                            "workspace.history",
-                            "workspace.history.fixup",
-                        i18n,
-                        ),
                     }
                 }
-            }
-            HistoryMessage::SquashCommitToPrevious(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    match git_core::squash_commit_to_previous(&repo, &commit_id) {
-                        Ok(execution) => {
-                            state.history_view.context_menu_commit = None;
-                            if let Err(error) = refresh_repository_after_action(state, &repo, true, i18n)
-                            {
-                                report_async_failure(
-                                    state,
-                                    i18n.refresh_repo_state_failed,
-                                    error,
-                                    "workspace.history",
-                                    "workspace.history.squash",
+                HistoryMessage::SquashCommitToPrevious(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        match git_core::squash_commit_to_previous(&repo, &commit_id) {
+                            Ok(execution) => {
+                                state.history_view.context_menu_commit = None;
+                                if let Err(error) =
+                                    refresh_repository_after_action(state, &repo, true, i18n)
+                                {
+                                    report_async_failure(
+                                        state,
+                                        i18n.refresh_repo_state_failed,
+                                        error,
+                                        "workspace.history",
+                                        "workspace.history.squash",
+                                        i18n,
+                                    );
+                                } else if state.has_conflicts() {
+                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
+                                    state.set_warning(
+                                        i18n.squash_conflict,
+                                        Some(i18n.squash_conflict_detail.to_string()),
+                                        "workspace.history.squash",
+                                    );
+                                } else if matches!(
+                                    execution,
+                                    git_core::RewriteExecution::InProgress
+                                ) {
+                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
+                                    state.set_info(
+                                        i18n.squash_in_progress,
+                                        Some(i18n.rewrite_in_progress_detail.to_string()),
+                                        "workspace.history.squash",
+                                    );
+                                } else {
+                                    state.set_success(
+                                        i18n.squash_done_fmt
+                                            .replace("{}", short_commit_id(&commit_id)),
+                                        Some(i18n.history_refreshed_continue.to_string()),
+                                        "workspace.history.squash",
+                                    );
+                                }
+                            }
+                            Err(error) => report_async_failure(
+                                state,
+                                i18n.squash_failed,
+                                error.to_string(),
+                                "workspace.history",
+                                "workspace.history.squash",
                                 i18n,
-                                );
-                            } else if state.has_conflicts() {
-                                open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                state.set_warning(
-                                    i18n.squash_conflict,
-                                    Some(
-                                        i18n.squash_conflict_detail
-                                            .to_string(),
-                                    ),
-                                    "workspace.history.squash",
-                                );
-                            } else if matches!(execution, git_core::RewriteExecution::InProgress) {
-                                open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                state.set_info(
-                                    i18n.squash_in_progress,
-                                    Some(
-                                        i18n.rewrite_in_progress_detail
-                                            .to_string(),
-                                    ),
-                                    "workspace.history.squash",
-                                );
-                            } else {
-                                state.set_success(
-                                    i18n.squash_done_fmt.replace("{}", short_commit_id(&commit_id)),
-                                    Some(
-                                        i18n.history_refreshed_continue.to_string(),
-                                    ),
-                                    "workspace.history.squash",
-                                );
-                            }
+                            ),
                         }
-                        Err(error) => report_async_failure(
-                            state,
-                            i18n.squash_failed,
-                            error.to_string(),
-                            "workspace.history",
-                            "workspace.history.squash",
-                        i18n,
-                        ),
                     }
                 }
-            }
-            HistoryMessage::DropCommitFromHistory(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    match git_core::drop_commit_from_history(&repo, &commit_id) {
-                        Ok(execution) => {
-                            state.history_view.context_menu_commit = None;
-                            if let Err(error) = refresh_repository_after_action(state, &repo, true, i18n)
-                            {
-                                report_async_failure(
-                                    state,
-                                    i18n.refresh_repo_state_failed,
-                                    error,
-                                    "workspace.history",
-                                    "workspace.history.drop",
+                HistoryMessage::DropCommitFromHistory(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        match git_core::drop_commit_from_history(&repo, &commit_id) {
+                            Ok(execution) => {
+                                state.history_view.context_menu_commit = None;
+                                if let Err(error) =
+                                    refresh_repository_after_action(state, &repo, true, i18n)
+                                {
+                                    report_async_failure(
+                                        state,
+                                        i18n.refresh_repo_state_failed,
+                                        error,
+                                        "workspace.history",
+                                        "workspace.history.drop",
+                                        i18n,
+                                    );
+                                } else if state.has_conflicts() {
+                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
+                                    state.set_warning(
+                                        i18n.drop_conflict,
+                                        Some(i18n.drop_conflict_detail.to_string()),
+                                        "workspace.history.drop",
+                                    );
+                                } else if matches!(
+                                    execution,
+                                    git_core::RewriteExecution::InProgress
+                                ) {
+                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
+                                    state.set_info(
+                                        i18n.drop_in_progress,
+                                        Some(i18n.rewrite_in_progress_detail.to_string()),
+                                        "workspace.history.drop",
+                                    );
+                                } else {
+                                    state.set_success(
+                                        i18n.drop_done_fmt
+                                            .replace("{}", short_commit_id(&commit_id)),
+                                        Some(i18n.history_refreshed_continue.to_string()),
+                                        "workspace.history.drop",
+                                    );
+                                }
+                            }
+                            Err(error) => report_async_failure(
+                                state,
+                                i18n.drop_failed,
+                                error.to_string(),
+                                "workspace.history",
+                                "workspace.history.drop",
                                 i18n,
-                                );
-                            } else if state.has_conflicts() {
-                                open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                state.set_warning(
-                                    i18n.drop_conflict,
-                                    Some(
-                                        i18n.drop_conflict_detail
-                                            .to_string(),
-                                    ),
-                                    "workspace.history.drop",
-                                );
-                            } else if matches!(execution, git_core::RewriteExecution::InProgress) {
-                                open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                state.set_info(
-                                    i18n.drop_in_progress,
-                                    Some(
-                                        i18n.rewrite_in_progress_detail
-                                            .to_string(),
-                                    ),
-                                    "workspace.history.drop",
-                                );
-                            } else {
-                                state.set_success(
-                                    i18n.drop_done_fmt.replace("{}", short_commit_id(&commit_id)),
-                                    Some(
-                                        i18n.history_refreshed_continue.to_string(),
-                                    ),
-                                    "workspace.history.drop",
-                                );
-                            }
+                            ),
                         }
-                        Err(error) => report_async_failure(
-                            state,
-                            i18n.drop_failed,
-                            error.to_string(),
-                            "workspace.history",
-                            "workspace.history.drop",
-                        i18n,
-                        ),
                     }
                 }
-            }
-            HistoryMessage::OpenInteractiveRebaseFromCommit(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    state.history_view.context_menu_commit = None;
-                    state
-                        .rebase_editor
-                        .prepare_interactive_rebase(&repo, commit_id, i18n);
-                    state.open_auxiliary_view(AuxiliaryView::Rebase, i18n);
-                    if let Some(error) = state.rebase_editor.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.open_rebase_from_here_failed,
-                            error,
-                            "workspace.history",
-                            "workspace.history.rebase_from_here",
-                        i18n,
-                        );
-                    } else if let Some(message) = state.rebase_editor.success_message.clone() {
-                        state.set_info(message, None, "workspace.history.rebase_from_here");
+                HistoryMessage::OpenInteractiveRebaseFromCommit(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        state.history_view.context_menu_commit = None;
+                        state
+                            .rebase_editor
+                            .prepare_interactive_rebase(&repo, commit_id, i18n);
+                        state.open_auxiliary_view(AuxiliaryView::Rebase, i18n);
+                        if let Some(error) = state.rebase_editor.error.clone() {
+                            report_async_failure(
+                                state,
+                                i18n.open_rebase_from_here_failed,
+                                error,
+                                "workspace.history",
+                                "workspace.history.rebase_from_here",
+                                i18n,
+                            );
+                        } else if let Some(message) = state.rebase_editor.success_message.clone() {
+                            state.set_info(message, None, "workspace.history.rebase_from_here");
+                        }
                     }
                 }
-            }
-            HistoryMessage::ToggleMultiSelect(commit_id) => {
-                let pos = state
-                    .history_view
-                    .multi_selected_commits
-                    .iter()
-                    .position(|id| id == &commit_id);
-                if let Some(pos) = pos {
-                    state.history_view.multi_selected_commits.remove(pos);
-                } else {
-                    state.history_view.multi_selected_commits.push(commit_id);
-                }
-            }
-            HistoryMessage::SquashSelectedCommits => {
-                let selected = &state.history_view.multi_selected_commits;
-                if selected.len() < 2 {
-                    state.set_error_with_source(
-                        i18n.cannot_squash,
-                        i18n.select_two_contiguous,
-                        "workspace.squash",
-                    );
-                } else {
-                    // Validate contiguous: check all selected commits are adjacent in the list
-                    let entry_ids: Vec<&str> = state
+                HistoryMessage::ToggleMultiSelect(commit_id) => {
+                    let pos = state
                         .history_view
-                        .filtered_entries
+                        .multi_selected_commits
                         .iter()
-                        .map(|e| e.id.as_str())
-                        .collect();
-                    let positions: Vec<usize> = selected
-                        .iter()
-                        .filter_map(|id| entry_ids.iter().position(|e| *e == id.as_str()))
-                        .collect();
-                    let mut sorted = positions.clone();
-                    sorted.sort();
-                    let is_contiguous =
-                        sorted.len() >= 2 && sorted.windows(2).all(|w| w[1] == w[0] + 1);
-
-                    if !is_contiguous {
+                        .position(|id| id == &commit_id);
+                    if let Some(pos) = pos {
+                        state.history_view.multi_selected_commits.remove(pos);
+                    } else {
+                        state.history_view.multi_selected_commits.push(commit_id);
+                    }
+                }
+                HistoryMessage::SquashSelectedCommits => {
+                    let selected = &state.history_view.multi_selected_commits;
+                    if selected.len() < 2 {
                         state.set_error_with_source(
                             i18n.cannot_squash,
-                            i18n.only_contiguous_squash,
+                            i18n.select_two_contiguous,
                             "workspace.squash",
                         );
                     } else {
-                        // Use the oldest selected commit as the squash target
-                        let oldest_id = sorted
-                            .last()
-                            .and_then(|&i| entry_ids.get(i))
-                            .map(|s| s.to_string());
-                        if let Some(target) = oldest_id {
-                            // Open interactive rebase from the oldest commit
-                            return update(
-                                state,
-                                Message::HistoryMessage(
-                                    HistoryMessage::OpenInteractiveRebaseFromCommit(target),
-                                ),
+                        // Validate contiguous: check all selected commits are adjacent in the list
+                        let entry_ids: Vec<&str> = state
+                            .history_view
+                            .filtered_entries
+                            .iter()
+                            .map(|e| e.id.as_str())
+                            .collect();
+                        let positions: Vec<usize> = selected
+                            .iter()
+                            .filter_map(|id| entry_ids.iter().position(|e| *e == id.as_str()))
+                            .collect();
+                        let mut sorted = positions.clone();
+                        sorted.sort();
+                        let is_contiguous =
+                            sorted.len() >= 2 && sorted.windows(2).all(|w| w[1] == w[0] + 1);
+
+                        if !is_contiguous {
+                            state.set_error_with_source(
+                                i18n.cannot_squash,
+                                i18n.only_contiguous_squash,
+                                "workspace.squash",
                             );
+                        } else {
+                            // Use the oldest selected commit as the squash target
+                            let oldest_id = sorted
+                                .last()
+                                .and_then(|&i| entry_ids.get(i))
+                                .map(|s| s.to_string());
+                            if let Some(target) = oldest_id {
+                                // Open interactive rebase from the oldest commit
+                                return update(
+                                    state,
+                                    Message::HistoryMessage(
+                                        HistoryMessage::OpenInteractiveRebaseFromCommit(target),
+                                    ),
+                                );
+                            }
                         }
                     }
                 }
-            }
-            HistoryMessage::UncommitToHere(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    match git_core::uncommit_to_commit(&repo, &commit_id) {
-                        Ok(()) => {
-                            let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                            state.set_success(
-                                i18n.commits_uncommitted,
-                                Some(i18n.changes_returned_to_staging.to_string()),
-                                "workspace.uncommit",
-                            );
-                        }
-                        Err(e) => {
-                            report_async_failure(
-                                state,
-                                i18n.uncommit_failed,
-                                e.to_string(),
-                                "workspace.uncommit",
-                                "workspace.uncommit",
-                            i18n,
-                            );
-                        }
-                    }
-                }
-            }
-            HistoryMessage::PushUpToCommit(commit_id) => {
-                if let Ok(repo) = require_repository(state) {
-                    if let Ok(Some(branch)) = repo.current_branch() {
-                        let remote = repo
-                            .current_upstream_remote()
-                            .unwrap_or_else(|| "origin".to_string());
-                        let refspec = format!("{}:refs/heads/{}", commit_id, branch);
-                        match git_core::push(&repo, &remote, &refspec, None) {
+                HistoryMessage::UncommitToHere(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        match git_core::uncommit_to_commit(&repo, &commit_id) {
                             Ok(()) => {
+                                let _ = refresh_repository_after_action(state, &repo, false, i18n);
                                 state.set_success(
-                                    i18n.push_success,
-                                    Some(i18n.pushed_to_fmt.replace("{}", &commit_id[..7.min(commit_id.len())]).replacen("{}", &remote, 1)),
-                                    "workspace.push.up_to",
+                                    i18n.commits_uncommitted,
+                                    Some(i18n.changes_returned_to_staging.to_string()),
+                                    "workspace.uncommit",
                                 );
                             }
                             Err(e) => {
                                 report_async_failure(
                                     state,
-                                    i18n.push_to_commit_failed,
+                                    i18n.uncommit_failed,
                                     e.to_string(),
-                                    "workspace.push.up_to",
-                                    "workspace.push.up_to",
-                                i18n,
+                                    "workspace.uncommit",
+                                    "workspace.uncommit",
+                                    i18n,
                                 );
                             }
                         }
                     }
                 }
-            }
-            HistoryMessage::SetSearchQuery(query) => state.history_view.set_search_query(query),
-            HistoryMessage::Search => {
-                if let Ok(repo) = require_repository(state) {
-                    let i18n = i18n::locale(state.git_settings.language.as_deref());
-                    state.history_view.perform_search(&repo, i18n);
-                    if let Some(error) = state.history_view.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.search_failed,
-                            error,
-                            "workspace.history",
-                            "workspace.history.search",
-                        i18n,
-                        );
+                HistoryMessage::PushUpToCommit(commit_id) => {
+                    if let Ok(repo) = require_repository(state) {
+                        if let Ok(Some(branch)) = repo.current_branch() {
+                            let remote = repo
+                                .current_upstream_remote()
+                                .unwrap_or_else(|| "origin".to_string());
+                            let refspec = format!("{}:refs/heads/{}", commit_id, branch);
+                            match git_core::push(&repo, &remote, &refspec, None) {
+                                Ok(()) => {
+                                    state.set_success(
+                                        i18n.push_success,
+                                        Some(
+                                            i18n.pushed_to_fmt
+                                                .replace("{}", &commit_id[..7.min(commit_id.len())])
+                                                .replacen("{}", &remote, 1),
+                                        ),
+                                        "workspace.push.up_to",
+                                    );
+                                }
+                                Err(e) => {
+                                    report_async_failure(
+                                        state,
+                                        i18n.push_to_commit_failed,
+                                        e.to_string(),
+                                        "workspace.push.up_to",
+                                        "workspace.push.up_to",
+                                        i18n,
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            HistoryMessage::ClearSearch => state.history_view.clear_search(),
-            HistoryMessage::SelectLogTab(index) => {
-                if index < state.log_tabs.len() {
-                    state.active_log_tab = index;
-                }
-            }
-            HistoryMessage::CloseLogTab(index) => {
-                if index < state.log_tabs.len() && state.log_tabs[index].is_closable {
-                    state.log_tabs.remove(index);
-                    if state.active_log_tab >= state.log_tabs.len() {
-                        state.active_log_tab = state.log_tabs.len().saturating_sub(1);
+                HistoryMessage::SetSearchQuery(query) => state.history_view.set_search_query(query),
+                HistoryMessage::Search => {
+                    if let Ok(repo) = require_repository(state) {
+                        let i18n = i18n::locale(state.git_settings.language.as_deref());
+                        state.history_view.perform_search(&repo, i18n);
+                        if let Some(error) = state.history_view.error.clone() {
+                            report_async_failure(
+                                state,
+                                i18n.search_failed,
+                                error,
+                                "workspace.history",
+                                "workspace.history.search",
+                                i18n,
+                            );
+                        }
                     }
                 }
-            }
-            HistoryMessage::NewLogTab => {
-                let id = state.next_log_tab_id;
-                state.next_log_tab_id += 1;
-                state.log_tabs.push(state::LogTab {
-                    id,
-                    label: i18n.log_tab_fmt.replace("{}", &id.to_string()),
-                    is_closable: true,
-                    branch_filter: None,
-                    text_filter: String::new(),
-                    author_filter: None,
-                    date_range: None,
-                    path_filter: None,
-                    scroll_offset: 0.0,
-                    selected_commit: None,
-                });
-                state.active_log_tab = state.log_tabs.len() - 1;
-            }
-            HistoryMessage::OpenInNewTab(branch) => {
-                let id = state.next_log_tab_id;
-                state.next_log_tab_id += 1;
-                state.log_tabs.push(state::LogTab::for_branch(id, branch));
-                state.active_log_tab = state.log_tabs.len() - 1;
-            }
-            HistoryMessage::SetBranchFilter(branch) => {
-                if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
-                    tab.branch_filter = branch;
+                HistoryMessage::ClearSearch => state.history_view.clear_search(),
+                HistoryMessage::SelectLogTab(index) => {
+                    if index < state.log_tabs.len() {
+                        state.active_log_tab = index;
+                    }
+                }
+                HistoryMessage::CloseLogTab(index) => {
+                    if index < state.log_tabs.len() && state.log_tabs[index].is_closable {
+                        state.log_tabs.remove(index);
+                        if state.active_log_tab >= state.log_tabs.len() {
+                            state.active_log_tab = state.log_tabs.len().saturating_sub(1);
+                        }
+                    }
+                }
+                HistoryMessage::NewLogTab => {
+                    let id = state.next_log_tab_id;
+                    state.next_log_tab_id += 1;
+                    state.log_tabs.push(state::LogTab {
+                        id,
+                        label: i18n.log_tab_fmt.replace("{}", &id.to_string()),
+                        is_closable: true,
+                        branch_filter: None,
+                        text_filter: String::new(),
+                        author_filter: None,
+                        date_range: None,
+                        path_filter: None,
+                        scroll_offset: 0.0,
+                        selected_commit: None,
+                    });
+                    state.active_log_tab = state.log_tabs.len() - 1;
+                }
+                HistoryMessage::OpenInNewTab(branch) => {
+                    let id = state.next_log_tab_id;
+                    state.next_log_tab_id += 1;
+                    state.log_tabs.push(state::LogTab::for_branch(id, branch));
+                    state.active_log_tab = state.log_tabs.len() - 1;
+                }
+                HistoryMessage::SetBranchFilter(branch) => {
+                    if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                        tab.branch_filter = branch;
+                    }
+                }
+                HistoryMessage::SetAuthorFilter(author) => {
+                    if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                        tab.author_filter = author;
+                    }
+                }
+                HistoryMessage::SetPathFilter(path) => {
+                    if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                        tab.path_filter = path;
+                    }
+                }
+                HistoryMessage::ToggleBranchesDashboard => {
+                    state.log_branches_dashboard_visible = !state.log_branches_dashboard_visible;
+                }
+                HistoryMessage::DashboardSelectBranch(branch) => {
+                    // Filter log to this branch
+                    if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                        tab.branch_filter = Some(branch);
+                    }
+                }
+                HistoryMessage::DashboardCheckoutBranch(name) => {
+                    return update(
+                        state,
+                        Message::BranchPopupMessage(
+                            crate::views::branch_popup::BranchPopupMessage::CheckoutBranch(name),
+                        ),
+                    );
+                }
+                HistoryMessage::DashboardMergeBranch(name) => {
+                    return update(
+                        state,
+                        Message::BranchPopupMessage(
+                            crate::views::branch_popup::BranchPopupMessage::MergeBranch(name),
+                        ),
+                    );
+                }
+                HistoryMessage::DashboardRebaseOnto(name) => {
+                    return update(
+                        state,
+                        Message::BranchPopupMessage(
+                            crate::views::branch_popup::BranchPopupMessage::RebaseCurrentOnto(name),
+                        ),
+                    );
+                }
+                HistoryMessage::DashboardDeleteBranch(name) => {
+                    return update(
+                        state,
+                        Message::BranchPopupMessage(
+                            crate::views::branch_popup::BranchPopupMessage::PrepareDeleteBranch(
+                                name,
+                            ),
+                        ),
+                    );
                 }
             }
-            HistoryMessage::SetAuthorFilter(author) => {
-                if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
-                    tab.author_filter = author;
-                }
-            }
-            HistoryMessage::SetPathFilter(path) => {
-                if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
-                    tab.path_filter = path;
-                }
-            }
-            HistoryMessage::ToggleBranchesDashboard => {
-                state.log_branches_dashboard_visible = !state.log_branches_dashboard_visible;
-            }
-            HistoryMessage::DashboardSelectBranch(branch) => {
-                // Filter log to this branch
-                if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
-                    tab.branch_filter = Some(branch);
-                }
-            }
-            HistoryMessage::DashboardCheckoutBranch(name) => {
-                return update(
-                    state,
-                    Message::BranchPopupMessage(
-                        crate::views::branch_popup::BranchPopupMessage::CheckoutBranch(name),
-                    ),
-                );
-            }
-            HistoryMessage::DashboardMergeBranch(name) => {
-                return update(
-                    state,
-                    Message::BranchPopupMessage(
-                        crate::views::branch_popup::BranchPopupMessage::MergeBranch(name),
-                    ),
-                );
-            }
-            HistoryMessage::DashboardRebaseOnto(name) => {
-                return update(
-                    state,
-                    Message::BranchPopupMessage(
-                        crate::views::branch_popup::BranchPopupMessage::RebaseCurrentOnto(name),
-                    ),
-                );
-            }
-            HistoryMessage::DashboardDeleteBranch(name) => {
-                return update(
-                    state,
-                    Message::BranchPopupMessage(
-                        crate::views::branch_popup::BranchPopupMessage::PrepareDeleteBranch(name),
-                    ),
-                );
-            }
-        } },
+        }
         Message::RemoteDialogMessage(message) => match message {
             RemoteDialogMessage::SelectRemote(name) => {
                 state.remote_dialog.selected_remote = Some(name);
@@ -3188,7 +3284,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.remote",
                             "workspace.remote.fetch",
-                        i18n,
+                            i18n,
                         );
                     } else {
                         let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -3212,7 +3308,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.remote",
                             "workspace.remote.push",
-                        i18n,
+                            i18n,
                         );
                     } else {
                         let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -3233,9 +3329,10 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             }
             RemoteDialogMessage::Pull => {
                 if let Ok(repo) = require_repository(state) {
-                    state
-                        .remote_dialog
-                        .pull_selected(&repo, cfg!(windows) && state.git_settings.pull_autocrlf_true);
+                    state.remote_dialog.pull_selected(
+                        &repo,
+                        cfg!(windows) && state.git_settings.pull_autocrlf_true,
+                    );
                     if let Some(error) = state.remote_dialog.error.clone() {
                         report_async_failure(
                             state,
@@ -3243,16 +3340,18 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.remote",
                             "workspace.remote.pull",
-                        i18n,
+                            i18n,
                         );
-                    } else if let Err(error) = refresh_repository_after_action(state, &repo, true, i18n) {
+                    } else if let Err(error) =
+                        refresh_repository_after_action(state, &repo, true, i18n)
+                    {
                         report_async_failure(
                             state,
                             i18n.refresh_repo_state_failed,
                             error,
                             "workspace.remote",
                             "workspace.remote.pull",
-                        i18n,
+                            i18n,
                         );
                     } else if !state.has_conflicts() {
                         if let Some(current) = state.current_repository.clone() {
@@ -3283,7 +3382,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.remote",
                             "workspace.remote.refresh",
-                        i18n,
+                            i18n,
                         );
                     }
                 }
@@ -3333,8 +3432,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     state.remote_dialog.is_loading = false;
                     match result {
                         Ok(()) => {
-                            state.remote_dialog.success_message =
-                                Some(i18n.pushed_fmt.replace("{}", &branch).replacen("{}", &remote, 1).replacen("{}", &branch, 1));
+                            state.remote_dialog.success_message = Some(
+                                i18n.pushed_fmt
+                                    .replace("{}", &branch)
+                                    .replacen("{}", &remote, 1)
+                                    .replacen("{}", &branch, 1),
+                            );
                             let _ = refresh_repository_after_action(state, &repo, false, i18n);
                         }
                         Err(e) => {
@@ -3393,8 +3496,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         ff_only: state.remote_dialog.pull_ff_only,
                         no_ff: state.remote_dialog.pull_no_ff,
                         squash: state.remote_dialog.pull_squash,
-                        force_autocrlf_true: cfg!(windows)
-                            && state.git_settings.pull_autocrlf_true,
+                        force_autocrlf_true: cfg!(windows) && state.git_settings.pull_autocrlf_true,
                     };
                     let branch_label = if branch.is_empty() {
                         state
@@ -3415,8 +3517,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     state.remote_dialog.is_loading = false;
                     match result {
                         Ok(()) => {
-                            state.remote_dialog.success_message =
-                                Some(i18n.pulled_fmt.replace("{}", &remote).replacen("{}", &branch_label, 1).replacen("{}", &branch_label, 1));
+                            state.remote_dialog.success_message = Some(
+                                i18n.pulled_fmt
+                                    .replace("{}", &remote)
+                                    .replacen("{}", &branch_label, 1)
+                                    .replacen("{}", &branch_label, 1),
+                            );
                             let _ = refresh_repository_after_action(state, &repo, false, i18n);
                         }
                         Err(e) => {
@@ -3444,7 +3550,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.tags",
                             "workspace.tags.create",
-                        i18n,
+                            i18n,
                         );
                     } else {
                         let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -3468,7 +3574,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.tags",
                             "workspace.tags.delete",
-                        i18n,
+                            i18n,
                         );
                     } else {
                         let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -3489,11 +3595,15 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         .unwrap_or_else(|| "origin".to_string());
                     match git_core::push_tag(&repo, &name, &remote) {
                         Ok(()) => {
-                            state.tag_dialog.success_message =
-                                Some(i18n.tag_pushed_fmt.replace("{}", &name).replacen("{}", &remote, 1));
+                            state.tag_dialog.success_message = Some(
+                                i18n.tag_pushed_fmt
+                                    .replace("{}", &name)
+                                    .replacen("{}", &remote, 1),
+                            );
                         }
                         Err(e) => {
-                            state.tag_dialog.error = Some(i18n.push_tag_failed_fmt.replace("{}", &e.to_string()));
+                            state.tag_dialog.error =
+                                Some(i18n.push_tag_failed_fmt.replace("{}", &e.to_string()));
                         }
                     }
                 }
@@ -3505,11 +3615,17 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         .unwrap_or_else(|| "origin".to_string());
                     match git_core::delete_remote_tag(&repo, &name, &remote) {
                         Ok(()) => {
-                            state.tag_dialog.success_message =
-                                Some(i18n.remote_tag_deleted_fmt.replace("{}", &name).replacen("{}", &remote, 1));
+                            state.tag_dialog.success_message = Some(
+                                i18n.remote_tag_deleted_fmt
+                                    .replace("{}", &name)
+                                    .replacen("{}", &remote, 1),
+                            );
                         }
                         Err(e) => {
-                            state.tag_dialog.error = Some(i18n.delete_remote_tag_failed_fmt.replace("{}", &e.to_string()));
+                            state.tag_dialog.error = Some(
+                                i18n.delete_remote_tag_failed_fmt
+                                    .replace("{}", &e.to_string()),
+                            );
                         }
                     }
                 }
@@ -3534,13 +3650,19 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 if let Ok(repo) = require_repository(state) {
                     // Delete local first
                     if let Err(e) = git_core::delete_tag(&repo, &name) {
-                        state.tag_dialog.error = Some(i18n.delete_local_tag_failed_fmt.replace("{}", &e.to_string()));
+                        state.tag_dialog.error = Some(
+                            i18n.delete_local_tag_failed_fmt
+                                .replace("{}", &e.to_string()),
+                        );
                     } else {
                         let remote = repo
                             .current_upstream_remote()
                             .unwrap_or_else(|| "origin".to_string());
                         if let Err(e) = git_core::delete_remote_tag(&repo, &name, &remote) {
-                            state.tag_dialog.error = Some(i18n.delete_remote_tag_failed_fmt.replace("{}", &e.to_string()));
+                            state.tag_dialog.error = Some(
+                                i18n.delete_remote_tag_failed_fmt
+                                    .replace("{}", &e.to_string()),
+                            );
                         } else {
                             state.tag_dialog.success_message =
                                 Some(i18n.tag_deleted_local_remote_fmt.replace("{}", &name));
@@ -3566,7 +3688,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.tags",
                             "workspace.tags.refresh",
-                        i18n,
+                            i18n,
                         );
                     }
                 }
@@ -3591,7 +3713,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.stash",
                             "workspace.stash.save",
-                        i18n,
+                            i18n,
                         );
                     } else {
                         let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -3615,16 +3737,18 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.stash",
                             "workspace.stash.apply",
-                        i18n,
+                            i18n,
                         );
-                    } else if let Err(error) = refresh_repository_after_action(state, &repo, true, i18n) {
+                    } else if let Err(error) =
+                        refresh_repository_after_action(state, &repo, true, i18n)
+                    {
                         report_async_failure(
                             state,
                             i18n.refresh_repo_state_failed,
                             error,
                             "workspace.stash",
                             "workspace.stash.apply",
-                        i18n,
+                            i18n,
                         );
                     } else if !state.has_conflicts() {
                         if let Some(current) = state.current_repository.clone() {
@@ -3647,7 +3771,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.stash",
                             "workspace.stash.drop",
-                        i18n,
+                            i18n,
                         );
                     } else {
                         let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -3672,7 +3796,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.stash",
                             "workspace.stash.refresh",
-                        i18n,
+                            i18n,
                         );
                     }
                 }
@@ -3718,7 +3842,10 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 }
                             }
                             Err(e) => {
-                                state.stash_panel.error = Some(i18n.apply_to_branch_failed_fmt.replace("{}", &e.to_string()));
+                                state.stash_panel.error = Some(
+                                    i18n.apply_to_branch_failed_fmt
+                                        .replace("{}", &e.to_string()),
+                                );
                             }
                         }
                     }
@@ -3731,12 +3858,14 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 if let Ok(repo) = require_repository(state) {
                     match git_core::stash_clear(&repo) {
                         Ok(()) => {
-                            state.stash_panel.success_message = Some(i18n.all_stashes_cleared.to_string());
+                            state.stash_panel.success_message =
+                                Some(i18n.all_stashes_cleared.to_string());
                             state.stash_panel.stashes.clear();
                             state.stash_panel.selected_stash = None;
                         }
                         Err(e) => {
-                            state.stash_panel.error = Some(i18n.clear_stashes_failed_fmt.replace("{}", &e.to_string()));
+                            state.stash_panel.error =
+                                Some(i18n.clear_stashes_failed_fmt.replace("{}", &e.to_string()));
                         }
                     }
                 }
@@ -3757,7 +3886,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         error,
                         "workspace.rebase",
                         "workspace.rebase.edit_current",
-                    i18n,
+                        i18n,
                     );
                 }
             }
@@ -3801,16 +3930,18 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.rebase",
                             "workspace.rebase.start",
-                        i18n,
+                            i18n,
                         );
-                    } else if let Err(error) = refresh_repository_after_action(state, &repo, true, i18n) {
+                    } else if let Err(error) =
+                        refresh_repository_after_action(state, &repo, true, i18n)
+                    {
                         report_async_failure(
                             state,
                             i18n.refresh_repo_state_failed,
                             error,
                             "workspace.rebase",
                             "workspace.rebase.start",
-                        i18n,
+                            i18n,
                         );
                     } else {
                         if let Some(current) = state.current_repository.clone() {
@@ -3820,10 +3951,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         if state.has_conflicts() {
                             state.set_warning(
                                 i18n.rebase_conflict_warning,
-                                Some(
-                                    i18n.rebase_conflict_detail
-                                        .to_string(),
-                                ),
+                                Some(i18n.rebase_conflict_detail.to_string()),
                                 "workspace.rebase",
                             );
                         } else if let Some(message) = state.rebase_editor.success_message.clone() {
@@ -3842,16 +3970,18 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.rebase",
                             "workspace.rebase.continue",
-                        i18n,
+                            i18n,
                         );
-                    } else if let Err(error) = refresh_repository_after_action(state, &repo, true, i18n) {
+                    } else if let Err(error) =
+                        refresh_repository_after_action(state, &repo, true, i18n)
+                    {
                         report_async_failure(
                             state,
                             i18n.refresh_repo_state_failed,
                             error,
                             "workspace.rebase",
                             "workspace.rebase.continue",
-                        i18n,
+                            i18n,
                         );
                     } else if !state.has_conflicts() {
                         if let Some(current) = state.current_repository.clone() {
@@ -3874,16 +4004,18 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.rebase",
                             "workspace.rebase.skip",
-                        i18n,
+                            i18n,
                         );
-                    } else if let Err(error) = refresh_repository_after_action(state, &repo, true, i18n) {
+                    } else if let Err(error) =
+                        refresh_repository_after_action(state, &repo, true, i18n)
+                    {
                         report_async_failure(
                             state,
                             i18n.refresh_repo_state_failed,
                             error,
                             "workspace.rebase",
                             "workspace.rebase.skip",
-                        i18n,
+                            i18n,
                         );
                     } else if !state.has_conflicts() {
                         if let Some(current) = state.current_repository.clone() {
@@ -3906,9 +4038,10 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.rebase",
                             "workspace.rebase.abort",
-                        i18n,
+                            i18n,
                         );
-                    } else if let Err(error) = refresh_repository_after_action(state, &repo, false, i18n)
+                    } else if let Err(error) =
+                        refresh_repository_after_action(state, &repo, false, i18n)
                     {
                         report_async_failure(
                             state,
@@ -3916,7 +4049,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.rebase",
                             "workspace.rebase.abort",
-                        i18n,
+                            i18n,
                         );
                     } else {
                         if let Some(current) = state.current_repository.clone() {
@@ -3940,7 +4073,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             error,
                             "workspace.rebase",
                             "workspace.rebase.refresh",
-                        i18n,
+                            i18n,
                         );
                     }
                 }
@@ -4076,7 +4209,8 @@ fn load_history_commit_file_diff(
         .files
         .into_iter()
         .filter(|file| {
-            file.new_path.as_deref() == Some(file_path) || file.old_path.as_deref() == Some(file_path)
+            file.new_path.as_deref() == Some(file_path)
+                || file.old_path.as_deref() == Some(file_path)
         })
         .collect::<Vec<_>>();
 
@@ -4109,18 +4243,13 @@ fn load_history_commit_file_diff(
         };
 
         git_core::diff::build_editor_diff_model_from_file_contents(
-            file_diff,
-            &old_bytes,
-            &new_bytes,
+            file_diff, &old_bytes, &new_bytes,
         )
     } else {
         None
     };
 
-    Ok(HistoryCommitFileDiffData {
-        diff,
-        editor_diff,
-    })
+    Ok(HistoryCommitFileDiffData { diff, editor_diff })
 }
 
 fn show_history_commit_file_diff(
@@ -4178,7 +4307,11 @@ fn refresh_open_auxiliary_view(state: &mut AppState) {
     }
 }
 
-fn open_rebase_session_with_context(state: &mut AppState, context_commit_id: Option<&str>, i18n: &I18n) {
+fn open_rebase_session_with_context(
+    state: &mut AppState,
+    context_commit_id: Option<&str>,
+    i18n: &I18n,
+) {
     state.rebase_editor.todo_is_editable = false;
     state.rebase_editor.todo_base_ref = None;
     state.rebase_editor.onto_branch.clear();
@@ -4256,24 +4389,38 @@ fn run_toolbar_remote_action(
                 ToolbarRemoteAction::Push => i18n.detached_no_push.to_string(),
             });
         }
-        Err(error) => return Err(i18n.read_branch_failed_fmt.replace("{}", &error.to_string())),
+        Err(error) => {
+            return Err(i18n
+                .read_branch_failed_fmt
+                .replace("{}", &error.to_string()))
+        }
     };
 
     match action {
         ToolbarRemoteAction::Pull => {
-            git_core::remote::pull(&repo, &remote_name, &branch_name, None)
-                .map_err(|error| i18n.pull_remote_failed_fmt.replace("{}", &error.to_string()))?;
+            git_core::remote::pull(&repo, &remote_name, &branch_name, None).map_err(|error| {
+                i18n.pull_remote_failed_fmt
+                    .replace("{}", &error.to_string())
+            })?;
             refresh_repository_after_action(state, &repo, true, i18n)?;
 
             if state.has_conflicts() {
                 state.set_warning(
-                    i18n.pulled_remote_fmt.replace("{}", &remote_name).replacen("{}", &branch_name, 1),
+                    i18n.pulled_remote_fmt.replace("{}", &remote_name).replacen(
+                        "{}",
+                        &branch_name,
+                        1,
+                    ),
                     Some(i18n.merge_conflict_found_detail.to_string()),
                     "workspace.remote.toolbar.pull",
                 );
             } else {
                 state.set_success(
-                    i18n.pulled_remote_fmt.replace("{}", &remote_name).replacen("{}", &branch_name, 1),
+                    i18n.pulled_remote_fmt.replace("{}", &remote_name).replacen(
+                        "{}",
+                        &branch_name,
+                        1,
+                    ),
                     Some(i18n.repo_state_refreshed.to_string()),
                     "workspace.remote.toolbar.pull",
                 );
@@ -4285,18 +4432,26 @@ fn run_toolbar_remote_action(
             }
         }
         ToolbarRemoteAction::Push => {
-            git_core::remote::push(&repo, &remote_name, &branch_name, None)
-                .map_err(|error| i18n.push_remote_failed_fmt.replace("{}", &error.to_string()))?;
+            git_core::remote::push(&repo, &remote_name, &branch_name, None).map_err(|error| {
+                i18n.push_remote_failed_fmt
+                    .replace("{}", &error.to_string())
+            })?;
             refresh_repository_after_action(state, &repo, false, i18n)?;
             state.set_success(
-                i18n.pushed_remote_fmt.replace("{}", &branch_name).replacen("{}", &remote_name, 1),
+                i18n.pushed_remote_fmt
+                    .replace("{}", &branch_name)
+                    .replacen("{}", &remote_name, 1),
                 Some(i18n.repo_state_refreshed.to_string()),
                 "workspace.remote.toolbar.push",
             );
             state.show_toast(
                 crate::state::FeedbackLevel::Success,
                 i18n.push_toast_success,
-                Some(i18n.push_toast_detail_fmt.replace("{}", &branch_name).replacen("{}", &remote_name, 1)),
+                Some(
+                    i18n.push_toast_detail_fmt
+                        .replace("{}", &branch_name)
+                        .replacen("{}", &remote_name, 1),
+                ),
             );
         }
     }
@@ -4323,12 +4478,17 @@ fn switch_commit_dialog_to_amend(state: &mut AppState) -> Result<(), String> {
     let i18n = i18n::locale(state.git_settings.language.as_deref());
     let diff = build_staged_diff(&repo, &state.staged_changes)?;
     let head_commit = git_core::history::get_history(&repo, Some(1))
-        .map_err(|error| i18n.read_recent_commit_failed_fmt.replace("{}", &error.to_string()))?
+        .map_err(|error| {
+            i18n.read_recent_commit_failed_fmt
+                .replace("{}", &error.to_string())
+        })?
         .into_iter()
         .next()
         .ok_or_else(|| i18n.no_commit_history_amend.to_string())?;
-    let commit = git_core::commit::get_commit(&repo, &head_commit.id)
-        .map_err(|error| i18n.load_commit_detail_err_fmt.replace("{}", &error.to_string()))?;
+    let commit = git_core::commit::get_commit(&repo, &head_commit.id).map_err(|error| {
+        i18n.load_commit_detail_err_fmt
+            .replace("{}", &error.to_string())
+    })?;
 
     state.commit_dialog.diff = diff;
     state.commit_dialog.staged_files = state.staged_changes.clone();
@@ -4379,10 +4539,17 @@ fn submit_commit_dialog(state: &mut AppState) -> Result<(), String> {
             .as_ref()
             .ok_or_else(|| i18n.missing_amend_context.to_string())?;
         git_core::commit::amend_commit(&repo, &commit_to_amend.id, &state.commit_dialog.message)
-            .map_err(|error| i18n.amend_commit_failed_fmt.replace("{}", &error.to_string()))?
+            .map_err(|error| {
+                i18n.amend_commit_failed_fmt
+                    .replace("{}", &error.to_string())
+            })?
     } else {
-        git_core::commit::create_commit(&repo, &state.commit_dialog.message, "", "")
-            .map_err(|error| i18n.create_commit_failed_fmt.replace("{}", &error.to_string()))?
+        git_core::commit::create_commit(&repo, &state.commit_dialog.message, "", "").map_err(
+            |error| {
+                i18n.create_commit_failed_fmt
+                    .replace("{}", &error.to_string())
+            },
+        )?
     };
 
     state.commit_dialog.commit_success();
@@ -4539,20 +4706,29 @@ fn resolve_selected_conflict(state: &mut AppState) -> Result<(), String> {
         Path::new(&resolver.diff.path),
         ConflictResolution::Custom(resolved_content),
     )
-    .map_err(|error| i18n.write_conflict_failed_fmt.replace("{}", &error.to_string()))?;
+    .map_err(|error| {
+        i18n.write_conflict_failed_fmt
+            .replace("{}", &error.to_string())
+    })?;
 
     refresh_repository_after_action(state, &repo, true, i18n)?;
     if state.has_conflicts() {
         state.set_success(
             i18n.conflict_file_written_back,
-            Some(i18n.conflict_file_continue_fmt.replace("{}", &resolver.diff.path)),
+            Some(
+                i18n.conflict_file_continue_fmt
+                    .replace("{}", &resolver.diff.path),
+            ),
             "workspace.conflicts",
         );
     } else {
         state.navigate_to(ShellSection::Changes, i18n);
         state.set_success(
             i18n.all_conflicts_resolved,
-            Some(i18n.conflict_file_indexed_fmt.replace("{}", &resolver.diff.path)),
+            Some(
+                i18n.conflict_file_indexed_fmt
+                    .replace("{}", &resolver.diff.path),
+            ),
             "workspace.conflicts",
         );
     }
@@ -4575,8 +4751,10 @@ fn resolve_conflict_with_side(
         .ok_or_else(|| i18n.conflict_file_not_found.to_string())?;
     let path = conflict.path.clone();
 
-    git_core::diff::resolve_conflict(&repo, Path::new(&path), resolution)
-        .map_err(|error| i18n.write_conflict_failed_fmt.replace("{}", &error.to_string()))?;
+    git_core::diff::resolve_conflict(&repo, Path::new(&path), resolution).map_err(|error| {
+        i18n.write_conflict_failed_fmt
+            .replace("{}", &error.to_string())
+    })?;
 
     refresh_repository_after_action(state, &repo, true, i18n)?;
 
@@ -4639,7 +4817,7 @@ fn select_relative_file(state: &mut AppState, delta: isize) {
                 error,
                 "workspace.select_change",
                 "workspace.select_change",
-            i18n,
+                i18n,
             );
         }
     }
@@ -4681,13 +4859,18 @@ fn navigate_hunk(state: &mut AppState, delta: isize) -> Task<Message> {
     state.selected_hunk_index = Some(next);
 
     if let Some(editor) = state.unified_diff_editor.as_mut() {
-        return editor.scroll_to_hunk(next).map(Message::UnifiedDiffEditorEvent);
+        return editor
+            .scroll_to_hunk(next)
+            .map(Message::UnifiedDiffEditorEvent);
     }
 
-    scroll_to(Id::new("diff-scroll"), AbsoluteOffset {
-        x: 0.0,
-        y: state::compute_hunk_offset(diff, next),
-    })
+    scroll_to(
+        Id::new("diff-scroll"),
+        AbsoluteOffset {
+            x: 0.0,
+            y: state::compute_hunk_offset(diff, next),
+        },
+    )
 }
 
 fn navigate_history_commit_diff_popup_hunk(state: &mut AppState, delta: isize) -> Task<Message> {
@@ -4709,7 +4892,9 @@ fn navigate_history_commit_diff_popup_hunk(state: &mut AppState, delta: isize) -
         popup.selected_hunk_index = Some(next);
 
         if let Some(editor) = popup.split_diff_editor.as_mut() {
-            return editor.scroll_to_hunk(next).map(Message::SplitDiffEditorEvent);
+            return editor
+                .scroll_to_hunk(next)
+                .map(Message::SplitDiffEditorEvent);
         }
 
         return Task::none();
@@ -4725,7 +4910,9 @@ fn navigate_history_commit_diff_popup_hunk(state: &mut AppState, delta: isize) -
     popup.selected_hunk_index = Some(next);
 
     if let Some(editor) = popup.unified_diff_editor.as_mut() {
-        return editor.scroll_to_hunk(next).map(Message::UnifiedDiffEditorEvent);
+        return editor
+            .scroll_to_hunk(next)
+            .map(Message::UnifiedDiffEditorEvent);
     }
 
     Task::none()
@@ -4783,7 +4970,8 @@ fn pipe_command_stdin(command: &str, args: &[&str], value: &str) -> Result<(), S
     let mut child_command = Command::new(command);
     git_core::configure_background_command(&mut child_command);
 
-    let mut child = child_command.args(args)
+    let mut child = child_command
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -4887,8 +5075,7 @@ fn remote_panel_hint(repo: &Repository, action_label: &str, i18n: &i18n::I18n) -
             .replace("{}", &repo.current_branch_display())
             .replacen("{}", action_label, 1)
     } else {
-        i18n.remote_hint_detached_fmt
-            .replace("{}", action_label)
+        i18n.remote_hint_detached_fmt.replace("{}", action_label)
     }
 }
 
@@ -5240,16 +5427,13 @@ fn wrap_with_history_commit_diff_popup<'a>(
     stack![
         base,
         opaque(
-            mouse_area(
-                Container::new(Space::new())
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .style(|_: &Theme| iced::widget::container::Style {
-                        background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.5))),
-                        ..Default::default()
-                    }),
-            )
-            .on_press(Message::CloseHistoryCommitDiffPopup),
+            Container::new(Space::new())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_: &Theme| iced::widget::container::Style {
+                    background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.5))),
+                    ..Default::default()
+                }),
         ),
         Container::new(popup_card)
             .width(Length::Fill)
@@ -5284,9 +5468,8 @@ fn build_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Mess
             AuxiliaryView::Rebase => {
                 rebase_editor::view(&state.rebase_editor, i18n).map(Message::RebaseEditorMessage)
             }
-            AuxiliaryView::Worktrees => {
-                views::worktree_view::view(&state.worktree_state, i18n).map(Message::WorktreeMessage)
-            }
+            AuxiliaryView::Worktrees => views::worktree_view::view(&state.worktree_state, i18n)
+                .map(Message::WorktreeMessage),
             AuxiliaryView::Settings => {
                 views::settings_view::view(&state.git_settings, i18n).map(Message::SettingsMessage)
             }
@@ -5446,17 +5629,29 @@ fn build_changes_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<
 
 fn build_change_sections<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Message> {
     if state.workspace_change_count() == 0 {
+        let residual_merge_state = has_residual_merge_state(state);
+        let title = if residual_merge_state {
+            i18n.residual_merge_state
+        } else {
+            i18n.clean_workspace
+        };
+        let detail = if residual_merge_state {
+            i18n.residual_merge_state_detail
+        } else {
+            i18n.clean_workspace_detail
+        };
+
         return Container::new(
             Column::new()
                 .spacing(theme::spacing::XS)
                 .align_x(Alignment::Center)
                 .push(
-                    Text::new(i18n.clean_workspace)
+                    Text::new(title)
                         .size(13)
                         .color(theme::darcula::TEXT_SECONDARY),
                 )
                 .push(
-                    Text::new(i18n.clean_workspace_detail)
+                    Text::new(detail)
                         .size(10)
                         .color(theme::darcula::TEXT_DISABLED),
                 )
@@ -5464,8 +5659,14 @@ fn build_change_sections<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Eleme
                 .push(
                     Row::new()
                         .spacing(theme::spacing::XS)
+                        .push_maybe(residual_merge_state.then(|| {
+                            button::secondary(i18n.quit_merge_state, Some(Message::QuitMergeState))
+                        }))
                         .push(button::secondary(i18n.refresh, Some(Message::Refresh)))
-                        .push(button::ghost(i18n.branches_btn, Some(Message::ShowBranches)))
+                        .push(button::ghost(
+                            i18n.branches_btn,
+                            Some(Message::ShowBranches),
+                        ))
                         .push(button::ghost(i18n.history_btn, Some(Message::ShowHistory))),
                 ),
         )
@@ -5494,11 +5695,22 @@ fn build_change_sections<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Eleme
     .view()
 }
 
+fn has_residual_merge_state(state: &AppState) -> bool {
+    state.workspace_change_count() == 0
+        && !state.has_conflicts()
+        && state.current_repository.as_ref().is_some_and(|repo| {
+            repo.get_state() == git_core::repository::RepositoryState::Merging
+        })
+}
+
 const CHANGE_CONTEXT_MENU_WIDTH: f32 = 180.0;
 const CHANGE_CONTEXT_MENU_ESTIMATED_HEIGHT: f32 = 180.0;
 const CHANGE_CONTEXT_MENU_EDGE_PADDING: f32 = 8.0;
 
-fn build_change_context_menu_overlay<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Message> {
+fn build_change_context_menu_overlay<'a>(
+    state: &'a AppState,
+    i18n: &'a i18n::I18n,
+) -> Element<'a, Message> {
     let Some(path) = state.change_context_menu_path.as_deref() else {
         return Space::new().width(Length::Shrink).into();
     };
@@ -5509,7 +5721,11 @@ fn build_change_context_menu_overlay<'a>(state: &'a AppState, i18n: &'a i18n::I1
     let is_staged = state.staged_changes.iter().any(|c| c.path == path);
     let _is_unstaged = state.unstaged_changes.iter().any(|c| c.path == path);
 
-    let stage_label = if is_staged { i18n.unstage_file } else { i18n.stage_file };
+    let stage_label = if is_staged {
+        i18n.unstage_file
+    } else {
+        i18n.stage_file
+    };
     let stage_message = if is_staged {
         Some(Message::UnstageFile(path.to_string()))
     } else {
@@ -5649,11 +5865,18 @@ fn build_diff_content<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<
     build_read_only_diff_content(&surface, i18n, hunk_actions)
 }
 
-fn workspace_diff_surface<'a>(state: &'a AppState) -> (ReadOnlyDiffSurface<'a>, DiffSurfaceHunkActions) {
+fn workspace_diff_surface<'a>(
+    state: &'a AppState,
+) -> (ReadOnlyDiffSurface<'a>, DiffSurfaceHunkActions) {
     let selected_is_staged = state
         .selected_change_path
         .as_ref()
-        .map(|path| state.staged_changes.iter().any(|change| &change.path == path))
+        .map(|path| {
+            state
+                .staged_changes
+                .iter()
+                .any(|change| &change.path == path)
+        })
         .unwrap_or(false);
     let hunk_actions = if selected_is_staged {
         DiffSurfaceHunkActions {
@@ -5706,7 +5929,10 @@ fn history_diff_popup_surface<'a>(
     }
 }
 
-fn build_read_only_diff_header<'a>(surface: &ReadOnlyDiffSurface<'a>, i18n: &'a i18n::I18n) -> Element<'a, Message> {
+fn build_read_only_diff_header<'a>(
+    surface: &ReadOnlyDiffSurface<'a>,
+    i18n: &'a i18n::I18n,
+) -> Element<'a, Message> {
     let file_name = surface
         .selected_path
         .and_then(|path| std::path::Path::new(path).file_name()?.to_str())
@@ -5826,7 +6052,8 @@ fn build_read_only_diff_content<'a>(
             }
         }
         DiffPresentation::Split => {
-            let (Some(model), Some(editor)) = (surface.editor_diff, surface.split_diff_editor) else {
+            let (Some(model), Some(editor)) = (surface.editor_diff, surface.split_diff_editor)
+            else {
                 return widgets::panel_empty_state_compact(
                     i18n.split_view_unavailable,
                     i18n.split_view_unavailable_detail,
@@ -5905,15 +6132,18 @@ fn build_conflict_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element
             .spacing(theme::spacing::SM)
             .align_y(Alignment::Center)
             .push(widgets::info_chip::<Message>(
-                i18n.conflict_files_count_fmt.replace("{}", &state.conflict_files.len().to_string()),
+                i18n.conflict_files_count_fmt
+                    .replace("{}", &state.conflict_files.len().to_string()),
                 BadgeTone::Warning,
             ))
             .push(widgets::info_chip::<Message>(
-                i18n.conflict_hunks_fmt.replace("{}", &total_hunks.to_string()),
+                i18n.conflict_hunks_fmt
+                    .replace("{}", &total_hunks.to_string()),
                 BadgeTone::Neutral,
             ))
             .push(widgets::info_chip::<Message>(
-                i18n.manual_merge_fmt.replace("{}", &total_manual_conflicts.to_string()),
+                i18n.manual_merge_fmt
+                    .replace("{}", &total_manual_conflicts.to_string()),
                 if total_manual_conflicts > 0 {
                     BadgeTone::Warning
                 } else {
@@ -5921,7 +6151,8 @@ fn build_conflict_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element
                 },
             ))
             .push(widgets::info_chip::<Message>(
-                i18n.auto_resolvable_fmt.replace("{}", &total_auto_resolvable.to_string()),
+                i18n.auto_resolvable_fmt
+                    .replace("{}", &total_auto_resolvable.to_string()),
                 BadgeTone::Accent,
             ))
             .push(Space::new().width(Length::Fill))
@@ -6074,10 +6305,10 @@ fn build_conflict_list_row<'a>(
     i18n: &'a i18n::I18n,
 ) -> Element<'a, Message> {
     let summary = summarize_conflict(conflict);
-    let file_status = FileStatus::Conflict;
     let (file_name, parent_path) = split_workspace_path(&conflict.path, i18n);
     let status_label = if summary.manual_conflicts > 0 {
-        i18n.needs_merge_fmt.replace("{}", &summary.manual_conflicts.to_string())
+        i18n.needs_merge_fmt
+            .replace("{}", &summary.manual_conflicts.to_string())
     } else {
         i18n.auto_resolvable_label.to_string()
     };
@@ -6085,42 +6316,44 @@ fn build_conflict_list_row<'a>(
     let content = Row::new()
         .spacing(theme::spacing::SM)
         .align_y(Alignment::Center)
+        .width(Length::Fill)
         .push(
-            Row::new()
-                .spacing(theme::spacing::SM)
-                .width(Length::FillPortion(6))
-                .align_y(Alignment::Center)
-                .push(build_conflict_file_icon(file_status))
-                .push(
-                    Column::new()
-                        .spacing(2)
-                        .width(Length::Fill)
-                        .push(
-                            Row::new()
-                                .spacing(theme::spacing::XS)
-                                .align_y(Alignment::Center)
-                                .push(
-                                    Text::new(file_name)
-                                        .size(12)
-                                        .width(Length::Shrink)
-                                        .wrapping(text::Wrapping::WordOrGlyph),
+            Container::new(
+                Column::new()
+                    .spacing(2)
+                    .align_x(Alignment::Start)
+                    .push(
+                        Row::new()
+                            .spacing(theme::spacing::XS)
+                            .align_y(Alignment::Center)
+                            .push(
+                                Text::new(file_name)
+                                    .size(12)
+                                    .wrapping(text::Wrapping::WordOrGlyph),
+                            )
+                            .push_maybe(is_selected.then(|| {
+                                widgets::info_chip::<Message>(
+                                    i18n.current_label,
+                                    BadgeTone::Accent,
                                 )
-                                .push_maybe(is_selected.then(|| {
-                                    widgets::info_chip::<Message>(i18n.current_label, BadgeTone::Accent)
-                                })),
-                        )
-                        .push(
-                            Text::new(parent_path)
-                                .size(10)
-                                .color(theme::darcula::TEXT_SECONDARY)
-                                .wrapping(text::Wrapping::None),
-                        ),
-                ),
+                            })),
+                    )
+                    .push(
+                        Text::new(parent_path)
+                            .size(10)
+                            .color(theme::darcula::TEXT_SECONDARY)
+                            .wrapping(text::Wrapping::WordOrGlyph),
+                    ),
+            )
+            .width(Length::FillPortion(6))
+            .align_x(iced::alignment::Horizontal::Left)
+            .center_y(Length::Shrink),
         )
         .push(build_conflict_status_cell(
             i18n.current_branch_label,
             if summary.ours_changed > 0 {
-                i18n.modified_hunks_fmt.replace("{}", &summary.ours_changed.to_string())
+                i18n.modified_hunks_fmt
+                    .replace("{}", &summary.ours_changed.to_string())
             } else {
                 i18n.no_diff_label.to_string()
             },
@@ -6129,7 +6362,8 @@ fn build_conflict_list_row<'a>(
         .push(build_conflict_status_cell(
             i18n.incoming_branch_label,
             if summary.theirs_changed > 0 {
-                i18n.modified_hunks_fmt.replace("{}", &summary.theirs_changed.to_string())
+                i18n.modified_hunks_fmt
+                    .replace("{}", &summary.theirs_changed.to_string())
             } else {
                 i18n.no_diff_label.to_string()
             },
@@ -6148,34 +6382,27 @@ fn build_conflict_list_row<'a>(
                     },
                 ))
                 .push(
-                    Text::new(i18n.conflict_hunks_count_fmt.replace("{}", &summary.hunk_count.to_string()))
-                        .size(10)
-                        .color(theme::darcula::TEXT_SECONDARY),
+                    Text::new(
+                        i18n.conflict_hunks_count_fmt
+                            .replace("{}", &summary.hunk_count.to_string()),
+                    )
+                    .size(10)
+                    .color(theme::darcula::TEXT_SECONDARY),
                 ),
         );
 
-    Button::new(
-        Row::new()
-            .push(
-                Container::new(Space::new().width(Length::Fixed(3.0)))
-                    .width(Length::Fixed(3.0))
-                    .height(Length::Fill)
-                    .style(conflict_row_strip_style(is_selected)),
-            )
-            .push(
-                Container::new(content)
-                    .padding([8, 10])
-                    .width(Length::Fill)
-                    .style(theme::panel_style(if is_selected {
-                        theme::Surface::Selection
-                    } else {
-                        theme::Surface::Panel
-                    })),
-            ),
+    mouse_area(
+        Container::new(content)
+            .padding([8, 10])
+            .width(Length::Fill)
+            .style(theme::panel_style(if is_selected {
+                theme::Surface::ListSelection
+            } else {
+                theme::Surface::ListRow
+            })),
     )
-    .width(Length::Fill)
-    .style(theme::button_style(theme::ButtonTone::Ghost))
     .on_press(Message::SelectConflict(index))
+    .interaction(iced::mouse::Interaction::Pointer)
     .into()
 }
 
@@ -6214,11 +6441,13 @@ fn build_conflict_action_panel<'a>(
                 Row::new()
                     .spacing(theme::spacing::XS)
                     .push(widgets::info_chip::<Message>(
-                        i18n.conflict_count_fmt.replace("{}", &summary.hunk_count.to_string()),
+                        i18n.conflict_count_fmt
+                            .replace("{}", &summary.hunk_count.to_string()),
                         BadgeTone::Warning,
                     ))
                     .push(widgets::info_chip::<Message>(
-                        i18n.manual_count_fmt.replace("{}", &summary.manual_conflicts.to_string()),
+                        i18n.manual_count_fmt
+                            .replace("{}", &summary.manual_conflicts.to_string()),
                         if summary.manual_conflicts > 0 {
                             BadgeTone::Danger
                         } else {
@@ -6226,7 +6455,8 @@ fn build_conflict_action_panel<'a>(
                         },
                     ))
                     .push(widgets::info_chip::<Message>(
-                        i18n.auto_count_fmt.replace("{}", &summary.auto_resolvable.to_string()),
+                        i18n.auto_count_fmt
+                            .replace("{}", &summary.auto_resolvable.to_string()),
                         BadgeTone::Neutral,
                     )),
             )
@@ -6288,20 +6518,6 @@ fn build_conflict_action_panel<'a>(
     .into()
 }
 
-fn build_conflict_file_icon<'a>(status: FileStatus) -> Element<'a, Message> {
-    Container::new(
-        Text::new(status.symbol())
-            .size(11)
-            .color(theme::darcula::TEXT_PRIMARY),
-    )
-    .width(Length::Fixed(18.0))
-    .height(Length::Fixed(18.0))
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .style(theme::panel_style(theme::Surface::Danger))
-    .into()
-}
-
 fn build_conflict_status_cell<'a>(
     title: &'a str,
     label: String,
@@ -6353,7 +6569,8 @@ fn summarize_conflict(conflict: &ThreeWayDiff) -> ConflictListSummary {
     for hunk in &conflict.hunks {
         match summarize_conflict_hunk(hunk) {
             ConflictHunkType::Modified => summary.manual_conflicts += 1,
-            ConflictHunkType::OursOnly
+            ConflictHunkType::BothChanged
+            | ConflictHunkType::OursOnly
             | ConflictHunkType::TheirsOnly
             | ConflictHunkType::Unchanged => summary.auto_resolvable += 1,
         }
@@ -6363,6 +6580,10 @@ fn summarize_conflict(conflict: &ThreeWayDiff) -> ConflictListSummary {
 
         for line in &hunk.lines {
             match line.line_type {
+                ConflictLineType::BothChanged => {
+                    ours_changed = true;
+                    theirs_changed = true;
+                }
                 ConflictLineType::OursOnly => ours_changed = true,
                 ConflictLineType::TheirsOnly => theirs_changed = true,
                 ConflictLineType::Modified => {
@@ -6387,6 +6608,7 @@ fn summarize_conflict(conflict: &ThreeWayDiff) -> ConflictListSummary {
 }
 
 fn summarize_conflict_hunk(hunk: &ConflictHunk) -> ConflictHunkType {
+    let mut both_changed = 0usize;
     let mut ours_only = 0usize;
     let mut theirs_only = 0usize;
     let mut modified = 0usize;
@@ -6394,6 +6616,7 @@ fn summarize_conflict_hunk(hunk: &ConflictHunk) -> ConflictHunkType {
 
     for line in &hunk.lines {
         match line.line_type {
+            ConflictLineType::BothChanged => both_changed += 1,
             ConflictLineType::OursOnly => ours_only += 1,
             ConflictLineType::TheirsOnly => theirs_only += 1,
             ConflictLineType::Modified => modified += 1,
@@ -6404,11 +6627,13 @@ fn summarize_conflict_hunk(hunk: &ConflictHunk) -> ConflictHunkType {
 
     if modified > 0 {
         ConflictHunkType::Modified
+    } else if both_changed > 0 && ours_only == 0 && theirs_only == 0 {
+        ConflictHunkType::BothChanged
     } else if ours_only > 0 && theirs_only == 0 {
         ConflictHunkType::OursOnly
     } else if theirs_only > 0 && ours_only == 0 {
         ConflictHunkType::TheirsOnly
-    } else if unchanged > 0 && ours_only == 0 && theirs_only == 0 {
+    } else if unchanged > 0 && both_changed == 0 && ours_only == 0 && theirs_only == 0 {
         ConflictHunkType::Unchanged
     } else {
         ConflictHunkType::Modified
@@ -6435,27 +6660,12 @@ fn split_workspace_path(path: &str, i18n: &i18n::I18n) -> (String, String) {
     (file_name, parent)
 }
 
-fn conflict_row_strip_style(selected: bool) -> impl Fn(&Theme) -> container::Style {
-    move |_theme| container::Style {
-        background: Some(Background::Color(if selected {
-            theme::darcula::ACCENT
-        } else {
-            theme::darcula::BG_PANEL
-        })),
-        border: Border {
-            width: 0.0,
-            color: Color::TRANSPARENT,
-            radius: 0.0.into(),
-        },
-        ..Default::default()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum Message {
     OpenRepository,
     InitRepository,
     Refresh,
+    QuitMergeState,
     AutoRefreshTick(Instant),
     RepositoryWatchEvent(RepositoryWatchEvent),
     AutoRemoteCheckFinished(AutoRemoteCheckResult),
@@ -6627,7 +6837,10 @@ mod tests {
         );
 
         assert_eq!(state.shell.git_tool_window_tab, GitToolWindowTab::Log);
-        assert_eq!(state.selected_change_path.as_deref(), Some("workspace-file.rs"));
+        assert_eq!(
+            state.selected_change_path.as_deref(),
+            Some("workspace-file.rs")
+        );
         assert!(state.current_diff.is_none());
         assert_eq!(
             state.history_view.selected_commit_file_path.as_deref(),
@@ -6656,7 +6869,10 @@ mod tests {
         let _ = update(&mut state, Message::CloseHistoryCommitDiffPopup);
 
         assert_eq!(state.shell.git_tool_window_tab, GitToolWindowTab::Log);
-        assert_eq!(state.history_view.selected_commit.as_deref(), Some("abc123"));
+        assert_eq!(
+            state.history_view.selected_commit.as_deref(),
+            Some("abc123")
+        );
         assert_eq!(
             state.history_view.selected_commit_file_path.as_deref(),
             Some("src/main.rs")

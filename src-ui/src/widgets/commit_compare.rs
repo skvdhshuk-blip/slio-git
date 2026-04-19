@@ -266,8 +266,14 @@ pub fn view(state: &CommitCompareState) -> Element<'_, CommitCompareMessage> {
                                     "Swap",
                                     Some(CommitCompareMessage::SwapCommits),
                                 ))
-                                .push(button::primary("Compare", Some(CommitCompareMessage::Compare)))
-                                .push(button::ghost("Refresh", Some(CommitCompareMessage::Refresh))),
+                                .push(button::primary(
+                                    "Compare",
+                                    Some(CommitCompareMessage::Compare),
+                                ))
+                                .push(button::ghost(
+                                    "Refresh",
+                                    Some(CommitCompareMessage::Refresh),
+                                )),
                         )
                         .width(Length::Fill),
                     )

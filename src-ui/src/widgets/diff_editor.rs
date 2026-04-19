@@ -993,7 +993,7 @@ pub fn build_editor_with_font_size(
     font_size: f32,
 ) -> CodeEditor {
     let syntax = syntax_for_path(path_hint);
-    let mut editor = CodeEditor::new(content, syntax);
+    let mut editor = CodeEditor::new(content, syntax.as_str());
     editor.set_font(theme::code_font());
     editor.set_font_size(font_size, true);
     editor.set_wrap_enabled(false);
@@ -1018,11 +1018,12 @@ fn editor_style() -> iced_code_editor::theme::Style {
     }
 }
 
-fn syntax_for_path(path_hint: Option<&str>) -> &str {
+fn syntax_for_path(path_hint: Option<&str>) -> String {
     path_hint
         .and_then(|path| Path::new(path).extension())
         .and_then(|ext| ext.to_str())
-        .unwrap_or("txt")
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_else(|| "txt".to_string())
 }
 
 fn build_pane_decorations(model: &EditorDiffModel) -> (PaneDecorations, PaneDecorations) {

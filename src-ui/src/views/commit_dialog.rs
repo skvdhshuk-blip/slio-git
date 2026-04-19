@@ -300,11 +300,13 @@ pub fn view<'a>(state: &'a CommitDialogState, i18n: &'a I18n) -> Element<'a, Com
                             .color(theme::darcula::TEXT_SECONDARY),
                     )
                     .push(widgets::compact_chip::<CommitDialogMessage>(
-                        i18n.cd_staged_count_fmt.replace("{}", &state.staged_files.len().to_string()),
+                        i18n.cd_staged_count_fmt
+                            .replace("{}", &state.staged_files.len().to_string()),
                         BadgeTone::Success,
                     ))
                     .push(widgets::compact_chip::<CommitDialogMessage>(
-                        i18n.cd_selected_count_fmt.replace("{}", &state.selected_files.len().to_string()),
+                        i18n.cd_selected_count_fmt
+                            .replace("{}", &state.selected_files.len().to_string()),
                         BadgeTone::Accent,
                     )),
             )
@@ -324,7 +326,8 @@ pub fn view<'a>(state: &'a CommitDialogState, i18n: &'a I18n) -> Element<'a, Com
                 .spacing(theme::spacing::XS)
                 .align_y(Alignment::Center)
                 .push(widgets::compact_chip::<CommitDialogMessage>(
-                    i18n.cd_file_count_fmt.replace("{}", &selected_file_count.to_string()),
+                    i18n.cd_file_count_fmt
+                        .replace("{}", &selected_file_count.to_string()),
                     BadgeTone::Success,
                 ))
                 .push(widgets::compact_chip::<CommitDialogMessage>(
@@ -442,9 +445,13 @@ pub fn view<'a>(state: &'a CommitDialogState, i18n: &'a I18n) -> Element<'a, Com
                     .spacing(theme::spacing::SM)
                     .align_y(Alignment::Center)
                     .push(
-                        Text::new(i18n.cd_msg_stats_fmt.replace("{}", &message_lines.to_string()).replacen("{}", &message_chars.to_string(), 1))
-                            .size(10)
-                            .color(theme::darcula::TEXT_DISABLED),
+                        Text::new(
+                            i18n.cd_msg_stats_fmt
+                                .replace("{}", &message_lines.to_string())
+                                .replacen("{}", &message_chars.to_string(), 1),
+                        )
+                        .size(10)
+                        .color(theme::darcula::TEXT_DISABLED),
                     )
                     .push(Space::new().width(Length::Fill))
                     .push(Text::new(message_hint_text).size(11).color(if is_valid {
@@ -564,11 +571,16 @@ pub fn view<'a>(state: &'a CommitDialogState, i18n: &'a I18n) -> Element<'a, Com
             .align_y(Alignment::Center)
             .push(Text::new(i18n.cd_title).size(14))
             .push(widgets::compact_chip::<CommitDialogMessage>(
-                if state.is_amend { i18n.cd_mode_amend } else { i18n.cd_mode_new },
+                if state.is_amend {
+                    i18n.cd_mode_amend
+                } else {
+                    i18n.cd_mode_new
+                },
                 BadgeTone::Neutral,
             ))
             .push(widgets::compact_chip::<CommitDialogMessage>(
-                i18n.cd_file_count_fmt.replace("{}", &selected_file_count.to_string()),
+                i18n.cd_file_count_fmt
+                    .replace("{}", &selected_file_count.to_string()),
                 BadgeTone::Accent,
             ))
             .push(widgets::compact_chip::<CommitDialogMessage>(
@@ -593,7 +605,9 @@ pub fn view<'a>(state: &'a CommitDialogState, i18n: &'a I18n) -> Element<'a, Com
                     .push(files_panel)
                     .push(diff_panel),
             )
-            .push(widgets::separator_with_text(Some(i18n.cd_commit_msg_separator)))
+            .push(widgets::separator_with_text(Some(
+                i18n.cd_commit_msg_separator,
+            )))
             .push(message_panel)
             .push(actions),
     )

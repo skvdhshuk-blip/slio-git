@@ -3,8 +3,8 @@
 //! Provides a view for browsing commit history.
 
 use crate::i18n::I18n;
-use crate::theme::{self, BadgeTone, Surface};
 use crate::state::FileDisplayMode;
+use crate::theme::{self, BadgeTone, Surface};
 use crate::widgets::{self, button, scrollable, text_input, OptionalPush};
 use chrono::DateTime;
 use git_core::{
@@ -713,7 +713,10 @@ fn build_history_list<'a>(state: &'a HistoryState, i18n: &'a I18n) -> Element<'a
     .into()
 }
 
-fn build_commit_context_menu_overlay<'a>(state: &'a HistoryState, i18n: &'a I18n) -> Element<'a, HistoryMessage> {
+fn build_commit_context_menu_overlay<'a>(
+    state: &'a HistoryState,
+    i18n: &'a I18n,
+) -> Element<'a, HistoryMessage> {
     let Some(commit_id) = state.context_menu_commit.as_deref() else {
         return Space::new().width(Length::Shrink).into();
     };
@@ -1108,7 +1111,10 @@ fn build_commit_detail<'a>(
     .into()
 }
 
-fn build_commit_summary_panel<'a>(info: &'a git_core::commit::CommitInfo, i18n: &'a I18n) -> Element<'a, HistoryMessage> {
+fn build_commit_summary_panel<'a>(
+    info: &'a git_core::commit::CommitInfo,
+    i18n: &'a I18n,
+) -> Element<'a, HistoryMessage> {
     Container::new(
         Column::new()
             .spacing(theme::spacing::SM)
@@ -1128,7 +1134,9 @@ fn build_commit_summary_panel<'a>(info: &'a git_core::commit::CommitInfo, i18n: 
                     .push(Space::new().width(Length::Fill)),
             )
             .push(iced::widget::rule::horizontal(1))
-            .push(scrollable::styled(Text::new(&info.message).size(13)).height(Length::Fixed(120.0)))
+            .push(
+                scrollable::styled(Text::new(&info.message).size(13)).height(Length::Fixed(120.0)),
+            )
             .push(iced::widget::rule::horizontal(1))
             .push(
                 Column::new()
@@ -1137,7 +1145,10 @@ fn build_commit_summary_panel<'a>(info: &'a git_core::commit::CommitInfo, i18n: 
                         i18n.author_label,
                         format!("{} <{}>", info.author_name, info.author_email),
                     ))
-                    .push(detail_meta_row(i18n.time_label, format_timestamp(info.author_time)))
+                    .push(detail_meta_row(
+                        i18n.time_label,
+                        format_timestamp(info.author_time),
+                    ))
                     .push(detail_meta_row(
                         i18n.parent_commits,
                         format!("{}", info.parent_ids.len()),
@@ -1156,10 +1167,7 @@ fn build_commit_files_panel<'a>(
 ) -> Element<'a, HistoryMessage> {
     let file_count = state.selected_commit_files.len();
     let content = if state.selected_commit_files.is_empty() {
-        widgets::panel_empty_state_compact(
-            i18n.no_file_changes,
-            i18n.no_file_changes_hint,
-        )
+        widgets::panel_empty_state_compact(i18n.no_file_changes, i18n.no_file_changes_hint)
     } else {
         match state.selected_commit_file_display {
             FileDisplayMode::Flat => build_commit_file_flat_list(state, commit_id),
@@ -1199,7 +1207,10 @@ fn build_commit_files_panel<'a>(
                     )),
             )
             .push(iced::widget::rule::horizontal(1))
-            .push(Container::new(scrollable::styled(content).height(Length::Fill)).height(Length::Fill)),
+            .push(
+                Container::new(scrollable::styled(content).height(Length::Fill))
+                    .height(Length::Fill),
+            ),
     )
     .padding([8, 10])
     .height(Length::Fill)
@@ -1430,10 +1441,9 @@ fn commit_file_directory_node_id(directory: &str) -> String {
     format!("dir:{directory}")
 }
 
-fn default_expanded_commit_file_directories(
-    files: &[CommitChangedFile],
-) -> HashSet<String> {
-    files.iter()
+fn default_expanded_commit_file_directories(files: &[CommitChangedFile]) -> HashSet<String> {
+    files
+        .iter()
         .filter_map(|file| {
             std::path::Path::new(&file.path)
                 .parent()
@@ -1736,10 +1746,7 @@ pub fn view<'a>(state: &'a HistoryState, i18n: &'a I18n) -> Element<'a, HistoryM
                 i18n.no_match_fmt.replace("{}", state.search_query.trim()),
             )
         } else {
-            widgets::panel_empty_state_compact(
-                i18n.no_commit_selected,
-                i18n.select_commit_hint,
-            )
+            widgets::panel_empty_state_compact(i18n.no_commit_selected, i18n.select_commit_hint)
         };
 
     let can_search = !state.is_searching && !state.search_query.trim().is_empty();
@@ -1776,7 +1783,10 @@ pub fn view<'a>(state: &'a HistoryState, i18n: &'a I18n) -> Element<'a, HistoryM
                 )
             }))
             .push_maybe(state.current_upstream_ref.as_ref().map(|upstream| {
-                widgets::info_chip::<HistoryMessage>(format!("{} {upstream}", i18n.upstream_label), BadgeTone::Neutral)
+                widgets::info_chip::<HistoryMessage>(
+                    format!("{} {upstream}", i18n.upstream_label),
+                    BadgeTone::Neutral,
+                )
             }))
             .push(Space::new().width(Length::Fill))
             .push(

@@ -92,9 +92,7 @@ impl<'a, Message: Clone + 'static> DiffViewer<'a, Message> {
         let mut lines = Column::new().spacing(0).width(Length::Shrink);
 
         if file_diff.hunks.is_empty() {
-            lines = lines.push(diff_core::empty_editor_row(
-                "No text diff for this file.",
-            ));
+            lines = lines.push(diff_core::empty_editor_row("No text diff for this file."));
         }
 
         for (index, hunk) in file_diff.hunks.iter().enumerate() {
@@ -172,9 +170,7 @@ pub fn file_preview<'a, Message: Clone + 'static>(file_diff: &'a FileDiff) -> El
     let mut lines = Column::new().spacing(0).width(Length::Shrink);
 
     if file_diff.hunks.is_empty() {
-        lines = lines.push(diff_core::empty_editor_row(
-            "No text diff for this file.",
-        ));
+        lines = lines.push(diff_core::empty_editor_row("No text diff for this file."));
     }
 
     for (index, hunk) in file_diff.hunks.iter().enumerate() {

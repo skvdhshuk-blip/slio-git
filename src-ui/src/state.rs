@@ -158,8 +158,8 @@ impl HistoryCommitDiffPopupState {
         let split_diff_editor = editor_diff
             .clone()
             .map(|model| SplitDiffEditorState::with_font_size(model, font_size));
-        let unified_diff_editor = (!diff.files.is_empty())
-            .then(|| UnifiedDiffEditorState::from_diff(&diff, font_size));
+        let unified_diff_editor =
+            (!diff.files.is_empty()).then(|| UnifiedDiffEditorState::from_diff(&diff, font_size));
         let selected_hunk_index = diff
             .files
             .iter()
@@ -949,10 +949,15 @@ impl AppState {
                 .as_ref()
                 .map(|current| current.path().to_path_buf());
             self.persist_workspace_memory(active_path.as_deref());
-            return Err(i18n.project_dir_not_exist_fmt.replace("{}", &path.display().to_string()));
+            return Err(i18n
+                .project_dir_not_exist_fmt
+                .replace("{}", &path.display().to_string()));
         }
 
-        let repo = Repository::discover(path).map_err(|error| i18n.cannot_open_project_fmt.replace("{}", &error.to_string()))?;
+        let repo = Repository::discover(path).map_err(|error| {
+            i18n.cannot_open_project_fmt
+                .replace("{}", &error.to_string())
+        })?;
         self.set_repository(repo, i18n);
         Ok(())
     }
@@ -1041,7 +1046,10 @@ impl AppState {
             .ok_or_else(|| i18n.no_repo_opened.to_string())?;
         let preferred_remote = repo.current_upstream_remote();
         let remotes = git_core::remote::list_remotes(repo)
-            .map_err(|error| i18n.load_remote_failed_fmt.replace("{}", &error.to_string()))?
+            .map_err(|error| {
+                i18n.load_remote_failed_fmt
+                    .replace("{}", &error.to_string())
+            })?
             .into_iter()
             .filter(|remote| {
                 preferred_remote
@@ -1241,18 +1249,10 @@ impl AppState {
 
     pub fn recovery_hint_for_source(&self, source: &'static str, i18n: &I18n) -> Option<String> {
         match source {
-            "repository.open" => {
-                Some(i18n.recovery_hint_open_repo.to_string())
-            }
-            "repository.init" => {
-                Some(i18n.recovery_hint_init_repo.to_string())
-            }
-            "repository.refresh" => {
-                Some(i18n.recovery_hint_refresh.to_string())
-            }
-            "workspace.select_change" => {
-                Some(i18n.recovery_hint_select_change.to_string())
-            }
+            "repository.open" => Some(i18n.recovery_hint_open_repo.to_string()),
+            "repository.init" => Some(i18n.recovery_hint_init_repo.to_string()),
+            "repository.refresh" => Some(i18n.recovery_hint_refresh.to_string()),
+            "workspace.select_change" => Some(i18n.recovery_hint_select_change.to_string()),
             "workspace.conflicts" | "shell.conflicts" => {
                 Some(i18n.recovery_hint_conflicts.to_string())
             }
@@ -1330,7 +1330,8 @@ impl AppState {
         self.feedback = match self.shell.active_section {
             ShellSection::Conflicts if !self.conflict_files.is_empty() => {
                 let title = if let Some(i18n) = i18n {
-                    i18n.conflicts_pending_fmt.replace("{}", &self.conflict_files.len().to_string())
+                    i18n.conflicts_pending_fmt
+                        .replace("{}", &self.conflict_files.len().to_string())
                 } else {
                     format!("{} conflicts pending", self.conflict_files.len())
                 };
@@ -1480,7 +1481,11 @@ impl AppState {
         self.commit_dialog.ensure_preview_target();
     }
 
-    pub fn refresh_current_repository(&mut self, prefer_conflicts: bool, i18n: &I18n) -> Result<(), String> {
+    pub fn refresh_current_repository(
+        &mut self,
+        prefer_conflicts: bool,
+        i18n: &I18n,
+    ) -> Result<(), String> {
         let previous_section = self.shell.active_section;
         let previous_auxiliary = self.auxiliary_view;
 
@@ -1489,8 +1494,10 @@ impl AppState {
             .clone()
             .ok_or_else(|| i18n.no_repo_opened.to_string())?;
 
-        repo.refresh()
-            .map_err(|error| i18n.refresh_repo_state_err_fmt.replace("{}", &error.to_string()))?;
+        repo.refresh().map_err(|error| {
+            i18n.refresh_repo_state_err_fmt
+                .replace("{}", &error.to_string())
+        })?;
         self.current_repository = Some(repo);
         self.is_loading = false;
         self.error_message = None;
@@ -1547,8 +1554,10 @@ impl AppState {
                 .conflict_merge_index
                 .and_then(|index| self.conflict_files.get(index))
                 .map(|conflict| conflict.path.clone());
-            let conflict_paths = git_core::index::get_conflicted_files(repo)
-                .map_err(|error| i18n.get_conflict_list_failed_fmt.replace("{}", &error.to_string()))?;
+            let conflict_paths = git_core::index::get_conflicted_files(repo).map_err(|error| {
+                i18n.get_conflict_list_failed_fmt
+                    .replace("{}", &error.to_string())
+            })?;
 
             self.conflict_files.clear();
 
@@ -1714,7 +1723,8 @@ impl AppState {
 
     pub fn stage_all(&mut self, i18n: &I18n) -> Result<(), String> {
         if let Some(repo) = &self.current_repository {
-            git_core::index::stage_all(repo).map_err(|error| i18n.stage_all_err_fmt.replace("{}", &error.to_string()))?;
+            git_core::index::stage_all(repo)
+                .map_err(|error| i18n.stage_all_err_fmt.replace("{}", &error.to_string()))?;
             self.refresh_changes_with_i18n(i18n);
             self.set_success(i18n.all_changes_staged, None, "workspace.stage_all");
             Ok(())
@@ -1821,28 +1831,43 @@ impl AppState {
         self.load_diff_for_file_with_i18n(path, None)
     }
 
-    pub fn load_diff_for_file_with_i18n(&mut self, path: &str, i18n: Option<&I18n>) -> Result<(), String> {
+    pub fn load_diff_for_file_with_i18n(
+        &mut self,
+        path: &str,
+        i18n: Option<&I18n>,
+    ) -> Result<(), String> {
         if let Some(repo) = &self.current_repository {
-            let selected_change = self
-                .selected_change()
-                .cloned()
-                .ok_or_else(|| i18n.map_or_else(
+            let selected_change = self.selected_change().cloned().ok_or_else(|| {
+                i18n.map_or_else(
                     || "Selected file not found".to_string(),
                     |i| i.file_not_found.to_string(),
-                ))?;
+                )
+            })?;
 
             let diff = if selected_change.staged && !selected_change.unstaged {
-                git_core::diff::diff_index_to_head(repo, std::path::Path::new(path))
-                    .map_err(|error| i18n.map_or_else(
-                        || format!("Failed to load staged diff: {}", error),
-                        |i| i.load_staged_diff_err_state_fmt.replace("{}", &error.to_string()),
-                    ))?
+                git_core::diff::diff_index_to_head(repo, std::path::Path::new(path)).map_err(
+                    |error| {
+                        i18n.map_or_else(
+                            || format!("Failed to load staged diff: {}", error),
+                            |i| {
+                                i.load_staged_diff_err_state_fmt
+                                    .replace("{}", &error.to_string())
+                            },
+                        )
+                    },
+                )?
             } else {
-                git_core::diff::diff_file_to_index(repo, std::path::Path::new(path))
-                    .map_err(|error| i18n.map_or_else(
-                        || format!("Failed to load file diff: {}", error),
-                        |i| i.load_file_diff_err_state_fmt.replace("{}", &error.to_string()),
-                    ))?
+                git_core::diff::diff_file_to_index(repo, std::path::Path::new(path)).map_err(
+                    |error| {
+                        i18n.map_or_else(
+                            || format!("Failed to load file diff: {}", error),
+                            |i| {
+                                i.load_file_diff_err_state_fmt
+                                    .replace("{}", &error.to_string())
+                            },
+                        )
+                    },
+                )?
             };
 
             self.current_diff = Some(diff);
@@ -1938,18 +1963,13 @@ impl AppState {
                 || "Branches & Actions".to_string(),
                 |i| i.branch_actions.to_string(),
             );
-            let conflicts_label = i18n_ref.map_or_else(
-                || "Conflicts".to_string(),
-                |i| i.conflicts.to_string(),
-            );
+            let conflicts_label =
+                i18n_ref.map_or_else(|| "Conflicts".to_string(), |i| i.conflicts.to_string());
             let handle_conflicts_label = i18n_ref.map_or_else(
                 || "Handle Conflicts".to_string(),
                 |i| i.handle_conflicts.to_string(),
             );
-            let close_label = i18n_ref.map_or_else(
-                || "Close".to_string(),
-                |i| i.close.to_string(),
-            );
+            let close_label = i18n_ref.map_or_else(|| "Close".to_string(), |i| i.close.to_string());
             let current_focus_label = i18n_ref.map_or_else(
                 || "Current Focus".to_string(),
                 |i| i.current_focus.to_string(),
@@ -2144,8 +2164,14 @@ impl AppState {
             }
         } else if self.current_repository.is_none() {
             LightweightStatusSurface {
-                message: Some(i18n.map_or_else(|| "No repository opened".to_string(), |i| i.no_repo_status.to_string())),
-                detail: Some(i18n.map_or_else(|| "Select a repository to enter the workspace.".to_string(), |i| i.no_repo_status_detail.to_string())),
+                message: Some(i18n.map_or_else(
+                    || "No repository opened".to_string(),
+                    |i| i.no_repo_status.to_string(),
+                )),
+                detail: Some(i18n.map_or_else(
+                    || "Select a repository to enter the workspace.".to_string(),
+                    |i| i.no_repo_status_detail.to_string(),
+                )),
                 severity: StatusSeverity::Info,
                 persistence: StatusPersistence::Ephemeral,
                 placement: StatusPlacement::StatusBar,
@@ -2153,8 +2179,14 @@ impl AppState {
             }
         } else if self.has_conflicts() && self.shell.active_section != ShellSection::Conflicts {
             LightweightStatusSurface {
-                message: Some(i18n.map_or_else(|| "Conflicts present".to_string(), |i| i.has_conflicts_status.to_string())),
-                detail: Some(i18n.map_or_else(|| "Handle conflicts before other Git operations.".to_string(), |i| i.handle_conflicts_first.to_string())),
+                message: Some(i18n.map_or_else(
+                    || "Conflicts present".to_string(),
+                    |i| i.has_conflicts_status.to_string(),
+                )),
+                detail: Some(i18n.map_or_else(
+                    || "Handle conflicts before other Git operations.".to_string(),
+                    |i| i.handle_conflicts_first.to_string(),
+                )),
                 severity: StatusSeverity::Warning,
                 persistence: StatusPersistence::StickyUntilDismissed,
                 placement: StatusPlacement::StatusBar,
@@ -2162,7 +2194,10 @@ impl AppState {
             }
         } else if self.workspace_change_count() == 0 {
             LightweightStatusSurface {
-                message: Some(i18n.map_or_else(|| "Workspace clean".to_string(), |i| i.workspace_clean.to_string())),
+                message: Some(i18n.map_or_else(
+                    || "Workspace clean".to_string(),
+                    |i| i.workspace_clean.to_string(),
+                )),
                 detail: None,
                 severity: StatusSeverity::Info,
                 persistence: StatusPersistence::Ephemeral,
@@ -2173,7 +2208,10 @@ impl AppState {
             LightweightStatusSurface {
                 message: Some(i18n.map_or_else(
                     || format!("{} changes", self.workspace_change_count()),
-                    |i| i.n_changes_count_fmt.replace("{}", &self.workspace_change_count().to_string()),
+                    |i| {
+                        i.n_changes_count_fmt
+                            .replace("{}", &self.workspace_change_count().to_string())
+                    },
                 )),
                 detail: self.selected_change_path.clone(),
                 severity: StatusSeverity::Info,

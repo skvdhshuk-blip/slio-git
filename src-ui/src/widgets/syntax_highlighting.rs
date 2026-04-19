@@ -170,11 +170,24 @@ impl HighlightedSegment {
         }
 
         let full_text: String = segments.iter().map(|s| s.text.as_str()).collect();
+        let mut boundaries = vec![0usize, full_text.len()];
+        for inline in inline_changes {
+            let start = inline.start.min(full_text.len());
+            let end = (inline.start + inline.len).min(full_text.len());
+            if start < end {
+                boundaries.push(start);
+                boundaries.push(end);
+            }
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+
         let mut result_spans: Vec<text::Span<'static, Message, Font>> = Vec::new();
 
-        for inline in inline_changes {
-            let end = (inline.start + inline.len).min(full_text.len());
-            let text_slice = full_text.get(inline.start..end).unwrap_or("").to_string();
+        for window in boundaries.windows(2) {
+            let start = window[0];
+            let end = window[1];
+            let text_slice = full_text.get(start..end).unwrap_or("").to_string();
             if text_slice.is_empty() {
                 continue;
             }
@@ -182,12 +195,15 @@ impl HighlightedSegment {
             // Find syntax color at this position
             let color = color_map
                 .iter()
-                .find(|(s, e, _)| *s <= inline.start && *e > inline.start)
+                .find(|(s, e, _)| *s <= start && *e > start)
                 .map(|(_, _, c)| *c)
                 .unwrap_or(crate::theme::darcula::TEXT_PRIMARY);
 
             let mut s = span(text_slice).color(color);
-            if inline.changed {
+            let changed = inline_changes.iter().any(|inline| {
+                inline.changed && inline.start < end && (inline.start + inline.len) > start
+            });
+            if changed {
                 s = s.background(iced::Background::Color(change_bg));
             }
             result_spans.push(s);
@@ -359,19 +375,25 @@ fn syntax_for_extension<'a>(
     syntax_set: &'a SyntaxSet,
     extension: &str,
 ) -> Option<&'a SyntaxReference> {
-    syntax_set
-        .find_syntax_by_extension(extension)
-        .or_else(|| match extension {
-            "tsx" => syntax_set
-                .find_syntax_by_name("TypeScriptReact")
-                .or_else(|| syntax_set.find_syntax_by_name("TypeScript React")),
-            "jsx" => syntax_set
-                .find_syntax_by_name("JavaScriptReact")
-                .or_else(|| syntax_set.find_syntax_by_name("JavaScript React")),
-            "kt" | "kts" => syntax_set.find_syntax_by_name("Kotlin"),
-            "yml" => syntax_set.find_syntax_by_extension("yaml"),
-            _ => None,
-        })
+    match extension {
+        "php" => syntax_set
+            .find_syntax_by_name("PHP")
+            .or_else(|| syntax_set.find_syntax_by_name("PHP Source"))
+            .or_else(|| syntax_set.find_syntax_by_extension("php")),
+        _ => syntax_set
+            .find_syntax_by_extension(extension)
+            .or_else(|| match extension {
+                "tsx" => syntax_set
+                    .find_syntax_by_name("TypeScriptReact")
+                    .or_else(|| syntax_set.find_syntax_by_name("TypeScript React")),
+                "jsx" => syntax_set
+                    .find_syntax_by_name("JavaScriptReact")
+                    .or_else(|| syntax_set.find_syntax_by_name("JavaScript React")),
+                "kt" | "kts" => syntax_set.find_syntax_by_name("Kotlin"),
+                "yml" => syntax_set.find_syntax_by_extension("yaml"),
+                _ => None,
+            }),
+    }
 }
 
 fn highlight_line<'a>(
@@ -431,9 +453,10 @@ fn mix_colors(base: Color, overlay: Color, amount: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::{
-        diff_code_render_config, resolve_syntax_for_path, sanitize_content, FileSyntaxHighlighter,
-        HighlightRenderConfig,
+        diff_code_render_config, resolve_syntax_for_path, sanitize_content, CodeSyntaxHighlighter,
+        FileSyntaxHighlighter, HighlightRenderConfig,
     };
+    use crate::theme;
     use git_core::diff::FileDiff;
     use iced::{widget::text, Length};
 
@@ -441,6 +464,7 @@ mod tests {
     fn resolve_syntax_for_common_extensions() {
         assert!(resolve_syntax_for_path("src/main.rs").is_some());
         assert!(resolve_syntax_for_path("app/intent/__init__.py").is_some());
+        assert!(resolve_syntax_for_path("controller/PermissionManage.php").is_some());
     }
 
     #[test]
@@ -464,6 +488,32 @@ mod tests {
         let _ = hunk.view::<()>(
             &git_core::diff::DiffLineOrigin::Context,
             "fn main() { println!(\"hi\"); }",
+        );
+    }
+
+    #[test]
+    fn php_paths_prefer_php_syntax_over_html_wrapper() {
+        let syntax = resolve_syntax_for_path("controller/PermissionManage.php")
+            .expect("php files should resolve to a syntax");
+
+        assert!(
+            !syntax.name.contains("HTML"),
+            "php diffs should use a pure PHP syntax, got {}",
+            syntax.name
+        );
+    }
+
+    #[test]
+    fn php_keyword_highlighting_does_not_fall_back_to_plain_text() {
+        let mut highlighter =
+            CodeSyntaxHighlighter::for_path("controller/PermissionManage.php").start();
+        let segments = highlighter.highlight_segments("public function handle($request): array");
+
+        assert!(
+            segments
+                .iter()
+                .any(|segment| segment.color != theme::darcula::TEXT_PRIMARY),
+            "php keywords should produce highlighted colors instead of plain text fallback"
         );
     }
 

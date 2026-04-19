@@ -413,6 +413,8 @@ pub struct ConflictLine {
 pub enum ConflictLineType {
     /// Lines are the same in all versions
     Unchanged,
+    /// Both sides changed to the same content
+    BothChanged,
     /// Lines only changed in ours
     OursOnly,
     /// Lines only changed in theirs
@@ -470,83 +472,32 @@ pub fn get_conflict_diff(repo: &Repository, file_path: &Path) -> Result<ThreeWay
     })
 }
 
+#[derive(Debug, Clone)]
+struct SideSegment {
+    base_range: std::ops::Range<usize>,
+    side_range: std::ops::Range<usize>,
+    changed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct MergeRegion {
+    base_range: std::ops::Range<usize>,
+    ours_range: std::ops::Range<usize>,
+    theirs_range: std::ops::Range<usize>,
+    chunk_type: MergeChunkType,
+}
+
 /// Parse conflict hunks from three-way content
 fn parse_conflict_hunks(ours: &str, theirs: &str, base: &str) -> Vec<ConflictHunk> {
-    let mut hunks = Vec::new();
-
-    // Split content into lines
     let our_lines: Vec<&str> = ours.lines().collect();
     let their_lines: Vec<&str> = theirs.lines().collect();
     let base_lines: Vec<&str> = base.lines().collect();
 
-    let max_lines = our_lines.len().max(their_lines.len()).max(base_lines.len());
-
-    let mut current_hunk: Option<ConflictHunk> = None;
-    let mut hunk_started = false;
-
-    for i in 0..max_lines {
-        let ours_line = our_lines.get(i).map(|s| s.to_string());
-        let theirs_line = their_lines.get(i).map(|s| s.to_string());
-        let base_line = base_lines.get(i).map(|s| s.to_string());
-
-        let line_type = classify_line(
-            ours_line.as_deref(),
-            theirs_line.as_deref(),
-            base_line.as_deref(),
-        );
-
-        // Check if this starts a new hunk
-        if line_type != ConflictLineType::Unchanged || ours_line.as_deref() == Some("<<<<<<<") {
-            if !hunk_started {
-                hunk_started = true;
-                current_hunk = Some(ConflictHunk {
-                    base_start: i as u32,
-                    ours_start: i as u32,
-                    theirs_start: i as u32,
-                    base_lines: 0,
-                    ours_lines: 0,
-                    theirs_lines: 0,
-                    lines: Vec::new(),
-                });
-            }
-        } else if line_type == ConflictLineType::Unchanged && hunk_started {
-            // End of hunk
-            if let Some(h) = current_hunk.take() {
-                hunk_started = false;
-                hunks.push(h);
-            }
-        }
-
-        if let Some(ref mut hunk) = current_hunk {
-            let base_is_some = base_line.is_some();
-            let ours_is_some = ours_line.is_some();
-            let theirs_is_some = theirs_line.is_some();
-
-            hunk.lines.push(ConflictLine {
-                base_line,
-                ours_line,
-                theirs_line,
-                line_type,
-            });
-
-            if ours_is_some {
-                hunk.ours_lines += 1;
-            }
-            if theirs_is_some {
-                hunk.theirs_lines += 1;
-            }
-            if base_is_some {
-                hunk.base_lines += 1;
-            }
-        }
-    }
-
-    // Don't forget the last hunk
-    if let Some(h) = current_hunk {
-        hunks.push(h);
-    }
-
-    hunks
+    build_merge_regions(&our_lines, &their_lines, &base_lines)
+        .into_iter()
+        .filter(|region| region.chunk_type != MergeChunkType::Equal)
+        .map(|region| build_conflict_hunk_from_region(&region, &our_lines, &their_lines, &base_lines))
+        .collect()
 }
 
 /// Classify a line to determine its type in the three-way diff
@@ -574,6 +525,11 @@ fn classify_line(ours: Option<&str>, theirs: Option<&str>, base: Option<&str>) -
         return ConflictLineType::Unchanged;
     }
 
+    // Both sides changed to the same content
+    if ours == theirs && ours != base {
+        return ConflictLineType::BothChanged;
+    }
+
     // Only ours changed
     if ours != base && theirs == base {
         return ConflictLineType::OursOnly;
@@ -586,6 +542,51 @@ fn classify_line(ours: Option<&str>, theirs: Option<&str>, base: Option<&str>) -
 
     // Both changed differently
     ConflictLineType::Modified
+}
+
+fn build_conflict_hunk_from_region(
+    region: &MergeRegion,
+    ours_lines: &[&str],
+    theirs_lines: &[&str],
+    base_lines: &[&str],
+) -> ConflictHunk {
+    let ours_slice = &ours_lines[region.ours_range.clone()];
+    let theirs_slice = &theirs_lines[region.theirs_range.clone()];
+    let base_slice = &base_lines[region.base_range.clone()];
+    let max_lines = ours_slice
+        .len()
+        .max(theirs_slice.len())
+        .max(base_slice.len());
+
+    let lines = (0..max_lines)
+        .map(|index| {
+            let ours_line = ours_slice.get(index).map(|line| (*line).to_string());
+            let theirs_line = theirs_slice.get(index).map(|line| (*line).to_string());
+            let base_line = base_slice.get(index).map(|line| (*line).to_string());
+            let line_type = classify_line(
+                ours_line.as_deref(),
+                theirs_line.as_deref(),
+                base_line.as_deref(),
+            );
+
+            ConflictLine {
+                base_line,
+                ours_line,
+                theirs_line,
+                line_type,
+            }
+        })
+        .collect();
+
+    ConflictHunk {
+        base_start: region.base_range.start as u32,
+        ours_start: region.ours_range.start as u32,
+        theirs_start: region.theirs_range.start as u32,
+        base_lines: base_slice.len() as u32,
+        ours_lines: ours_slice.len() as u32,
+        theirs_lines: theirs_slice.len() as u32,
+        lines,
+    }
 }
 
 /// Resolve a conflict by choosing ours, theirs, or a combination
@@ -729,6 +730,8 @@ pub enum ConflictResolution {
 pub enum ConflictHunkType {
     /// All lines are unchanged
     Unchanged,
+    /// Both sides changed to the same content
+    BothChanged,
     /// Only our side changed (auto-merge safe)
     OursOnly,
     /// Only their side changed (auto-merge safe)
@@ -757,67 +760,44 @@ pub struct AutoMergeResult {
 /// - If only their side changed → take their content
 /// - If both changed differently → keep as conflict (need manual resolution)
 pub fn auto_merge_conflict(three_way_diff: &ThreeWayDiff) -> AutoMergeResult {
-    let mut merged_content = String::new();
+    let model = three_way_diff.to_merge_editor_model();
+    let mut merged_lines = Vec::new();
     let mut merged_hunks = 0;
     let mut remaining_conflicts = 0;
     let mut has_conflicts = false;
 
-    for hunk in &three_way_diff.hunks {
-        let hunk_type = classify_hunk_type(hunk);
-
-        // Extract lines from the ConflictLine array
-        let ours_lines: Vec<&str> = hunk
-            .lines
-            .iter()
-            .filter_map(|l| l.ours_line.as_deref())
-            .collect();
-        let theirs_lines: Vec<&str> = hunk
-            .lines
-            .iter()
-            .filter_map(|l| l.theirs_line.as_deref())
-            .collect();
-        let base_lines: Vec<&str> = hunk
-            .lines
-            .iter()
-            .filter_map(|l| l.base_line.as_deref())
-            .collect();
-
-        match hunk_type {
-            ConflictHunkType::OursOnly => {
-                // Take our version entirely
-                merged_content.push_str(&ours_lines.join("\n"));
-                merged_content.push('\n');
+    for chunk in &model.chunks {
+        match chunk.chunk_type {
+            MergeChunkType::Equal => merged_lines.extend(chunk.lines_base.iter().cloned()),
+            MergeChunkType::BothChanged | MergeChunkType::OursOnly => {
+                merged_lines.extend(chunk.lines_ours.iter().cloned());
                 merged_hunks += 1;
             }
-            ConflictHunkType::TheirsOnly => {
-                // Take their version entirely
-                merged_content.push_str(&theirs_lines.join("\n"));
-                merged_content.push('\n');
+            MergeChunkType::TheirsOnly => {
+                merged_lines.extend(chunk.lines_theirs.iter().cloned());
                 merged_hunks += 1;
             }
-            ConflictHunkType::Unchanged => {
-                // Take base version
-                merged_content.push_str(&base_lines.join("\n"));
-                merged_content.push('\n');
-                merged_hunks += 1;
-            }
-            ConflictHunkType::Modified => {
-                // True conflict - keep conflict markers
+            MergeChunkType::Conflict => {
                 has_conflicts = true;
                 remaining_conflicts += 1;
-                merged_content.push_str("<<<<<<< HEAD\n");
-                merged_content.push_str(&ours_lines.join("\n"));
-                merged_content.push('\n');
-                merged_content.push_str("=======\n");
-                merged_content.push_str(&theirs_lines.join("\n"));
-                merged_content.push('\n');
-                merged_content.push_str(">>>>>>>\n");
+                merged_lines.push("<<<<<<< HEAD".to_string());
+                merged_lines.extend(chunk.lines_ours.iter().cloned());
+                merged_lines.push("=======".to_string());
+                merged_lines.extend(chunk.lines_theirs.iter().cloned());
+                merged_lines.push(">>>>>>>".to_string());
             }
         }
     }
 
     AutoMergeResult {
-        content: merged_content,
+        content: join_lines_preserving_trailing_newline(
+            merged_lines,
+            &[
+                &three_way_diff.base_content,
+                &three_way_diff.ours_content,
+                &three_way_diff.theirs_content,
+            ],
+        ),
         has_conflicts,
         merged_hunks,
         remaining_conflicts,
@@ -825,7 +805,9 @@ pub fn auto_merge_conflict(three_way_diff: &ThreeWayDiff) -> AutoMergeResult {
 }
 
 /// Classify a conflict hunk to determine its type
+#[allow(dead_code)]
 fn classify_hunk_type(hunk: &ConflictHunk) -> ConflictHunkType {
+    let mut both_changed_count = 0;
     let mut ours_only_count = 0;
     let mut theirs_only_count = 0;
     let mut modified_count = 0;
@@ -833,6 +815,7 @@ fn classify_hunk_type(hunk: &ConflictHunk) -> ConflictHunkType {
 
     for line in &hunk.lines {
         match line.line_type {
+            ConflictLineType::BothChanged => both_changed_count += 1,
             ConflictLineType::OursOnly => ours_only_count += 1,
             ConflictLineType::TheirsOnly => theirs_only_count += 1,
             ConflictLineType::Modified => modified_count += 1,
@@ -845,11 +828,17 @@ fn classify_hunk_type(hunk: &ConflictHunk) -> ConflictHunkType {
     // If any line is Modified, it's a true conflict
     if modified_count > 0 {
         ConflictHunkType::Modified
+    } else if both_changed_count > 0 && ours_only_count == 0 && theirs_only_count == 0 {
+        ConflictHunkType::BothChanged
     } else if ours_only_count > 0 && theirs_only_count == 0 {
         ConflictHunkType::OursOnly
     } else if theirs_only_count > 0 && ours_only_count == 0 {
         ConflictHunkType::TheirsOnly
-    } else if unchanged_count > 0 && ours_only_count == 0 && theirs_only_count == 0 {
+    } else if unchanged_count > 0
+        && both_changed_count == 0
+        && ours_only_count == 0
+        && theirs_only_count == 0
+    {
         ConflictHunkType::Unchanged
     } else {
         // Mixed state - treat as conflict
@@ -2030,6 +2019,8 @@ use std::ops::Range;
 pub enum MergeChunkType {
     /// Same in all three versions
     Equal,
+    /// Both sides changed to the same content
+    BothChanged,
     /// Only ours changed from base (auto-merge safe)
     OursOnly,
     /// Only theirs changed from base (auto-merge safe)
@@ -2070,62 +2061,29 @@ impl ThreeWayDiff {
         let ours_lines: Vec<&str> = self.ours_content.lines().collect();
         let theirs_lines: Vec<&str> = self.theirs_content.lines().collect();
         let base_lines: Vec<&str> = self.base_content.lines().collect();
-        let max_lines = ours_lines
-            .len()
-            .max(theirs_lines.len())
-            .max(base_lines.len());
-
-        let mut chunks: Vec<MergeChunk> = Vec::new();
-        let mut chunk_id = 0usize;
-
-        // Build per-line classification
-        let mut line_types = Vec::with_capacity(max_lines);
-        for i in 0..max_lines {
-            let o = ours_lines.get(i).copied().unwrap_or("");
-            let t = theirs_lines.get(i).copied().unwrap_or("");
-            let b = base_lines.get(i).copied().unwrap_or("");
-            line_types.push(classify_merge_line(o, t, b));
-        }
-
-        // Group consecutive lines with the same classification into chunks
-        let mut i = 0;
-        while i < max_lines {
-            let start = i;
-            let first_type = line_types[i];
-
-            // Extend to cover all consecutive lines of the same type
-            while i < max_lines && line_types[i] == first_type {
-                i += 1;
-            }
-
-            let ours_start = start.min(ours_lines.len());
-            let ours_end = i.min(ours_lines.len());
-            let theirs_start = start.min(theirs_lines.len());
-            let theirs_end = i.min(theirs_lines.len());
-            let base_start = start.min(base_lines.len());
-            let base_end = i.min(base_lines.len());
-
-            chunks.push(MergeChunk {
+        let chunks = build_merge_regions(&ours_lines, &theirs_lines, &base_lines)
+            .into_iter()
+            .enumerate()
+            .map(|(chunk_id, region)| MergeChunk {
                 id: chunk_id,
-                chunk_type: first_type,
-                ours_range: ours_start..ours_end,
-                theirs_range: theirs_start..theirs_end,
-                base_range: base_start..base_end,
-                lines_ours: ours_lines[ours_start..ours_end]
+                chunk_type: region.chunk_type,
+                ours_range: region.ours_range.clone(),
+                theirs_range: region.theirs_range.clone(),
+                base_range: region.base_range.clone(),
+                lines_ours: ours_lines[region.ours_range]
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(|line| (*line).to_string())
                     .collect(),
-                lines_theirs: theirs_lines[theirs_start..theirs_end]
+                lines_theirs: theirs_lines[region.theirs_range]
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(|line| (*line).to_string())
                     .collect(),
-                lines_base: base_lines[base_start..base_end]
+                lines_base: base_lines[region.base_range]
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(|line| (*line).to_string())
                     .collect(),
-            });
-            chunk_id += 1;
-        }
+            })
+            .collect();
 
         MergeEditorModel {
             path: self.path.clone(),
@@ -2137,14 +2095,320 @@ impl ThreeWayDiff {
     }
 }
 
-fn classify_merge_line(ours: &str, theirs: &str, base: &str) -> MergeChunkType {
-    if ours == theirs && theirs == base {
+fn build_merge_regions(
+    ours_lines: &[&str],
+    theirs_lines: &[&str],
+    base_lines: &[&str],
+) -> Vec<MergeRegion> {
+    let ours_segments = build_side_segments(base_lines, ours_lines);
+    let theirs_segments = build_side_segments(base_lines, theirs_lines);
+    let mut change_ranges = collect_change_ranges(&ours_segments);
+    change_ranges.extend(collect_change_ranges(&theirs_segments));
+    let merged_change_ranges = merge_change_ranges(change_ranges);
+
+    let mut regions = Vec::new();
+    let mut cursor = 0usize;
+
+    for change_range in merged_change_ranges {
+        if cursor < change_range.start {
+            let equal_range = cursor..change_range.start;
+            regions.push(MergeRegion {
+                base_range: equal_range.clone(),
+                ours_range: side_range_for_region(&ours_segments, &equal_range),
+                theirs_range: side_range_for_region(&theirs_segments, &equal_range),
+                chunk_type: MergeChunkType::Equal,
+            });
+        }
+
+        let ours_range = side_range_for_region(&ours_segments, &change_range);
+        let theirs_range = side_range_for_region(&theirs_segments, &change_range);
+        let chunk_type = classify_merge_chunk(
+            &ours_lines[ours_range.clone()],
+            &theirs_lines[theirs_range.clone()],
+            &base_lines[change_range.clone()],
+        );
+
+        regions.push(MergeRegion {
+            base_range: change_range.clone(),
+            ours_range,
+            theirs_range,
+            chunk_type,
+        });
+
+        cursor = change_range.end;
+    }
+
+    if cursor < base_lines.len() {
+        let equal_range = cursor..base_lines.len();
+        regions.push(MergeRegion {
+            base_range: equal_range.clone(),
+            ours_range: side_range_for_region(&ours_segments, &equal_range),
+            theirs_range: side_range_for_region(&theirs_segments, &equal_range),
+            chunk_type: MergeChunkType::Equal,
+        });
+    }
+
+    regions
+}
+
+fn build_side_segments(base_lines: &[&str], side_lines: &[&str]) -> Vec<SideSegment> {
+    let diff = similar::TextDiff::configure()
+        .algorithm(similar::Algorithm::Patience)
+        .diff_slices(base_lines, side_lines);
+
+    diff.ops()
+        .iter()
+        .map(|op| SideSegment {
+            base_range: op.old_range(),
+            side_range: op.new_range(),
+            changed: op.tag() != similar::DiffTag::Equal,
+        })
+        .collect()
+}
+
+fn collect_change_ranges(segments: &[SideSegment]) -> Vec<std::ops::Range<usize>> {
+    segments
+        .iter()
+        .filter(|segment| segment.changed)
+        .map(|segment| segment.base_range.clone())
+        .collect()
+}
+
+fn merge_change_ranges(
+    mut ranges: Vec<std::ops::Range<usize>>,
+) -> Vec<std::ops::Range<usize>> {
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+
+    ranges.sort_by(|left, right| {
+        left.start
+            .cmp(&right.start)
+            .then_with(|| (left.start != left.end).cmp(&(right.start != right.end)))
+            .then_with(|| left.end.cmp(&right.end))
+    });
+
+    let mut merged = Vec::new();
+    let mut current = ranges.remove(0);
+
+    for next in ranges {
+        if ranges_overlap(&current, &next) {
+            current = current.start.min(next.start)..current.end.max(next.end);
+        } else {
+            merged.push(current);
+            current = next;
+        }
+    }
+
+    merged.push(current);
+    merged
+}
+
+fn ranges_overlap(left: &std::ops::Range<usize>, right: &std::ops::Range<usize>) -> bool {
+    let left_empty = left.start == left.end;
+    let right_empty = right.start == right.end;
+
+    match (left_empty, right_empty) {
+        (true, true) => left.start == right.start,
+        (true, false) => right.start < left.start && left.start < right.end,
+        (false, true) => left.start < right.start && right.start < left.end,
+        (false, false) => left.start < right.end && right.start < left.end,
+    }
+}
+
+fn side_range_for_region(
+    segments: &[SideSegment],
+    region: &std::ops::Range<usize>,
+) -> std::ops::Range<usize> {
+    if region.start == region.end {
+        if let Some(segment) = segments.iter().find(|segment| {
+            segment.changed
+                && segment.base_range.start == region.start
+                && segment.base_range.end == region.end
+        }) {
+            return segment.side_range.clone();
+        }
+
+        let cursor = side_cursor_at_boundary(segments, region.start);
+        return cursor..cursor;
+    }
+
+    let mut side_start = None;
+    let mut side_end = None;
+
+    for segment in segments {
+        if !segment_intersects_region(segment, region) {
+            continue;
+        }
+
+        side_start.get_or_insert(segment.side_range.start);
+        side_end = Some(segment.side_range.end);
+    }
+
+    match (side_start, side_end) {
+        (Some(start), Some(end)) => start..end,
+        _ => {
+            let cursor = side_cursor_at_boundary(segments, region.start);
+            cursor..cursor
+        }
+    }
+}
+
+fn segment_intersects_region(segment: &SideSegment, region: &std::ops::Range<usize>) -> bool {
+    if region.start == region.end {
+        return segment.changed
+            && segment.base_range.start == region.start
+            && segment.base_range.end == region.end;
+    }
+
+    if segment.base_range.start == segment.base_range.end {
+        return segment.changed
+            && region.start < segment.base_range.start
+            && segment.base_range.start < region.end;
+    }
+
+    segment.base_range.start < region.end && region.start < segment.base_range.end
+}
+
+fn side_cursor_at_boundary(segments: &[SideSegment], boundary: usize) -> usize {
+    let mut cursor = 0usize;
+
+    for segment in segments {
+        if segment.base_range.end <= boundary {
+            cursor = segment.side_range.end;
+            continue;
+        }
+
+        if segment.base_range.start == segment.base_range.end && segment.base_range.start == boundary
+        {
+            break;
+        }
+
+        if boundary < segment.base_range.start {
+            break;
+        }
+
+        if !segment.changed
+            && segment.base_range.start <= boundary
+            && boundary <= segment.base_range.end
+        {
+            return segment.side_range.start + (boundary - segment.base_range.start);
+        }
+
+        break;
+    }
+
+    cursor
+}
+
+fn classify_merge_chunk(ours: &[&str], theirs: &[&str], base: &[&str]) -> MergeChunkType {
+    if ours == base && theirs == base {
         MergeChunkType::Equal
-    } else if ours != base && theirs == base {
+    } else if ours == theirs {
+        MergeChunkType::BothChanged
+    } else if theirs == base {
         MergeChunkType::OursOnly
-    } else if ours == base && theirs != base {
+    } else if ours == base {
         MergeChunkType::TheirsOnly
     } else {
         MergeChunkType::Conflict
+    }
+}
+
+pub fn join_lines_preserving_trailing_newline(lines: Vec<String>, originals: &[&str]) -> String {
+    let mut content = lines.join("\n");
+
+    if !content.is_empty() && originals.iter().any(|text| text.ends_with('\n')) {
+        content.push('\n');
+    }
+
+    content
+}
+
+#[cfg(test)]
+mod merge_model_tests {
+    use super::{auto_merge_conflict, ConflictHunkType, MergeChunkType, ThreeWayDiff};
+
+    fn diff_from_contents(base: &str, ours: &str, theirs: &str) -> ThreeWayDiff {
+        let mut diff = ThreeWayDiff {
+            path: "sample.txt".to_string(),
+            hunks: Vec::new(),
+            has_conflicts: true,
+            base_content: base.to_string(),
+            ours_content: ours.to_string(),
+            theirs_content: theirs.to_string(),
+        };
+        diff.hunks = super::parse_conflict_hunks(ours, theirs, base);
+        diff.has_conflicts = !diff.hunks.is_empty();
+        diff
+    }
+
+    #[test]
+    fn merge_model_auto_merges_independent_insertions() {
+        let diff = diff_from_contents(
+            "alpha\nbravo\ncharlie\n",
+            "alpha\nours insert\nbravo\ncharlie\n",
+            "alpha\nbravo\ntheirs insert\ncharlie\n",
+        );
+
+        let model = diff.to_merge_editor_model();
+        let chunk_types = model
+            .chunks
+            .iter()
+            .map(|chunk| chunk.chunk_type)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            chunk_types,
+            vec![
+                MergeChunkType::Equal,
+                MergeChunkType::OursOnly,
+                MergeChunkType::Equal,
+                MergeChunkType::TheirsOnly,
+                MergeChunkType::Equal,
+            ]
+        );
+
+        let merged = auto_merge_conflict(&diff);
+        assert!(!merged.has_conflicts, "independent insertions should auto-merge");
+        assert_eq!(
+            merged.content,
+            "alpha\nours insert\nbravo\ntheirs insert\ncharlie\n"
+        );
+    }
+
+    #[test]
+    fn merge_model_marks_identical_edits_as_both_changed() {
+        let diff = diff_from_contents(
+            "alpha\nbravo\n",
+            "alpha\nshared update\n",
+            "alpha\nshared update\n",
+        );
+
+        let model = diff.to_merge_editor_model();
+        assert_eq!(model.chunks.len(), 2);
+        assert_eq!(model.chunks[1].chunk_type, MergeChunkType::BothChanged);
+        assert_eq!(super::classify_hunk_type(&diff.hunks[0]), ConflictHunkType::BothChanged);
+
+        let merged = auto_merge_conflict(&diff);
+        assert!(!merged.has_conflicts);
+        assert_eq!(merged.content, "alpha\nshared update\n");
+    }
+
+    #[test]
+    fn merge_model_keeps_overlapping_edits_as_conflict() {
+        let diff = diff_from_contents(
+            "alpha\nbravo\n",
+            "alpha\nours update\n",
+            "alpha\ntheirs update\n",
+        );
+
+        let model = diff.to_merge_editor_model();
+        assert_eq!(model.chunks.len(), 2);
+        assert_eq!(model.chunks[1].chunk_type, MergeChunkType::Conflict);
+
+        let merged = auto_merge_conflict(&diff);
+        assert!(merged.has_conflicts);
+        assert_eq!(merged.remaining_conflicts, 1);
     }
 }

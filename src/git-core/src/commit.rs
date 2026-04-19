@@ -3,6 +3,7 @@
 use crate::error::GitError;
 use crate::repository::Repository;
 use log::info;
+use std::fs;
 
 /// A Git commit
 #[derive(Debug, Clone)]
@@ -44,7 +45,7 @@ pub fn create_commit(
 ) -> Result<String, GitError> {
     info!("Creating commit: {}", message);
 
-    let repo_lock = repo.inner.read().unwrap();
+    let repo_lock = repo.inner.write().unwrap();
 
     // Get the index
     let mut index = repo_lock.index().map_err(|e| GitError::OperationFailed {
@@ -65,11 +66,19 @@ pub fn create_commit(
             details: e.to_string(),
         })?;
 
-    // May be None if this is the first commit on an unborn branch.
-    let parent_commit: Option<git2::Commit> = repo_lock
+    let repository_state = repo_lock.state();
+    let mut parent_commits = Vec::new();
+    if let Some(parent_commit) = repo_lock
         .head()
         .ok()
-        .and_then(|head| head.peel_to_commit().ok());
+        .and_then(|head| head.peel_to_commit().ok())
+    {
+        parent_commits.push(parent_commit);
+    }
+    if repository_state == git2::RepositoryState::Merge {
+        parent_commits.extend(load_merge_head_parents(&repo_lock)?);
+    }
+    let parent_refs: Vec<&git2::Commit<'_>> = parent_commits.iter().collect();
 
     // Create signature
     let signature = repo_lock
@@ -79,27 +88,59 @@ pub fn create_commit(
             details: e.to_string(),
         })?;
 
-    // Create the commit - git2 expects &[] for empty parents
-    let commit_oid = if let Some(ref parent) = parent_commit {
-        repo_lock.commit(
+    let commit_oid = repo_lock
+        .commit(
             Some("HEAD"),
             &signature,
             &signature,
             message,
             &tree,
-            &[parent],
+            &parent_refs,
         )
-    } else {
-        repo_lock.commit(Some("HEAD"), &signature, &signature, message, &tree, &[])
-    }
-    .map_err(|e| GitError::OperationFailed {
+        .map_err(|e| GitError::OperationFailed {
         operation: "create_commit".to_string(),
         details: e.to_string(),
     })?;
 
+    if repository_state == git2::RepositoryState::Merge {
+        repo_lock
+            .cleanup_state()
+            .map_err(|e| GitError::OperationFailed {
+                operation: "create_commit".to_string(),
+                details: format!("Failed to finalize merge state: {e}"),
+            })?;
+    }
+
     info!("Commit created: {}", commit_oid);
 
     Ok(commit_oid.to_string())
+}
+
+fn load_merge_head_parents(
+    repo: &git2::Repository,
+) -> Result<Vec<git2::Commit<'_>>, GitError> {
+    let merge_head_path = repo.path().join("MERGE_HEAD");
+    let merge_head_contents = fs::read_to_string(&merge_head_path).map_err(|e| {
+        GitError::OperationFailed {
+            operation: "create_commit".to_string(),
+            details: format!("Failed to read MERGE_HEAD: {e}"),
+        }
+    })?;
+
+    let mut commits = Vec::new();
+    for commit_id in merge_head_contents.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let oid = git2::Oid::from_str(commit_id).map_err(|e| GitError::OperationFailed {
+            operation: "create_commit".to_string(),
+            details: format!("Invalid MERGE_HEAD commit id '{commit_id}': {e}"),
+        })?;
+        let commit = repo.find_commit(oid).map_err(|e| GitError::OperationFailed {
+            operation: "create_commit".to_string(),
+            details: format!("Failed to load MERGE_HEAD commit '{commit_id}': {e}"),
+        })?;
+        commits.push(commit);
+    }
+
+    Ok(commits)
 }
 
 /// Amend a commit with a new message
@@ -397,8 +438,9 @@ pub fn save_recent_message(repo_path: &Path, message: &str) {
 mod tests {
     use super::{get_commit_changed_files, CommitChangeStatus};
     use crate::commit;
+    use crate::diff::{resolve_conflict, ConflictResolution};
     use crate::index;
-    use crate::repository::Repository;
+    use crate::repository::{Repository, RepositoryState};
     use std::fs;
     use std::path::Path;
     use std::process::Command;
@@ -449,6 +491,16 @@ mod tests {
             args,
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    fn try_run_git(root: &Path, args: &[&str]) -> bool {
+        Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("run git")
+            .status
+            .success()
     }
 
     fn head_oid(root: &Path) -> String {
@@ -565,5 +617,99 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "feature.txt");
         assert_eq!(files[0].status, CommitChangeStatus::Added);
+    }
+
+    #[test]
+    fn create_commit_finalizes_merge_state_and_creates_merge_commit() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let repo = Repository::init(temp_dir.path()).expect("init repo");
+        configure_signature(&repo);
+
+        write_file(temp_dir.path(), "shared.txt", "base\n");
+        commit_all(&repo, "baseline");
+
+        let base_branch = repo
+            .current_branch()
+            .expect("current branch")
+            .expect("branch name");
+
+        run_git(temp_dir.path(), &["checkout", "-b", "feature"]);
+        write_file(temp_dir.path(), "shared.txt", "feature change\n");
+        commit_all(&repo, "feature change");
+
+        run_git(temp_dir.path(), &["checkout", &base_branch]);
+        write_file(temp_dir.path(), "shared.txt", "main change\n");
+        commit_all(&repo, "main change");
+
+        assert!(
+            !try_run_git(temp_dir.path(), &["merge", "feature", "--no-edit"]),
+            "merge should stop on conflict"
+        );
+
+        let repo = Repository::discover(temp_dir.path()).expect("discover conflicted repo");
+        assert_eq!(repo.get_state(), RepositoryState::Merging);
+
+        resolve_conflict(
+            &repo,
+            Path::new("shared.txt"),
+            ConflictResolution::Ours,
+        )
+        .expect("resolve conflict");
+
+        let commit_id =
+            commit::create_commit(&repo, "merge resolved", "", "").expect("create merge commit");
+
+        let refreshed_repo = Repository::discover(temp_dir.path()).expect("refresh repo");
+        assert_eq!(refreshed_repo.get_state(), RepositoryState::Clean);
+
+        let merge_commit = commit::get_commit(&refreshed_repo, &commit_id).expect("load commit");
+        assert_eq!(merge_commit.parent_ids.len(), 2);
+    }
+
+    #[test]
+    fn create_commit_creates_merge_commit_even_with_stale_repository_handle() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let repo = Repository::init(temp_dir.path()).expect("init repo");
+        configure_signature(&repo);
+
+        write_file(temp_dir.path(), "shared.txt", "base\n");
+        commit_all(&repo, "baseline");
+
+        let base_branch = repo
+            .current_branch()
+            .expect("current branch")
+            .expect("branch name");
+
+        run_git(temp_dir.path(), &["checkout", "-b", "feature"]);
+        write_file(temp_dir.path(), "shared.txt", "feature change\n");
+        commit_all(&repo, "feature change");
+
+        run_git(temp_dir.path(), &["checkout", &base_branch]);
+        write_file(temp_dir.path(), "shared.txt", "main change\n");
+        commit_all(&repo, "main change");
+
+        let stale_repo = Repository::discover(temp_dir.path()).expect("open repo before merge");
+        assert_eq!(stale_repo.get_state(), RepositoryState::Clean);
+
+        assert!(
+            !try_run_git(temp_dir.path(), &["merge", "feature", "--no-edit"]),
+            "merge should stop on conflict"
+        );
+
+        resolve_conflict(
+            &stale_repo,
+            Path::new("shared.txt"),
+            ConflictResolution::Ours,
+        )
+        .expect("resolve conflict");
+
+        let commit_id =
+            commit::create_commit(&stale_repo, "merge resolved", "", "").expect("create commit");
+
+        let refreshed_repo = Repository::discover(temp_dir.path()).expect("refresh repo");
+        assert_eq!(refreshed_repo.get_state(), RepositoryState::Clean);
+
+        let merge_commit = commit::get_commit(&refreshed_repo, &commit_id).expect("load commit");
+        assert_eq!(merge_commit.parent_ids.len(), 2);
     }
 }

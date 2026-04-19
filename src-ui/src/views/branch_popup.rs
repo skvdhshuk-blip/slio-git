@@ -261,7 +261,10 @@ impl BranchPopupState {
                 self.is_loading = false;
             }
             Err(error) => {
-                self.error = Some(i18n.bp_load_branches_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_load_branches_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.success_message = None;
                 self.is_loading = false;
             }
@@ -449,7 +452,13 @@ impl BranchPopupState {
         }
     }
 
-    pub fn create_branch_from_selected(&mut self, repo: &Repository, base: &str, name: String, i18n: &I18n) {
+    pub fn create_branch_from_selected(
+        &mut self,
+        repo: &Repository,
+        base: &str,
+        name: String,
+        i18n: &I18n,
+    ) {
         let name = name.trim().to_string();
         if name.is_empty() {
             self.error = Some(i18n.bp_new_branch_name_empty.to_string());
@@ -466,17 +475,31 @@ impl BranchPopupState {
                 self.selected_branch = Some(name.clone());
                 self.inline_action = None;
                 self.inline_branch_name.clear();
-                self.success_message = Some(i18n.bp_created_from_fmt.replacen("{}", base, 1).replacen("{}", &name, 1));
+                self.success_message = Some(
+                    i18n.bp_created_from_fmt
+                        .replacen("{}", base, 1)
+                        .replacen("{}", &name, 1),
+                );
                 self.load_branches(repo, i18n);
             }
             Err(error) => {
-                self.error = Some(i18n.bp_create_from_failed_fmt.replacen("{}", base, 1).replacen("{}", &error.to_string(), 1));
+                self.error = Some(
+                    i18n.bp_create_from_failed_fmt
+                        .replacen("{}", base, 1)
+                        .replacen("{}", &error.to_string(), 1),
+                );
                 self.is_loading = false;
             }
         }
     }
 
-    pub fn rename_branch(&mut self, repo: &Repository, old_name: String, new_name: String, i18n: &I18n) {
+    pub fn rename_branch(
+        &mut self,
+        repo: &Repository,
+        old_name: String,
+        new_name: String,
+        i18n: &I18n,
+    ) {
         let new_name = new_name.trim().to_string();
         if new_name.is_empty() {
             self.error = Some(i18n.bp_new_name_empty.to_string());
@@ -493,7 +516,11 @@ impl BranchPopupState {
                 self.selected_branch = Some(new_name.clone());
                 self.inline_action = None;
                 self.inline_branch_name.clear();
-                self.success_message = Some(i18n.bp_renamed_fmt.replacen("{}", &old_name, 1).replacen("{}", &new_name, 1));
+                self.success_message = Some(
+                    i18n.bp_renamed_fmt
+                        .replacen("{}", &old_name, 1)
+                        .replacen("{}", &new_name, 1),
+                );
                 self.load_branches(repo, i18n);
             }
             Err(error) => {
@@ -576,7 +603,10 @@ impl BranchPopupState {
                 self.load_branches(repo, i18n);
             }
             Err(error) => {
-                self.error = Some(i18n.bp_checkout_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_checkout_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.is_loading = false;
             }
         }
@@ -600,11 +630,18 @@ impl BranchPopupState {
         match repo.checkout_remote_branch(&remote_ref) {
             Ok(local_branch_name) => {
                 self.selected_branch = Some(local_branch_name.clone());
-                self.success_message = Some(i18n.bp_checked_out_remote_fmt.replacen("{}", &remote_ref, 1).replacen("{}", &local_branch_name, 1));
+                self.success_message = Some(
+                    i18n.bp_checked_out_remote_fmt
+                        .replacen("{}", &remote_ref, 1)
+                        .replacen("{}", &local_branch_name, 1),
+                );
                 self.load_branches(repo, i18n);
             }
             Err(error) => {
-                self.error = Some(i18n.bp_checkout_remote_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_checkout_remote_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.is_loading = false;
             }
         }
@@ -621,16 +658,26 @@ impl BranchPopupState {
                     self.selected_branch = Some(name.to_string());
                     self.inline_action = None;
                     self.inline_branch_name.clear();
-                    self.success_message = Some(i18n.bp_checkout_rebase_done_fmt.replacen("{}", name, 1).replacen("{}", onto, 1));
+                    self.success_message = Some(
+                        i18n.bp_checkout_rebase_done_fmt
+                            .replacen("{}", name, 1)
+                            .replacen("{}", onto, 1),
+                    );
                     self.load_branches(repo, i18n);
                 }
                 Err(error) => {
-                    self.error = Some(i18n.bp_rebase_after_checkout_failed_fmt.replace("{}", &error.to_string()));
+                    self.error = Some(
+                        i18n.bp_rebase_after_checkout_failed_fmt
+                            .replace("{}", &error.to_string()),
+                    );
                     self.is_loading = false;
                 }
             },
             Err(error) => {
-                self.error = Some(i18n.bp_checkout_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_checkout_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.is_loading = false;
             }
         }
@@ -676,8 +723,7 @@ impl BranchPopupState {
             Err(error) => {
                 if git_core::index::has_conflicts(repo) {
                     self.error = None;
-                    self.success_message =
-                        Some(i18n.bp_merge_conflict_fmt.replace("{}", &name));
+                    self.success_message = Some(i18n.bp_merge_conflict_fmt.replace("{}", &name));
                     self.is_loading = false;
                 } else {
                     self.error = Some(i18n.bp_merge_failed_fmt.replace("{}", &error.to_string()));
@@ -717,7 +763,12 @@ impl BranchPopupState {
 
         match remote::push(repo, remote_name, branch_name, None) {
             Ok(()) => {
-                self.success_message = Some(i18n.bp_pushed_fmt.replacen("{}", branch_name, 1).replacen("{}", remote_name, 1));
+                self.success_message =
+                    Some(i18n.bp_pushed_fmt.replacen("{}", branch_name, 1).replacen(
+                        "{}",
+                        remote_name,
+                        1,
+                    ));
                 self.load_branches(repo, i18n);
             }
             Err(error) => {
@@ -727,24 +778,43 @@ impl BranchPopupState {
         }
     }
 
-    pub fn set_upstream(&mut self, repo: &Repository, branch_name: &str, upstream: &str, i18n: &I18n) {
+    pub fn set_upstream(
+        &mut self,
+        repo: &Repository,
+        branch_name: &str,
+        upstream: &str,
+        i18n: &I18n,
+    ) {
         self.is_loading = true;
         self.error = None;
         self.success_message = None;
 
         match repo.set_branch_upstream(branch_name, upstream) {
             Ok(()) => {
-                self.success_message = Some(i18n.bp_tracking_set_fmt.replacen("{}", branch_name, 1).replacen("{}", upstream, 1));
+                self.success_message = Some(
+                    i18n.bp_tracking_set_fmt
+                        .replacen("{}", branch_name, 1)
+                        .replacen("{}", upstream, 1),
+                );
                 self.load_branches(repo, i18n);
             }
             Err(error) => {
-                self.error = Some(i18n.bp_tracking_set_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_tracking_set_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.is_loading = false;
             }
         }
     }
 
-    pub fn compare_refs_preview(&mut self, repo: &Repository, left: &str, right: &str, i18n: &I18n) {
+    pub fn compare_refs_preview(
+        &mut self,
+        repo: &Repository,
+        left: &str,
+        right: &str,
+        i18n: &I18n,
+    ) {
         self.is_loading = true;
         self.error = None;
         self.success_message = None;
@@ -753,17 +823,29 @@ impl BranchPopupState {
             Ok(diff) => {
                 self.comparison_summary = Some(format_diff_summary(&diff, i18n));
                 self.comparison_diff = Some(diff);
-                self.success_message = Some(i18n.bp_comparison_loaded_fmt.replacen("{}", left, 1).replacen("{}", right, 1));
+                self.success_message = Some(
+                    i18n.bp_comparison_loaded_fmt
+                        .replacen("{}", left, 1)
+                        .replacen("{}", right, 1),
+                );
                 self.is_loading = false;
             }
             Err(error) => {
-                self.error = Some(i18n.bp_comparison_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_comparison_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.is_loading = false;
             }
         }
     }
 
-    pub fn compare_ref_to_workdir_preview(&mut self, repo: &Repository, reference: &str, i18n: &I18n) {
+    pub fn compare_ref_to_workdir_preview(
+        &mut self,
+        repo: &Repository,
+        reference: &str,
+        i18n: &I18n,
+    ) {
         self.is_loading = true;
         self.error = None;
         self.success_message = None;
@@ -772,11 +854,15 @@ impl BranchPopupState {
             Ok(diff) => {
                 self.comparison_summary = Some(format_diff_summary(&diff, i18n));
                 self.comparison_diff = Some(diff);
-                self.success_message = Some(i18n.bp_workdir_diff_loaded_fmt.replace("{}", reference));
+                self.success_message =
+                    Some(i18n.bp_workdir_diff_loaded_fmt.replace("{}", reference));
                 self.is_loading = false;
             }
             Err(error) => {
-                self.error = Some(i18n.bp_workdir_diff_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_workdir_diff_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.is_loading = false;
             }
         }
@@ -826,7 +912,10 @@ impl BranchPopupState {
                 self.branch_history_entries.clear();
                 self.selected_branch_commit = None;
                 self.selected_branch_commit_info = None;
-                self.error = Some(i18n.bp_history_load_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_history_load_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
             }
         }
     }
@@ -842,7 +931,10 @@ impl BranchPopupState {
             }
             Err(error) => {
                 self.selected_branch_commit_info = None;
-                self.error = Some(i18n.bp_commit_detail_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_commit_detail_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
             }
         }
     }
@@ -861,7 +953,10 @@ impl BranchPopupState {
                 return None;
             }
             Err(error) => {
-                self.error = Some(i18n.bp_read_branch_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_read_branch_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.success_message = None;
                 return None;
             }
@@ -870,7 +965,10 @@ impl BranchPopupState {
         let info = match git_core::commit::get_commit(repo, &commit_id) {
             Ok(info) => info,
             Err(error) => {
-                self.error = Some(i18n.bp_read_commit_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_read_commit_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.success_message = None;
                 return None;
             }
@@ -889,12 +987,15 @@ impl BranchPopupState {
                 commit_id: commit_id.clone(),
             },
             title: i18n.bp_cherry_pick_title.to_string(),
-            summary: i18n.bp_cherry_pick_summary_fmt
+            summary: i18n
+                .bp_cherry_pick_summary_fmt
                 .replacen("{}", short_commit_id(&commit_id), 1)
                 .replacen("{}", &current_branch, 1),
             impact_items: vec![
-                i18n.bp_cherry_pick_impact_branch_fmt.replace("{}", &current_branch),
-                i18n.commit_subject_label.replace("{}", commit_subject(&info.message)),
+                i18n.bp_cherry_pick_impact_branch_fmt
+                    .replace("{}", &current_branch),
+                i18n.commit_subject_label
+                    .replace("{}", commit_subject(&info.message)),
                 i18n.bp_cherry_pick_impact_conflict.to_string(),
             ],
         })
@@ -914,7 +1015,10 @@ impl BranchPopupState {
                 return None;
             }
             Err(error) => {
-                self.error = Some(i18n.bp_read_branch_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_read_branch_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.success_message = None;
                 return None;
             }
@@ -923,7 +1027,10 @@ impl BranchPopupState {
         let info = match git_core::commit::get_commit(repo, &commit_id) {
             Ok(info) => info,
             Err(error) => {
-                self.error = Some(i18n.bp_read_commit_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_read_commit_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.success_message = None;
                 return None;
             }
@@ -942,12 +1049,14 @@ impl BranchPopupState {
                 commit_id: commit_id.clone(),
             },
             title: i18n.bp_revert_title.to_string(),
-            summary: i18n.bp_revert_summary_fmt
+            summary: i18n
+                .bp_revert_summary_fmt
                 .replacen("{}", &current_branch, 1)
                 .replacen("{}", short_commit_id(&commit_id), 1),
             impact_items: vec![
                 i18n.bp_revert_impact_keep_history.to_string(),
-                i18n.commit_subject_label.replace("{}", commit_subject(&info.message)),
+                i18n.commit_subject_label
+                    .replace("{}", commit_subject(&info.message)),
                 i18n.bp_revert_impact_conflict.to_string(),
             ],
         })
@@ -967,7 +1076,10 @@ impl BranchPopupState {
                 return None;
             }
             Err(error) => {
-                self.error = Some(i18n.bp_read_branch_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_read_branch_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.success_message = None;
                 return None;
             }
@@ -981,7 +1093,8 @@ impl BranchPopupState {
                 reset_mode: git_core::ResetMode::Mixed,
             },
             title: i18n.bp_reset_title.to_string(),
-            summary: i18n.bp_reset_summary_fmt
+            summary: i18n
+                .bp_reset_summary_fmt
                 .replacen("{}", &current_branch, 1)
                 .replacen("{}", short_commit_id(&commit_id), 1),
             impact_items: vec![
@@ -1021,7 +1134,8 @@ impl BranchPopupState {
                         target: target.clone(),
                     },
                     title: i18n.bp_push_here_title.to_string(),
-                    summary: i18n.bp_push_here_summary_fmt
+                    summary: i18n
+                        .bp_push_here_summary_fmt
                         .replacen("{}", &target.local_branch_name, 1)
                         .replacen("{}", &target.upstream_ref, 1)
                         .replacen("{}", short_commit_id(&target.selected_commit), 1),
@@ -1029,7 +1143,10 @@ impl BranchPopupState {
                 })
             }
             Err(error) => {
-                self.error = Some(i18n.bp_push_prepare_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_push_prepare_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.success_message = None;
                 None
             }
@@ -1073,18 +1190,18 @@ impl BranchPopupState {
             Ok(()) => {
                 self.is_loading = false;
                 self.success_message = Some(match kind {
-                    PendingCommitActionKind::CherryPick => {
-                        i18n.bp_cherry_picked_fmt.replace("{}", short_commit_id(&commit_id))
-                    }
-                    PendingCommitActionKind::Revert => {
-                        i18n.bp_reverted_fmt.replace("{}", short_commit_id(&commit_id))
-                    }
-                    PendingCommitActionKind::ResetCurrentBranch => {
-                        i18n.bp_reset_done_fmt.replace("{}", short_commit_id(&commit_id))
-                    }
-                    PendingCommitActionKind::PushCurrentBranchToCommit => {
-                        i18n.bp_pushed_to_fmt.replace("{}", short_commit_id(&commit_id))
-                    }
+                    PendingCommitActionKind::CherryPick => i18n
+                        .bp_cherry_picked_fmt
+                        .replace("{}", short_commit_id(&commit_id)),
+                    PendingCommitActionKind::Revert => i18n
+                        .bp_reverted_fmt
+                        .replace("{}", short_commit_id(&commit_id)),
+                    PendingCommitActionKind::ResetCurrentBranch => i18n
+                        .bp_reset_done_fmt
+                        .replace("{}", short_commit_id(&commit_id)),
+                    PendingCommitActionKind::PushCurrentBranchToCommit => i18n
+                        .bp_pushed_to_fmt
+                        .replace("{}", short_commit_id(&commit_id)),
                 });
                 Some(kind)
             }
@@ -1104,18 +1221,21 @@ impl BranchPopupState {
                 if requires_follow_up {
                     self.error = None;
                     self.success_message = Some(match kind {
-                        PendingCommitActionKind::CherryPick => {
-                            i18n.bp_cherry_pick_conflict_fmt.replace("{}", short_commit_id(&commit_id))
-                        }
-                        PendingCommitActionKind::Revert => {
-                            i18n.bp_revert_conflict_fmt.replace("{}", short_commit_id(&commit_id))
-                        }
+                        PendingCommitActionKind::CherryPick => i18n
+                            .bp_cherry_pick_conflict_fmt
+                            .replace("{}", short_commit_id(&commit_id)),
+                        PendingCommitActionKind::Revert => i18n
+                            .bp_revert_conflict_fmt
+                            .replace("{}", short_commit_id(&commit_id)),
                         PendingCommitActionKind::ResetCurrentBranch
                         | PendingCommitActionKind::PushCurrentBranchToCommit => unreachable!(),
                     });
                     Some(kind)
                 } else {
-                    self.error = Some(i18n.bp_commit_action_failed_fmt.replace("{}", &error.to_string()));
+                    self.error = Some(
+                        i18n.bp_commit_action_failed_fmt
+                            .replace("{}", &error.to_string()),
+                    );
                     None
                 }
             }
@@ -1141,13 +1261,18 @@ impl BranchPopupState {
             Ok(()) => {
                 self.is_loading = false;
                 self.success_message = Some(match in_progress.kind {
-                    InProgressCommitActionKind::CherryPick => i18n.bp_continued_cherry_pick.to_string(),
+                    InProgressCommitActionKind::CherryPick => {
+                        i18n.bp_continued_cherry_pick.to_string()
+                    }
                     InProgressCommitActionKind::Revert => i18n.bp_continued_revert.to_string(),
                 });
             }
             Err(error) => {
                 self.is_loading = false;
-                self.error = Some(i18n.bp_continue_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.bp_continue_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
             }
         }
     }
@@ -1167,7 +1292,9 @@ impl BranchPopupState {
             Ok(()) => {
                 self.is_loading = false;
                 self.success_message = Some(match in_progress.kind {
-                    InProgressCommitActionKind::CherryPick => i18n.bp_aborted_cherry_pick.to_string(),
+                    InProgressCommitActionKind::CherryPick => {
+                        i18n.bp_aborted_cherry_pick.to_string()
+                    }
                     InProgressCommitActionKind::Revert => i18n.bp_aborted_revert.to_string(),
                 });
             }
@@ -1592,7 +1719,10 @@ fn build_smart_checkout_dialog<'a>(
 
     // ── Description (matches IDEA's north panel label) ──
     let description = Container::new(
-        Text::new(i18n.checkout_overwrite_warning_fmt.replace("{}", target_branch))
+        Text::new(
+            i18n.checkout_overwrite_warning_fmt
+                .replace("{}", target_branch),
+        )
         .size(theme::typography::BODY_SIZE)
         .color(theme::darcula::TEXT_PRIMARY)
         .wrapping(text::Wrapping::WordOrGlyph),
@@ -1691,7 +1821,10 @@ fn build_smart_checkout_dialog<'a>(
     .into()
 }
 
-fn build_status_panel<'a>(state: &'a BranchPopupState, i18n: &'a I18n) -> Option<Element<'a, BranchPopupMessage>> {
+fn build_status_panel<'a>(
+    state: &'a BranchPopupState,
+    i18n: &'a I18n,
+) -> Option<Element<'a, BranchPopupMessage>> {
     if state.is_loading {
         // IDEA-style: compact loading indicator in-place of full status banner
         return Some(
@@ -1750,7 +1883,8 @@ fn build_branch_navigator<'a>(
         ));
         // IDEA-style: add separator between recent and local branches
         if !local_branches.is_empty() {
-            branch_lists = branch_lists.push(widgets::separator_with_text(Some(i18n.local_branches)));
+            branch_lists =
+                branch_lists.push(widgets::separator_with_text(Some(i18n.local_branches)));
         }
     }
 
@@ -2199,7 +2333,11 @@ fn build_branch_context_menu_overlay<'a>(
             .then(|| {
                 let mut parts = Vec::new();
                 if let Some(remote) = selected_remote_name.as_ref() {
-                    parts.push(i18n.default_remote_fmt.replace("{}", remote).replace("：", " "));
+                    parts.push(
+                        i18n.default_remote_fmt
+                            .replace("{}", remote)
+                            .replace("：", " "),
+                    );
                 }
                 if let Some(upstream) = upstream_ref.as_ref() {
                     parts.push(i18n.tracking_fmt.replace("{}", upstream).replace("：", " "));
@@ -2249,16 +2387,29 @@ fn build_selected_branch_panel<'a>(
     i18n: &'a I18n,
 ) -> Element<'a, BranchPopupMessage> {
     let Some(selected_branch) = selected_branch else {
-        return widgets::panel_empty_state(i18n.branch_operations, i18n.select_branch_first, "", None);
+        return widgets::panel_empty_state(
+            i18n.branch_operations,
+            i18n.select_branch_first,
+            "",
+            None,
+        );
     };
 
     let content = Column::new()
         .spacing(theme::spacing::SM)
         .push(build_selected_branch_summary(state, selected_branch, i18n))
         .push_maybe(build_in_progress_commit_action_panel(state, i18n))
-        .push(build_selected_commit_history_panel(state, selected_branch, i18n))
+        .push(build_selected_commit_history_panel(
+            state,
+            selected_branch,
+            i18n,
+        ))
         .push_maybe(build_inline_action_panel(state, i18n))
-        .push(build_selected_commit_detail_panel(state, selected_branch, i18n))
+        .push(build_selected_commit_detail_panel(
+            state,
+            selected_branch,
+            i18n,
+        ))
         .push_maybe(build_comparison_panel(state, i18n));
 
     Container::new(scrollable::styled(content).height(Length::Fill))
@@ -2402,13 +2553,22 @@ fn build_selected_commit_detail_panel<'a>(
     i18n: &'a I18n,
 ) -> Element<'a, BranchPopupMessage> {
     let Some(info) = state.selected_branch_commit_info.as_ref() else {
-        return widgets::panel_empty_state(i18n.commit_detail_label, i18n.no_commit_selected, "", None);
+        return widgets::panel_empty_state(
+            i18n.commit_detail_label,
+            i18n.no_commit_selected,
+            "",
+            None,
+        );
     };
 
     Container::new(
         Column::new()
             .spacing(theme::spacing::SM)
-            .push(widgets::section_header(i18n.commit_detail_label, i18n.current_selected_commit, ""))
+            .push(widgets::section_header(
+                i18n.commit_detail_label,
+                i18n.current_selected_commit,
+                "",
+            ))
             .push(
                 Row::new()
                     .spacing(theme::spacing::XS)
@@ -2438,7 +2598,8 @@ fn build_selected_commit_detail_panel<'a>(
                     info.author_name,
                     info.author_email,
                     format_timestamp(info.author_time),
-                    i18n.parent_commits_count_fmt.replace("{}", &info.parent_ids.len().to_string())
+                    i18n.parent_commits_count_fmt
+                        .replace("{}", &info.parent_ids.len().to_string())
                 ))
                 .size(theme::typography::CAPTION_SIZE)
                 .width(Length::Fill)
@@ -2622,18 +2783,21 @@ fn build_in_progress_commit_action_panel<'a>(
         in_progress.commit_id.as_deref(),
         in_progress.subject.as_deref(),
     ) {
-        (Some(commit_id), Some(subject)) => i18n.bp_stopped_at_fmt
+        (Some(commit_id), Some(subject)) => i18n
+            .bp_stopped_at_fmt
             .replacen("{}", label, 1)
             .replacen("{}", short_commit_id(commit_id), 1)
             .replacen("{}", subject, 1),
-        (Some(commit_id), None) => i18n.bp_stopped_at_commit_fmt
+        (Some(commit_id), None) => i18n
+            .bp_stopped_at_commit_fmt
             .replacen("{}", label, 1)
             .replacen("{}", short_commit_id(commit_id), 1),
         (None, _) => i18n.bp_waiting_for_continue.replace("{}", label),
     };
     let conflict_count = in_progress.conflicted_files.len();
     let detail = if conflict_count > 0 {
-        i18n.bp_conflict_remaining_fmt.replace("{}", &conflict_count.to_string())
+        i18n.bp_conflict_remaining_fmt
+            .replace("{}", &conflict_count.to_string())
     } else {
         i18n.bp_no_conflict_continue.to_string()
     };
@@ -2651,7 +2815,8 @@ fn build_in_progress_commit_action_panel<'a>(
                                 .color(theme::darcula::TEXT_SECONDARY),
                         )
                         .push(
-                            Text::new(format!("{label} {}", i18n.paused_label)).size(theme::typography::TITLE_SIZE),
+                            Text::new(format!("{label} {}", i18n.paused_label))
+                                .size(theme::typography::TITLE_SIZE),
                         )
                         .push(
                             Text::new(i18n.bp_in_progress_hint)
@@ -2668,7 +2833,8 @@ fn build_in_progress_commit_action_panel<'a>(
                             BadgeTone::Warning,
                         ))
                         .push(widgets::info_chip::<BranchPopupMessage>(
-                            i18n.conflict_files_fmt.replace("{}", &conflict_count.to_string()),
+                            i18n.conflict_files_fmt
+                                .replace("{}", &conflict_count.to_string()),
                             if conflict_count > 0 {
                                 BadgeTone::Danger
                             } else {
@@ -3166,7 +3332,8 @@ fn build_branch_action_groups<'a>(
                 ),
                 commit_menu_action_row(
                     None,
-                    i18n.bp_new_branch_from_fmt.replace("{}", &selected_branch.name),
+                    i18n.bp_new_branch_from_fmt
+                        .replace("{}", &selected_branch.name),
                     Some(i18n.bp_new_branch_from_selected_hint.to_string()),
                     (!state.is_loading).then(|| {
                         BranchPopupMessage::PrepareCreateFromSelected(selected_branch.name.clone())
@@ -3180,7 +3347,9 @@ fn build_branch_action_groups<'a>(
                         .map(|target| i18n.bp_checkout_rebase_fmt.replace("{}", target))
                         .unwrap_or_else(|| i18n.checkout_and_rebase.to_string()),
                     Some(if let Some(target) = checkout_and_rebase_target.as_ref() {
-                        i18n.bp_checkout_rebase_hint_fmt.replacen("{}", &selected_branch.name, 1).replacen("{}", target, 1)
+                        i18n.bp_checkout_rebase_hint_fmt
+                            .replacen("{}", &selected_branch.name, 1)
+                            .replacen("{}", target, 1)
                     } else if selected_branch.is_head {
                         i18n.bp_cannot_checkout_rebase_self.to_string()
                     } else if selected_branch.is_remote {
@@ -3208,7 +3377,9 @@ fn build_branch_action_groups<'a>(
                         .map(|target| i18n.bp_compare_with_fmt.replace("{}", target))
                         .unwrap_or_else(|| i18n.bp_compare_with_current_label.to_string()),
                     Some(if let Some(target) = compare_target.as_ref() {
-                        i18n.bp_compare_preview_fmt.replacen("{}", &selected_branch.name, 1).replacen("{}", target, 1)
+                        i18n.bp_compare_preview_fmt
+                            .replacen("{}", &selected_branch.name, 1)
+                            .replacen("{}", target, 1)
                     } else {
                         i18n.bp_cannot_compare_self.to_string()
                     }),
@@ -3252,7 +3423,9 @@ fn build_branch_action_groups<'a>(
                     current_branch_name
                         .as_ref()
                         .map(|current| {
-                            i18n.bp_merge_into_fmt.replacen("{}", &selected_branch.name, 1).replacen("{}", current, 1)
+                            i18n.bp_merge_into_fmt
+                                .replacen("{}", &selected_branch.name, 1)
+                                .replacen("{}", current, 1)
                         })
                         .unwrap_or_else(|| i18n.bp_merge_selected.to_string()),
                     Some(if selected_branch.is_remote {
@@ -3623,8 +3796,12 @@ fn build_inline_action_panel<'a>(
 ) -> Option<Element<'a, BranchPopupMessage>> {
     let action = state.inline_action.as_ref()?;
     let title = match action {
-        InlineBranchAction::CreateFromSelected { base } => i18n.new_branch_from_fmt.replace("{}", base),
-        InlineBranchAction::RenameBranch { branch } => i18n.bp_rename_inline_fmt.replace("{}", branch),
+        InlineBranchAction::CreateFromSelected { base } => {
+            i18n.new_branch_from_fmt.replace("{}", base)
+        }
+        InlineBranchAction::RenameBranch { branch } => {
+            i18n.bp_rename_inline_fmt.replace("{}", branch)
+        }
     };
 
     Some(
@@ -3667,7 +3844,10 @@ fn build_comparison_panel<'a>(
     i18n: &'a I18n,
 ) -> Option<Element<'a, BranchPopupMessage>> {
     let diff = state.comparison_diff.as_ref()?;
-    let title = state.comparison_title.as_deref().unwrap_or(i18n.comparison_result);
+    let title = state
+        .comparison_title
+        .as_deref()
+        .unwrap_or(i18n.comparison_result);
 
     Some(
         Container::new(

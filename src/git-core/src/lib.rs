@@ -99,7 +99,7 @@ pub use remote::{
     fetch, force_push, list_branch_scoped_remotes, list_remotes, pull, pull_with_options, push,
     PullOptions, RemoteInfo,
 };
-pub use repository::{Repository, RepositoryManager, SyncStatus};
+pub use repository::{quit_merge, Repository, RepositoryManager, SyncStatus};
 pub use stash::{
     list_stashes, stash_apply, stash_clear, stash_diff, stash_drop, stash_pop, stash_save,
     stash_save_with_options, unstash_as_branch, StashInfo,

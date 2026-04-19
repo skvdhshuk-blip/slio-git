@@ -7,7 +7,10 @@ use crate::widgets::syntax_highlighting::{
     CodeLineHighlighter, CodeSyntaxHighlighter, HighlightedSegment,
 };
 use crate::widgets::{self, button, scrollable, OptionalPush};
-use git_core::diff::{ConflictHunk, ConflictHunkType, ConflictLineType, ThreeWayDiff};
+use git_core::diff::{
+    join_lines_preserving_trailing_newline, ConflictHunk, ConflictHunkType, ConflictLineType,
+    MergeChunkType, ThreeWayDiff,
+};
 use iced::widget::{container, Button, Column, Container, Row, Space, Text};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
@@ -139,6 +142,7 @@ impl ConflictResolver {
     pub fn auto_merge(&mut self) {
         for (index, hunk) in self.diff.hunks.iter().enumerate() {
             self.hunk_resolutions[index].resolution = match classify_hunk(hunk) {
+                ConflictHunkType::BothChanged => Some(ResolutionOption::Ours),
                 ConflictHunkType::OursOnly => Some(ResolutionOption::Ours),
                 ConflictHunkType::TheirsOnly => Some(ResolutionOption::Theirs),
                 ConflictHunkType::Unchanged => Some(ResolutionOption::Base),
@@ -152,48 +156,37 @@ impl ConflictResolver {
     }
 
     pub fn get_preview_content(&self) -> String {
-        let base_lines: Vec<&str> = self.diff.base_content.lines().collect();
-        let ours_lines: Vec<&str> = self.diff.ours_content.lines().collect();
-        let theirs_lines: Vec<&str> = self.diff.theirs_content.lines().collect();
-        let max_lines = base_lines
-            .len()
-            .max(ours_lines.len())
-            .max(theirs_lines.len());
+        let model = self.diff.to_merge_editor_model();
+        let mut lines = Vec::new();
+        let mut changed_index = 0usize;
 
-        let mut output = Vec::new();
-        let mut cursor = 0usize;
+        for chunk in model.chunks {
+            if chunk.chunk_type == MergeChunkType::Equal {
+                lines.extend(chunk.lines_base);
+                continue;
+            }
 
-        for (index, hunk) in self.diff.hunks.iter().enumerate() {
-            let start = hunk.base_start.min(hunk.ours_start).min(hunk.theirs_start) as usize;
-
-            while cursor < start && cursor < max_lines {
-                if let Some(line) = default_line_at(&base_lines, &ours_lines, &theirs_lines, cursor)
-                {
-                    output.push(line);
+            match self.effective_resolution(changed_index) {
+                Some(ResolutionOption::Ours) => lines.extend(chunk.lines_ours),
+                Some(ResolutionOption::Theirs) => lines.extend(chunk.lines_theirs),
+                Some(ResolutionOption::Base) => lines.extend(chunk.lines_base),
+                None => {
+                    lines.extend(chunk.lines_ours);
+                    lines.extend(chunk.lines_theirs);
                 }
-                cursor += 1;
             }
 
-            output.extend(self.get_hunk_lines(index));
-            cursor = cursor.max(start + hunk.lines.len());
+            changed_index += 1;
         }
 
-        while cursor < max_lines {
-            if let Some(line) = default_line_at(&base_lines, &ours_lines, &theirs_lines, cursor) {
-                output.push(line);
-            }
-            cursor += 1;
-        }
-
-        let mut result = output.join("\n");
-        if !result.is_empty()
-            && (self.diff.base_content.ends_with('\n')
-                || self.diff.ours_content.ends_with('\n')
-                || self.diff.theirs_content.ends_with('\n'))
-        {
-            result.push('\n');
-        }
-        result
+        join_lines_preserving_trailing_newline(
+            lines,
+            &[
+                &self.diff.base_content,
+                &self.diff.ours_content,
+                &self.diff.theirs_content,
+            ],
+        )
     }
 
     pub fn view(&self) -> Element<'_, ConflictResolverMessage> {
@@ -249,7 +242,10 @@ impl ConflictResolver {
                 },
             ))
             .push_maybe(self.is_auto_merged.then(|| {
-                widgets::info_chip::<ConflictResolverMessage>("Auto merge executed", BadgeTone::Neutral)
+                widgets::info_chip::<ConflictResolverMessage>(
+                    "Auto merge executed",
+                    BadgeTone::Neutral,
+                )
             }))
             .push_maybe(selected_index.map(|index| {
                 widgets::info_chip::<ConflictResolverMessage>(
@@ -408,12 +404,18 @@ impl ConflictResolver {
                                 .push(widgets::info_chip::<ConflictResolverMessage>(
                                     match conflict_type {
                                         ConflictHunkType::Modified => "Needs manual resolution",
+                                        ConflictHunkType::BothChanged => {
+                                            "Both sides already agree"
+                                        }
                                         ConflictHunkType::OursOnly => "Left side can be accepted",
-                                        ConflictHunkType::TheirsOnly => "Right side can be accepted",
+                                        ConflictHunkType::TheirsOnly => {
+                                            "Right side can be accepted"
+                                        }
                                         ConflictHunkType::Unchanged => "Base version unchanged",
                                     },
                                     match conflict_type {
                                         ConflictHunkType::Modified => BadgeTone::Warning,
+                                        ConflictHunkType::BothChanged => BadgeTone::Success,
                                         ConflictHunkType::OursOnly => BadgeTone::Accent,
                                         ConflictHunkType::TheirsOnly => BadgeTone::Danger,
                                         ConflictHunkType::Unchanged => BadgeTone::Neutral,
@@ -534,50 +536,13 @@ impl ConflictResolver {
                     .hunks
                     .get(index)
                     .and_then(|hunk| match classify_hunk(hunk) {
+                        ConflictHunkType::BothChanged => Some(ResolutionOption::Ours),
                         ConflictHunkType::OursOnly => Some(ResolutionOption::Ours),
                         ConflictHunkType::TheirsOnly => Some(ResolutionOption::Theirs),
                         ConflictHunkType::Unchanged => Some(ResolutionOption::Base),
                         ConflictHunkType::Modified => None,
                     })
             })
-    }
-
-    fn get_hunk_lines(&self, index: usize) -> Vec<String> {
-        let Some(hunk) = self.diff.hunks.get(index) else {
-            return Vec::new();
-        };
-
-        if let Some(resolution) = self.effective_resolution(index) {
-            return self.apply_resolution(hunk, resolution);
-        }
-
-        self.render_unresolved_hunk(hunk)
-    }
-
-    fn apply_resolution(&self, hunk: &ConflictHunk, option: ResolutionOption) -> Vec<String> {
-        hunk.lines
-            .iter()
-            .filter_map(|line| select_line_for_resolution(line, option))
-            .collect()
-    }
-
-    fn render_unresolved_hunk(&self, hunk: &ConflictHunk) -> Vec<String> {
-        let ours_lines: Vec<String> = hunk
-            .lines
-            .iter()
-            .filter_map(|line| line.ours_line.clone())
-            .collect();
-        let theirs_lines: Vec<String> = hunk
-            .lines
-            .iter()
-            .filter_map(|line| line.theirs_line.clone())
-            .collect();
-
-        // IDEA-style: no raw markers, just show the content
-        let mut result = Vec::with_capacity(ours_lines.len() + theirs_lines.len());
-        result.extend(ours_lines);
-        result.extend(theirs_lines);
-        result
     }
 }
 
@@ -615,8 +580,10 @@ fn build_side_lines(hunk: &ConflictHunk, side: ConflictSide) -> Vec<PaneLine> {
             });
 
             let tone = match (side, line.line_type.clone()) {
+                (ConflictSide::Ours, ConflictLineType::BothChanged) => PaneTone::Ours,
                 (ConflictSide::Ours, ConflictLineType::OursOnly)
                 | (ConflictSide::Ours, ConflictLineType::Modified) => PaneTone::Ours,
+                (ConflictSide::Theirs, ConflictLineType::BothChanged) => PaneTone::Theirs,
                 (ConflictSide::Theirs, ConflictLineType::TheirsOnly)
                 | (ConflictSide::Theirs, ConflictLineType::Modified) => PaneTone::Theirs,
                 (_, ConflictLineType::Unchanged) => PaneTone::Neutral,
@@ -814,6 +781,9 @@ fn build_selected_hunk_hint(
             ConflictHunkType::Modified => {
                 "Real conflict. Choose between left, right, or base.".to_string()
             }
+            ConflictHunkType::BothChanged => {
+                "Both sides changed the same way. Auto-merge is safe.".to_string()
+            }
             ConflictHunkType::OursOnly => {
                 "Only left changed. Auto-merge or accept left is safe.".to_string()
             }
@@ -956,6 +926,7 @@ fn build_hunk_navigator(resolver: &ConflictResolver) -> Element<'static, Conflic
                 Some(ResolutionOption::Base) => BadgeTone::Neutral,
                 None => match classify_hunk(hunk) {
                     ConflictHunkType::Modified => BadgeTone::Warning,
+                    ConflictHunkType::BothChanged => BadgeTone::Success,
                     ConflictHunkType::OursOnly => BadgeTone::Accent,
                     ConflictHunkType::TheirsOnly => BadgeTone::Danger,
                     ConflictHunkType::Unchanged => BadgeTone::Neutral,
@@ -1046,6 +1017,7 @@ fn build_header_action(
 }
 
 fn classify_hunk(hunk: &ConflictHunk) -> ConflictHunkType {
+    let mut both_changed_count = 0;
     let mut ours_only_count = 0;
     let mut theirs_only_count = 0;
     let mut modified_count = 0;
@@ -1053,6 +1025,7 @@ fn classify_hunk(hunk: &ConflictHunk) -> ConflictHunkType {
 
     for line in &hunk.lines {
         match line.line_type {
+            ConflictLineType::BothChanged => both_changed_count += 1,
             ConflictLineType::OursOnly => ours_only_count += 1,
             ConflictLineType::TheirsOnly => theirs_only_count += 1,
             ConflictLineType::Modified => modified_count += 1,
@@ -1063,45 +1036,32 @@ fn classify_hunk(hunk: &ConflictHunk) -> ConflictHunkType {
 
     if modified_count > 0 {
         ConflictHunkType::Modified
+    } else if both_changed_count > 0 && ours_only_count == 0 && theirs_only_count == 0 {
+        ConflictHunkType::BothChanged
     } else if ours_only_count > 0 && theirs_only_count == 0 {
         ConflictHunkType::OursOnly
     } else if theirs_only_count > 0 && ours_only_count == 0 {
         ConflictHunkType::TheirsOnly
-    } else if unchanged_count > 0 && ours_only_count == 0 && theirs_only_count == 0 {
+    } else if unchanged_count > 0
+        && both_changed_count == 0
+        && ours_only_count == 0
+        && theirs_only_count == 0
+    {
         ConflictHunkType::Unchanged
     } else {
         ConflictHunkType::Modified
     }
 }
 
-fn default_line_at(
-    base_lines: &[&str],
-    ours_lines: &[&str],
-    theirs_lines: &[&str],
-    index: usize,
-) -> Option<String> {
-    base_lines
-        .get(index)
-        .or_else(|| ours_lines.get(index))
-        .or_else(|| theirs_lines.get(index))
-        .map(|line| (*line).to_string())
-}
-
 fn select_line_for_resolution(
     line: &git_core::diff::ConflictLine,
     option: ResolutionOption,
 ) -> Option<String> {
-    let preferred = match option {
-        ResolutionOption::Ours => line.ours_line.as_ref(),
-        ResolutionOption::Theirs => line.theirs_line.as_ref(),
-        ResolutionOption::Base => line.base_line.as_ref(),
-    };
-
-    preferred
-        .or(line.base_line.as_ref())
-        .or(line.ours_line.as_ref())
-        .or(line.theirs_line.as_ref())
-        .cloned()
+    match option {
+        ResolutionOption::Ours => line.ours_line.clone(),
+        ResolutionOption::Theirs => line.theirs_line.clone(),
+        ResolutionOption::Base => line.base_line.clone(),
+    }
 }
 
 fn hunk_card_style(selected: bool) -> impl Fn(&Theme) -> container::Style {
@@ -1402,5 +1362,53 @@ fn blend(base: Color, overlay: Color, amount: f32) -> Color {
         g: (base.g * (1.0 - amount)) + (overlay.g * amount),
         b: (base.b * (1.0 - amount)) + (overlay.b * amount),
         a: (base.a * (1.0 - amount)) + (overlay.a * amount),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git_core::diff::{ConflictHunk, ConflictLine, ConflictLineType, ThreeWayDiff};
+
+    fn insertion_diff() -> ThreeWayDiff {
+        ThreeWayDiff {
+            path: "sample.php".to_string(),
+            hunks: vec![ConflictHunk {
+                base_start: 1,
+                ours_start: 1,
+                theirs_start: 1,
+                base_lines: 0,
+                ours_lines: 1,
+                theirs_lines: 0,
+                lines: vec![ConflictLine {
+                    base_line: None,
+                    ours_line: Some("ours insert".to_string()),
+                    theirs_line: None,
+                    line_type: ConflictLineType::OursOnly,
+                }],
+            }],
+            has_conflicts: true,
+            base_content: "alpha\nbravo\ncharlie\n".to_string(),
+            ours_content: "alpha\nours insert\nbravo\ncharlie\n".to_string(),
+            theirs_content: "alpha\nbravo\ncharlie\n".to_string(),
+        }
+    }
+
+    #[test]
+    fn preview_content_keeps_following_lines_for_insertions() {
+        let resolver = ConflictResolver::new(insertion_diff());
+
+        assert_eq!(
+            resolver.get_preview_content(),
+            "alpha\nours insert\nbravo\ncharlie\n"
+        );
+    }
+
+    #[test]
+    fn base_resolution_removes_inserted_lines_in_preview() {
+        let mut resolver = ConflictResolver::new(insertion_diff());
+        resolver.resolve_hunk(0, ResolutionOption::Base);
+
+        assert_eq!(resolver.get_preview_content(), "alpha\nbravo\ncharlie\n");
     }
 }

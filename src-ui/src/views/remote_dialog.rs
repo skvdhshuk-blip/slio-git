@@ -203,18 +203,21 @@ impl RemoteDialogState {
     fn branch_scope_detail(&self, i18n: &I18n) -> String {
         if let Some(upstream_ref) = self.current_upstream_ref.as_ref() {
             if let Some(remote) = self.preferred_remote.as_ref() {
-                return i18n.rd_tracking_upstream_fmt.replace("{}", &upstream_ref.to_string()).replacen("{}", &remote.to_string(), 1);
+                return i18n
+                    .rd_tracking_upstream_fmt
+                    .replace("{}", &upstream_ref.to_string())
+                    .replacen("{}", &remote.to_string(), 1);
             }
 
-            return i18n.rd_tracking_upstream_only_fmt.replace("{}", &upstream_ref.to_string());
+            return i18n
+                .rd_tracking_upstream_only_fmt
+                .replace("{}", &upstream_ref.to_string());
         }
 
         if self.has_current_branch() {
-            i18n.rd_no_upstream
-                .to_string()
+            i18n.rd_no_upstream.to_string()
         } else {
-            i18n.rd_detached_head
-                .to_string()
+            i18n.rd_detached_head.to_string()
         }
     }
 
@@ -384,7 +387,10 @@ fn build_remote_row(remote: &RemoteInfo, is_selected: bool) -> Element<'_, Remot
         .into()
 }
 
-fn build_remotes_list<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element<'a, RemoteDialogMessage> {
+fn build_remotes_list<'a>(
+    state: &'a RemoteDialogState,
+    i18n: &'a I18n,
+) -> Element<'a, RemoteDialogMessage> {
     let list = if state.remotes.is_empty() {
         Column::new().push(
             Text::new(i18n.rd_no_remotes)
@@ -442,7 +448,10 @@ fn build_remotes_list<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Eleme
     .into()
 }
 
-fn build_credential_inputs<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element<'a, RemoteDialogMessage> {
+fn build_credential_inputs<'a>(
+    state: &'a RemoteDialogState,
+    i18n: &'a I18n,
+) -> Element<'a, RemoteDialogMessage> {
     Container::new(
         Column::new()
             .spacing(theme::spacing::SM)
@@ -462,7 +471,10 @@ fn build_credential_inputs<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> 
     .into()
 }
 
-fn build_branch_scope_panel<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element<'a, RemoteDialogMessage> {
+fn build_branch_scope_panel<'a>(
+    state: &'a RemoteDialogState,
+    i18n: &'a I18n,
+) -> Element<'a, RemoteDialogMessage> {
     let sync_chip = state
         .current_branch_sync_hint
         .as_ref()
@@ -500,7 +512,10 @@ fn build_branch_scope_panel<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) ->
     .into()
 }
 
-fn build_action_buttons<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element<'a, RemoteDialogMessage> {
+fn build_action_buttons<'a>(
+    state: &'a RemoteDialogState,
+    i18n: &'a I18n,
+) -> Element<'a, RemoteDialogMessage> {
     let has_remote = state.selected_remote.is_some() && !state.is_loading;
     let can_sync_branch = has_remote && state.has_current_branch();
 
@@ -527,7 +542,10 @@ fn build_action_buttons<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Ele
                 },
                 can_sync_branch.then_some(RemoteDialogMessage::Push),
             ))
-            .push(button::ghost(i18n.refresh, Some(RemoteDialogMessage::Refresh)))
+            .push(button::ghost(
+                i18n.refresh,
+                Some(RemoteDialogMessage::Refresh),
+            ))
             .push(button::ghost(i18n.close, Some(RemoteDialogMessage::Close))),
     )
     .width(Length::Fill)
@@ -536,7 +554,10 @@ fn build_action_buttons<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Ele
 
 /// Build the remote dialog view.
 /// IDEA-style Push dialog — compact, clear visual hierarchy
-fn build_push_panel<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element<'a, RemoteDialogMessage> {
+fn build_push_panel<'a>(
+    state: &'a RemoteDialogState,
+    i18n: &'a I18n,
+) -> Element<'a, RemoteDialogMessage> {
     let remote_name = state
         .selected_remote
         .as_deref()
@@ -627,10 +648,9 @@ fn build_push_panel<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element
             BadgeTone::Danger,
         ))
     } else {
-        state
-            .success_message
-            .as_ref()
-            .map(|msg| build_status_panel::<RemoteDialogMessage>(i18n.rd_status_done, msg, BadgeTone::Success))
+        state.success_message.as_ref().map(|msg| {
+            build_status_panel::<RemoteDialogMessage>(i18n.rd_status_done, msg, BadgeTone::Success)
+        })
     };
 
     // ── Footer ──
@@ -669,7 +689,10 @@ fn build_push_panel<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element
 }
 
 /// IDEA-style Pull dialog — compact, clear visual hierarchy
-fn build_pull_panel<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element<'a, RemoteDialogMessage> {
+fn build_pull_panel<'a>(
+    state: &'a RemoteDialogState,
+    i18n: &'a I18n,
+) -> Element<'a, RemoteDialogMessage> {
     let remote_name = state
         .selected_remote
         .as_deref()
@@ -774,10 +797,9 @@ fn build_pull_panel<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element
             BadgeTone::Danger,
         ))
     } else {
-        state
-            .success_message
-            .as_ref()
-            .map(|msg| build_status_panel::<RemoteDialogMessage>(i18n.rd_status_done, msg, BadgeTone::Success))
+        state.success_message.as_ref().map(|msg| {
+            build_status_panel::<RemoteDialogMessage>(i18n.rd_status_done, msg, BadgeTone::Success)
+        })
     };
 
     // ── Footer ──
@@ -870,7 +892,8 @@ pub fn view<'a>(state: &'a RemoteDialogState, i18n: &'a I18n) -> Element<'a, Rem
             .align_y(Alignment::Center)
             .push(Text::new(i18n.rd_title).size(14))
             .push(widgets::info_chip::<RemoteDialogMessage>(
-                i18n.rd_remote_count_fmt.replace("{}", &state.remotes.len().to_string()),
+                i18n.rd_remote_count_fmt
+                    .replace("{}", &state.remotes.len().to_string()),
                 BadgeTone::Neutral,
             ))
             .push(widgets::info_chip::<RemoteDialogMessage>(

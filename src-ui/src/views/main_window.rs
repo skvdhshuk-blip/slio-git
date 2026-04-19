@@ -559,9 +559,9 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
                             .size(12),
                         )
                         .push_maybe(
-                            menu.preferred_remote
-                                .as_ref()
-                                .map(|_| widgets::info_chip::<Message>("Upstream", BadgeTone::Accent)),
+                            menu.preferred_remote.as_ref().map(|_| {
+                                widgets::info_chip::<Message>("Upstream", BadgeTone::Accent)
+                            }),
                         )
                         .push(Space::new().width(Length::Fill))
                         .push(button::compact_ghost(
@@ -685,7 +685,11 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             Row::new()
                 .spacing(theme::spacing::XS)
                 .align_y(Alignment::Center)
-                .push(button::tab(i18n.conflicts.to_string(), true, None::<Message>))
+                .push(button::tab(
+                    i18n.conflicts.to_string(),
+                    true,
+                    None::<Message>,
+                ))
                 .into()
         } else {
             Row::new()
@@ -793,7 +797,10 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             (i18n.ready.to_string(), BadgeTone::Neutral, None)
         } else {
             (
-                status.message.clone().unwrap_or_else(|| i18n.ready.to_string()),
+                status
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| i18n.ready.to_string()),
                 Self::status_bar_tone(state, status),
                 status.detail.clone(),
             )
