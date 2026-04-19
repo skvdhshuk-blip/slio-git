@@ -871,7 +871,7 @@ pub fn resolve_conflict_hunk(hunk: &ConflictHunk, resolution: &ConflictResolutio
         ConflictResolution::Ours => ours_lines.join("\n"),
         ConflictResolution::Theirs => theirs_lines.join("\n"),
         ConflictResolution::Base => base_lines.join("\n"),
-        ConflictResolution::Custom(ref content) => content.clone(),
+        ConflictResolution::Custom(content) => content.clone(),
     }
 }
 

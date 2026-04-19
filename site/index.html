@@ -138,7 +138,7 @@ footer a{color:var(--text-dim)}
 <section class="hero">
   <div class="hero-badge">
     <span class="dot"></span>
-    <span data-i18n="hero_badge">v0.0.26 &middot; Open Source &middot; MIT / Apache-2.0</span>
+    <span data-i18n="hero_badge">v0.0.27 &middot; Open Source &middot; MIT / Apache-2.0</span>
   </div>
   <h1>
     <span data-i18n="hero_title_1">YOUR GIT.</span><br>
@@ -149,7 +149,7 @@ footer a{color:var(--text-dim)}
     <span class="hero-accent" data-i18n="hero_accent">No Electron. Pure Rust.</span>
   </p>
   <div class="hero-cta">
-    <a id="hero-dl" href="https://github.com/sk-wang/slio-git/releases/latest/download/slio-git.dmg"><button class="cta-primary" data-i18n="cta_download">Download for macOS &amp; Windows</button></a>
+    <a id="hero-dl" href="https://github.com/sk-wang/slio-git/releases/latest/download/slio-git.dmg"><button class="cta-primary" data-i18n="cta_download">Download for macOS, Windows &amp; Linux</button></a>
     <a href="https://github.com/sk-wang/slio-git"><button class="cta-secondary" data-i18n="cta_source">View Source on GitHub</button></a>
   </div>
   <div class="hero-screenshot reveal">
@@ -259,8 +259,8 @@ footer a{color:var(--text-dim)}
 <!-- CTA BOTTOM -->
 <section class="cta-section">
   <h2 data-i18n="cta2_title">Ready to try?</h2>
-  <p data-i18n="cta2_desc">Download the latest macOS and Windows builds and start using slio-git today.</p>
-  <a id="bottom-dl" href="https://github.com/sk-wang/slio-git/releases/latest/download/slio-git.dmg"><button class="cta-primary" data-i18n="cta_download">Download for macOS &amp; Windows</button></a>
+  <p data-i18n="cta2_desc">Download the latest macOS, Windows and Linux builds and start using slio-git today.</p>
+  <a id="bottom-dl" href="https://github.com/sk-wang/slio-git/releases/latest/download/slio-git.dmg"><button class="cta-primary" data-i18n="cta_download">Download for macOS, Windows &amp; Linux</button></a>
 </section>
 
 <!-- FOOTER -->
@@ -273,11 +273,13 @@ footer a{color:var(--text-dim)}
 function detectOS() {
   const ua = navigator.userAgent || navigator.platform || "";
   if (/Win/i.test(ua)) return "windows";
-  return "mac"; // default to mac for macOS / Linux / unknown
+  if (/Linux|X11/i.test(ua) && !/Android/i.test(ua)) return "linux";
+  return "mac"; // default to mac for macOS / unknown
 }
 
 const DL_MAC = "https://github.com/sk-wang/slio-git/releases/latest/download/slio-git.dmg";
 const DL_WIN = "https://github.com/sk-wang/slio-git/releases/latest/download/slio-git-windows-x86_64.zip";
+const DL_LINUX = "https://github.com/sk-wang/slio-git/releases/latest/download/slio-git-linux-x86_64.tar.gz";
 const userOS = detectOS();
 
 // --- i18n ---
@@ -286,12 +288,12 @@ const translations = {
     nav_features: "Features",
     nav_tech: "Tech Stack",
     nav_download: "Download",
-    hero_badge: "v0.0.26 \u00b7 Open Source \u00b7 MIT / Apache-2.0",
+    hero_badge: "v0.0.27 \u00b7 Open Source \u00b7 MIT / Apache-2.0",
     hero_title_1: "YOUR GIT.",
     hero_title_2: "BEAUTIFULLY NATIVE.",
     hero_sub: "A fast Git GUI built with Rust + Iced. The workflow polish of IntelliJ IDEA\u2019s Git tool window, as a standalone app. ",
     hero_accent: "No Electron. Pure Rust.",
-    cta_download: "Download for macOS & Windows",
+    cta_download: "Download for macOS, Windows & Linux",
     cta_source: "View Source on GitHub",
     feat_label: "Features",
     feat_title: "Everything you need,<br>nothing you don\u2019t.",
@@ -322,18 +324,18 @@ const translations = {
     tech_title: "Pure Rust. GPU-accelerated.",
     tech_desc: "No Electron, no WebView, no runtime overhead. Native performance with a 60fps UI powered by wgpu.",
     cta2_title: "Ready to try?",
-    cta2_desc: "Download the latest macOS and Windows builds and start using slio-git today.",
+    cta2_desc: "Download the latest macOS, Windows and Linux builds and start using slio-git today.",
   },
   zh: {
     nav_features: "\u529f\u80fd",
     nav_tech: "\u6280\u672f\u6808",
     nav_download: "\u4e0b\u8f7d",
-    hero_badge: "v0.0.26 \u00b7 \u5f00\u6e90 \u00b7 MIT / Apache-2.0",
+    hero_badge: "v0.0.27 \u00b7 \u5f00\u6e90 \u00b7 MIT / Apache-2.0",
     hero_title_1: "\u4f60\u7684 GIT\u3002",
     hero_title_2: "\u539f\u751f\u4e4b\u7f8e\u3002",
     hero_sub: "\u57fa\u4e8e Rust + Iced \u6784\u5efa\u7684\u9ad8\u6027\u80fd Git GUI\u3002\u5c06 IntelliJ IDEA Git \u5de5\u5177\u7a97\u7684\u5de5\u4f5c\u6d41\u4f53\u9a8c\uff0c\u5e26\u5230\u72ec\u7acb\u5e94\u7528\u4e2d\u3002",
     hero_accent: "\u96f6 Electron\u3002\u7eaf Rust\u3002",
-    cta_download: "\u4e0b\u8f7d macOS / Windows \u7248\u672c",
+    cta_download: "\u4e0b\u8f7d macOS / Windows / Linux \u7248\u672c",
     cta_source: "\u5728 GitHub \u67e5\u770b\u6e90\u7801",
     feat_label: "\u6838\u5fc3\u529f\u80fd",
     feat_title: "\u4f60\u9700\u8981\u7684\uff0c\u90fd\u5728\u8fd9\u91cc\u3002",
@@ -364,7 +366,7 @@ const translations = {
     tech_title: "\u7eaf Rust\u3002GPU \u52a0\u901f\u3002",
     tech_desc: "\u96f6 Electron\u3001\u96f6 WebView\u3001\u96f6\u8fd0\u884c\u65f6\u5f00\u9500\u3002\u7531 wgpu \u9a71\u52a8\u7684 60fps \u539f\u751f\u754c\u9762\u3002",
     cta2_title: "\u51c6\u5907\u597d\u4e86\u5417\uff1f",
-    cta2_desc: "\u4e0b\u8f7d\u6700\u65b0\u7684 macOS \u548c Windows \u53d1\u5e03\u7248\uff0c\u7acb\u5373\u5f00\u59cb\u4f7f\u7528 slio-git\u3002",
+    cta2_desc: "\u4e0b\u8f7d\u6700\u65b0\u7684 macOS\u3001Windows \u548c Linux \u53d1\u5e03\u7248\uff0c\u7acb\u5373\u5f00\u59cb\u4f7f\u7528 slio-git\u3002",
   }
 };
 
@@ -383,7 +385,7 @@ function setLang(lang) {
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
 
   // Update download buttons based on OS
-  const dlUrl = userOS === "windows" ? DL_WIN : DL_MAC;
+  const dlUrl = userOS === "windows" ? DL_WIN : userOS === "linux" ? DL_LINUX : DL_MAC;
   const navDl = document.getElementById("nav-dl");
   const heroDl = document.getElementById("hero-dl");
   const bottomDl = document.getElementById("bottom-dl");
@@ -392,7 +394,7 @@ function setLang(lang) {
   if (bottomDl) bottomDl.href = dlUrl;
 
   // Update CTA button text to show detected OS
-  const osName = userOS === "windows" ? (lang === "zh" ? "Windows" : "Windows") : (lang === "zh" ? "macOS" : "macOS");
+  const osName = userOS === "windows" ? "Windows" : userOS === "linux" ? "Linux" : "macOS";
   document.querySelectorAll("[data-i18n='cta_download']").forEach(el => {
     el.textContent = lang === "zh"
       ? `\u4E0B\u8F7D ${osName} \u7248\u672C`

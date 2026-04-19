@@ -285,11 +285,11 @@ pub fn get_history_for_path(
                         .ok()
                         .and_then(|t| t.get_path(target_path).ok())
                         .is_some()
-                } else if let Ok(parent) = commit.parent(0) {
+                } else { match commit.parent(0) { Ok(parent) => {
                     // Compare parent tree to this commit's tree
                     let old_tree = parent.tree().ok();
                     let new_tree = commit.tree().ok();
-                    if let (Some(old), Some(new)) = (old_tree, new_tree) {
+                    match (old_tree, new_tree) { (Some(old), Some(new)) => {
                         let diff = repo_lock
                             .diff_tree_to_tree(Some(&old), Some(&new), None)
                             .ok();
@@ -308,12 +308,12 @@ pub fn get_history_for_path(
                             })
                         })
                         .unwrap_or(false)
-                    } else {
+                    } _ => {
                         false
-                    }
-                } else {
+                    }}
+                } _ => {
                     false
-                };
+                }}};
 
                 if touches_path {
                     history.push(entry_from_commit(&commit, oid));
