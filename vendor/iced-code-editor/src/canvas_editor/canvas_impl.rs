@@ -199,16 +199,13 @@ impl CodeEditor {
     /// * `syntax_ref` - Optional syntax reference for highlighting
     /// * `syntax_set` - Syntax set for highlighting
     /// * `syntax_theme` - Theme for syntax highlighting
-    #[allow(clippy::too_many_arguments)]
     fn draw_text_with_syntax_highlighting(
         &self,
         frame: &mut canvas::Frame,
         ctx: &RenderContext,
         visual_line: &VisualLine,
         y: f32,
-        syntax_ref: Option<&syntect::parsing::SyntaxReference>,
-        syntax_set: &SyntaxSet,
-        syntax_theme: Option<&syntect::highlighting::Theme>,
+        highlight_ranges: Option<&[(Style, &str)]>,
     ) {
         let full_line_content = self.buffer.line(visual_line.logical_line);
 
@@ -223,19 +220,11 @@ impl CodeEditor {
             .map_or(full_line_content.len(), |(idx, _)| idx);
         let line_segment = &full_line_content[start_byte..end_byte];
 
-        if let (Some(syntax), Some(syntax_theme)) = (syntax_ref, syntax_theme) {
-            let mut highlighter = HighlightLines::new(syntax, syntax_theme);
-
-            // Highlight the full line to get correct token colors
-            let full_line_ranges = highlighter
-                .highlight_line(full_line_content, syntax_set)
-                .unwrap_or_else(|_| vec![(Style::default(), full_line_content)]);
-
-            // Extract only the ranges that fall within our segment
+        if let Some(ranges) = highlight_ranges {
             let mut x_offset = ctx.gutter_width + 5.0 - ctx.horizontal_scroll_offset;
             let mut char_pos = 0;
 
-            for (style, text) in full_line_ranges {
+            for (style, text) in ranges {
                 let text_len = text.chars().count();
                 let text_end = char_pos + text_len;
 
@@ -1342,6 +1331,10 @@ impl canvas::Program<Message> for CodeEditor {
                 "python" => syntax_set.find_syntax_by_extension("py"),
                 "rust" => syntax_set.find_syntax_by_extension("rs"),
                 "javascript" => syntax_set.find_syntax_by_extension("js"),
+                "php" => syntax_set
+                    .find_syntax_by_name("PHP")
+                    .or_else(|| syntax_set.find_syntax_by_name("PHP Source"))
+                    .or_else(|| syntax_set.find_syntax_by_extension("php")),
                 "htm" => syntax_set.find_syntax_by_extension("html"),
                 "svg" => syntax_set.find_syntax_by_extension("xml"),
                 "markdown" => syntax_set.find_syntax_by_extension("md"),
@@ -1372,6 +1365,10 @@ impl canvas::Program<Message> for CodeEditor {
                 width: (bounds.width - ctx.gutter_width).max(0.0),
                 height: bounds.height,
             };
+            let mut highlighter = syntax_ref.zip(syntax_theme).map(|(s, t)| HighlightLines::new(s, t));
+            let mut cached_logical_line: Option<usize> = None;
+            let mut cached_ranges: Vec<(Style, &str)> = Vec::new();
+
             frame.with_clip(code_clip, |f| {
                 for (idx, visual_line) in visual_lines_for_content
                     .iter()
@@ -1380,14 +1377,26 @@ impl canvas::Program<Message> for CodeEditor {
                     .take(end_idx.saturating_sub(start_idx))
                 {
                     let y = idx as f32 * self.line_height;
+
+                    let ranges = if let Some(highlighter) = highlighter.as_mut() {
+                        if cached_logical_line != Some(visual_line.logical_line) {
+                            let full_line_content = self.buffer.line(visual_line.logical_line);
+                            cached_ranges = highlighter
+                                .highlight_line(full_line_content, syntax_set)
+                                .unwrap_or_else(|_| vec![(Style::default(), full_line_content)]);
+                            cached_logical_line = Some(visual_line.logical_line);
+                        }
+                        Some(cached_ranges.as_slice())
+                    } else {
+                        None
+                    };
+
                     self.draw_text_with_syntax_highlighting(
                         f,
                         &ctx,
                         visual_line,
                         y,
-                        syntax_ref,
-                        syntax_set,
-                        syntax_theme,
+                        ranges,
                     );
                 }
             });

@@ -156,7 +156,11 @@ impl Default for TagDialogState {
     }
 }
 
-fn build_tag_row<'a>(tag: &'a TagInfo, is_selected: bool, i18n: &'a I18n) -> Element<'a, TagDialogMessage> {
+fn build_tag_row<'a>(
+    tag: &'a TagInfo,
+    is_selected: bool,
+    i18n: &'a I18n,
+) -> Element<'a, TagDialogMessage> {
     let row = Container::new(
         Column::new()
             .spacing(4)
@@ -325,7 +329,10 @@ fn build_tag_form<'a>(state: &'a TagDialogState, i18n: &'a I18n) -> Element<'a, 
         .into()
 }
 
-fn build_action_buttons<'a>(state: &'a TagDialogState, i18n: &'a I18n) -> Element<'a, TagDialogMessage> {
+fn build_action_buttons<'a>(
+    state: &'a TagDialogState,
+    i18n: &'a I18n,
+) -> Element<'a, TagDialogMessage> {
     let can_create =
         !state.is_loading && !state.tag_name.trim().is_empty() && !state.target.trim().is_empty();
 
@@ -419,11 +426,15 @@ pub fn view<'a>(state: &'a TagDialogState, i18n: &'a I18n) -> Element<'a, TagDia
             .align_y(Alignment::Center)
             .push(Text::new(i18n.td_title).size(16))
             .push(widgets::info_chip::<TagDialogMessage>(
-                i18n.td_total_count_fmt.replace("{}", &state.tags.len().to_string()),
+                i18n.td_total_count_fmt
+                    .replace("{}", &state.tags.len().to_string()),
                 BadgeTone::Neutral,
             ))
             .push_maybe(state.selected_tag.as_ref().map(|tag| {
-                widgets::info_chip::<TagDialogMessage>(i18n.td_selected_fmt.replace("{}", tag), BadgeTone::Accent)
+                widgets::info_chip::<TagDialogMessage>(
+                    i18n.td_selected_fmt.replace("{}", tag),
+                    BadgeTone::Accent,
+                )
             }))
             .push(button::ghost(i18n.refresh, Some(TagDialogMessage::Refresh)))
             .push(button::ghost(i18n.close, Some(TagDialogMessage::Close))),

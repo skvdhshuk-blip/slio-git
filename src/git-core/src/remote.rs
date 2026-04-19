@@ -187,6 +187,19 @@ fn run_git_remote_command(
     Ok(())
 }
 
+fn has_explicit_credentials(credentials: Option<(&str, &str)>) -> bool {
+    credentials.is_some_and(|(username, password)| {
+        !username.trim().is_empty() || !password.trim().is_empty()
+    })
+}
+
+fn should_use_system_git_for_push(
+    repo: &Repository,
+    credentials: Option<(&str, &str)>,
+) -> bool {
+    repo.is_worktree() && !has_explicit_credentials(credentials)
+}
+
 fn configured_upstream_branch(repo: &Repository, remote_name: &str) -> Option<String> {
     let branch_name = repo.current_branch().ok().flatten()?;
     let repo_lock = repo.inner.read().ok()?;
@@ -387,6 +400,17 @@ pub fn push(
 
     let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
 
+    // libgit2 can hang when pushing from a worktree, so use system git directly.
+    if should_use_system_git_for_push(repo, credentials) {
+        info!("Repository is a worktree; using system git for push");
+        return run_git_remote_command(
+            repo,
+            "push",
+            remote_name,
+            &["push", remote_name, &refspec],
+        );
+    }
+
     // Try libgit2 first (handles SSH keys from agent + ~/.ssh/ + credential helpers)
     let libgit2_result = (|| -> Result<(), GitError> {
         let repo_lock = repo.inner.write().unwrap();
@@ -523,7 +547,10 @@ pub fn pull_with_options(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_pull_args, remote_url_uses_ssh, resolve_auth_username, PullOptions};
+    use super::{
+        build_pull_args, remote_url_uses_ssh, resolve_auth_username,
+        should_use_system_git_for_push, PullOptions,
+    };
     use crate::repository::Repository;
     use git2::Config;
     use std::fs;
@@ -570,6 +597,25 @@ mod tests {
         git(repo_dir.path(), &["commit", "-m", "base"]);
         let branch_name = git(repo_dir.path(), &["rev-parse", "--abbrev-ref", "HEAD"]);
         (repo_dir, branch_name)
+    }
+
+    fn create_linked_worktree_repo() -> (TempDir, Repository) {
+        let (repo_dir, _) = create_committed_repo();
+        let worktree_path = repo_dir.path().join("linked-worktree");
+
+        git(
+            repo_dir.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature/push-path",
+                &worktree_path.display().to_string(),
+            ],
+        );
+
+        let worktree_repo = Repository::open(&worktree_path).unwrap();
+        (repo_dir, worktree_repo)
     }
 
     #[test]
@@ -678,6 +724,25 @@ mod tests {
                 &branch_name
             ]
         );
+    }
+
+    #[test]
+    fn push_from_worktree_with_explicit_credentials_keeps_libgit2_path() {
+        let (_repo_dir, worktree_repo) = create_linked_worktree_repo();
+
+        assert!(worktree_repo.is_worktree());
+        assert!(!should_use_system_git_for_push(
+            &worktree_repo,
+            Some(("manual-user", "manual-password")),
+        ));
+    }
+
+    #[test]
+    fn push_from_worktree_without_credentials_uses_system_git_path() {
+        let (_repo_dir, worktree_repo) = create_linked_worktree_repo();
+
+        assert!(worktree_repo.is_worktree());
+        assert!(should_use_system_git_for_push(&worktree_repo, None));
     }
 
     #[test]

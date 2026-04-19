@@ -57,6 +57,8 @@ pub struct I18n {
     pub no_changes: &'static str,
     pub clean_workspace: &'static str,
     pub clean_workspace_detail: &'static str,
+    pub residual_merge_state: &'static str,
+    pub residual_merge_state_detail: &'static str,
     pub stage_file: &'static str,
     pub unstage_file: &'static str,
     pub stage_all: &'static str,
@@ -80,6 +82,10 @@ pub struct I18n {
 
     pub error: &'static str,
     pub operation_failed: &'static str,
+    pub quit_merge_state: &'static str,
+    pub quit_merge_failed: &'static str,
+    pub merge_state_cleared: &'static str,
+    pub merge_state_cleared_detail: &'static str,
     pub loading: &'static str,
     pub unsupported_action: &'static str,
 
@@ -1375,6 +1381,9 @@ impl I18n {
             no_changes: "没有变更",
             clean_workspace: "工作区目前是干净的",
             clean_workspace_detail: "当前没有待处理改动。",
+            residual_merge_state: "检测到残留的合并状态",
+            residual_merge_state_detail:
+                "当前没有冲突和待处理改动，但仓库还保留着一次未结束的合并状态。",
             stage_file: "暂存",
             unstage_file: "取消暂存",
             stage_all: "暂存全部",
@@ -1398,6 +1407,11 @@ impl I18n {
 
             error: "错误",
             operation_failed: "操作失败",
+            quit_merge_state: "结束残留合并",
+            quit_merge_failed: "结束残留合并失败",
+            merge_state_cleared: "已结束残留合并状态",
+            merge_state_cleared_detail:
+                "MERGE_HEAD 等状态文件已清理，仓库已回到普通工作状态。",
             loading: "处理中",
             unsupported_action: "该动作还未接入完整实现，已记录到缺陷台账候选项。",
 
@@ -2675,6 +2689,8 @@ pub static ZH_CN: I18n = I18n {
     no_changes: "没有变更",
     clean_workspace: "工作区目前是干净的",
     clean_workspace_detail: "当前没有待处理改动。",
+    residual_merge_state: "检测到残留的合并状态",
+    residual_merge_state_detail: "当前没有冲突和待处理改动，但仓库还保留着一次未结束的合并状态。",
     stage_file: "暂存",
     unstage_file: "取消暂存",
     stage_all: "暂存全部",
@@ -2695,6 +2711,10 @@ pub static ZH_CN: I18n = I18n {
     stash: "储藏",
     error: "错误",
     operation_failed: "操作失败",
+    quit_merge_state: "结束残留合并",
+    quit_merge_failed: "结束残留合并失败",
+    merge_state_cleared: "已结束残留合并状态",
+    merge_state_cleared_detail: "MERGE_HEAD 等状态文件已清理，仓库已回到普通工作状态。",
     loading: "处理中",
     unsupported_action: "该动作还未接入完整实现，已记录到缺陷台账候选项。",
 
@@ -3969,6 +3989,9 @@ pub static EN: I18n = I18n {
     no_changes: "No changes",
     clean_workspace: "Nothing to commit, working tree clean",
     clean_workspace_detail: "No pending changes to process.",
+    residual_merge_state: "Residual merge state detected",
+    residual_merge_state_detail:
+        "There are no conflicts or pending changes, but the repository still keeps an unfinished merge state.",
     stage_file: "Stage",
     unstage_file: "Unstage",
     stage_all: "Stage All",
@@ -3989,6 +4012,11 @@ pub static EN: I18n = I18n {
     stash: "Stash",
     error: "Error",
     operation_failed: "Operation failed",
+    quit_merge_state: "Clear Merge State",
+    quit_merge_failed: "Failed to clear merge state",
+    merge_state_cleared: "Merge state cleared",
+    merge_state_cleared_detail:
+        "MERGE_HEAD and related state files were removed. The repository is back to a normal working state.",
     loading: "Loading",
     unsupported_action: "This action is not yet fully implemented.",
 

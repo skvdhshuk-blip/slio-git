@@ -135,7 +135,10 @@ impl RebaseEditorState {
                             .collect();
                     }
                     Err(error) => {
-                        self.error = Some(i18n.re_read_todo_failed_fmt.replace("{}", &error.to_string()));
+                        self.error = Some(
+                            i18n.re_read_todo_failed_fmt
+                                .replace("{}", &error.to_string()),
+                        );
                         self.success_message = None;
                     }
                 }
@@ -153,14 +156,22 @@ impl RebaseEditorState {
                 }
             }
             Err(error) => {
-                self.error = Some(i18n.re_get_status_failed_fmt.replace("{}", &error.to_string()));
+                self.error = Some(
+                    i18n.re_get_status_failed_fmt
+                        .replace("{}", &error.to_string()),
+                );
                 self.success_message = None;
                 self.has_conflicts = false;
             }
         }
     }
 
-    pub fn prepare_interactive_rebase(&mut self, repo: &Repository, commit_id: String, i18n: &I18n) {
+    pub fn prepare_interactive_rebase(
+        &mut self,
+        repo: &Repository,
+        commit_id: String,
+        i18n: &I18n,
+    ) {
         self.is_loading = true;
         self.error = None;
         self.success_message = None;
@@ -188,7 +199,7 @@ impl RebaseEditorState {
                 self.success_message = Some(
                     i18n.re_loaded_todo_fmt
                         .replace("{}", short_commit_id(&self.base_branch))
-                        .replacen("{}", &self.todo_list.len().to_string(), 1)
+                        .replacen("{}", &self.todo_list.len().to_string(), 1),
                 );
             }
             Err(error) => {
@@ -234,7 +245,10 @@ impl RebaseEditorState {
                     });
                 }
                 Err(error) => {
-                    self.error = Some(i18n.re_start_interactive_failed_fmt.replace("{}", &error.to_string()));
+                    self.error = Some(
+                        i18n.re_start_interactive_failed_fmt
+                            .replace("{}", &error.to_string()),
+                    );
                 }
             }
 
@@ -254,9 +268,11 @@ impl RebaseEditorState {
                 self.is_rebasing = true;
                 self.load_status(repo, i18n);
                 self.success_message = Some(if self.has_conflicts {
-                    i18n.re_started_onto_conflict_fmt.replace("{}", &onto_branch.to_string())
+                    i18n.re_started_onto_conflict_fmt
+                        .replace("{}", &onto_branch.to_string())
                 } else {
-                    i18n.re_started_onto_fmt.replace("{}", &onto_branch.to_string())
+                    i18n.re_started_onto_fmt
+                        .replace("{}", &onto_branch.to_string())
                 });
             }
             Err(error) => {
@@ -282,7 +298,9 @@ impl RebaseEditorState {
                 self.load_status(repo, i18n);
                 if result.success {
                     self.success_message = Some(if self.is_rebasing {
-                        i18n.re_advanced_step_fmt.replace("{}", &self.current_step.to_string()).replacen("{}", &self.total_steps.to_string(), 1)
+                        i18n.re_advanced_step_fmt
+                            .replace("{}", &self.current_step.to_string())
+                            .replacen("{}", &self.total_steps.to_string(), 1)
                     } else {
                         i18n.re_rebase_complete.to_string()
                     });
@@ -290,7 +308,8 @@ impl RebaseEditorState {
                     self.error = Some(if result.message.trim().is_empty() {
                         i18n.re_continue_failed_check.to_string()
                     } else {
-                        i18n.re_continue_failed_fmt.replace("{}", result.message.trim())
+                        i18n.re_continue_failed_fmt
+                            .replace("{}", result.message.trim())
                     });
                 }
             }
@@ -311,7 +330,9 @@ impl RebaseEditorState {
                 self.load_status(repo, i18n);
                 if result.success {
                     self.success_message = Some(if self.is_rebasing {
-                        i18n.re_skipped_step_fmt.replace("{}", &self.current_step.to_string()).replacen("{}", &self.total_steps.to_string(), 1)
+                        i18n.re_skipped_step_fmt
+                            .replace("{}", &self.current_step.to_string())
+                            .replacen("{}", &self.total_steps.to_string(), 1)
                     } else {
                         i18n.re_skipped_last.to_string()
                     });
@@ -436,7 +457,10 @@ impl Default for RebaseEditorState {
     }
 }
 
-fn build_rebase_controls<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> Element<'a, RebaseEditorMessage> {
+fn build_rebase_controls<'a>(
+    state: &'a RebaseEditorState,
+    i18n: &'a I18n,
+) -> Element<'a, RebaseEditorMessage> {
     if state.is_rebasing {
         // In-progress rebase: continue/skip/abort
         let row = Row::new()
@@ -523,7 +547,10 @@ fn build_rebase_controls<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> El
     }
 }
 
-fn build_todo_list<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> Element<'a, RebaseEditorMessage> {
+fn build_todo_list<'a>(
+    state: &'a RebaseEditorState,
+    i18n: &'a I18n,
+) -> Element<'a, RebaseEditorMessage> {
     if state.todo_list.is_empty() {
         return Column::new()
             .push(
@@ -671,14 +698,18 @@ fn todo_action_color(action: &str) -> Color {
     }
 }
 
-fn build_progress<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> Element<'a, RebaseEditorMessage> {
+fn build_progress<'a>(
+    state: &'a RebaseEditorState,
+    i18n: &'a I18n,
+) -> Element<'a, RebaseEditorMessage> {
     if state.is_rebasing {
         let pct = if state.total_steps > 0 {
             (state.current_step as f32 / state.total_steps as f32) * 100.0
         } else {
             0.0
         };
-        let progress_text = i18n.re_progress_fmt
+        let progress_text = i18n
+            .re_progress_fmt
             .replace("{}", &state.current_step.to_string())
             .replacen("{}", &state.total_steps.to_string(), 1)
             .replacen("{}", &format!("{:.0}", pct), 1);
@@ -732,7 +763,9 @@ fn build_progress<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> Element<'
                         todo_action_tone(&item.action),
                     )
                 }))
-                .push(scrollable::styled(build_todo_list(state, i18n)).height(Length::Fixed(200.0))),
+                .push(
+                    scrollable::styled(build_todo_list(state, i18n)).height(Length::Fixed(200.0)),
+                ),
         )
         .padding([12, 12])
         .style(theme::panel_style(Surface::Panel))
@@ -751,7 +784,9 @@ fn build_progress<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> Element<'
                     i18n.re_edit_rules_detail,
                     BadgeTone::Accent,
                 ))
-                .push(scrollable::styled(build_todo_list(state, i18n)).height(Length::Fixed(260.0))),
+                .push(
+                    scrollable::styled(build_todo_list(state, i18n)).height(Length::Fixed(260.0)),
+                ),
         )
         .padding([12, 12])
         .style(theme::panel_style(Surface::Panel))
@@ -808,7 +843,8 @@ pub fn view<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> Element<'a, Reb
     } else if state.has_interactive_draft() {
         Some(build_status_panel::<RebaseEditorMessage>(
             i18n.re_status_pending,
-            i18n.re_pending_detail_fmt.replace("{}", &state.todo_list.len().to_string()),
+            i18n.re_pending_detail_fmt
+                .replace("{}", &state.todo_list.len().to_string()),
             BadgeTone::Accent,
         ))
     } else {
@@ -849,43 +885,46 @@ pub fn view<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> Element<'a, Reb
     let context_panel: Option<Element<'_, RebaseEditorMessage>> =
         (!state.base_branch.trim().is_empty()).then(|| {
             Container::new(
-            Column::new()
-                .spacing(theme::spacing::XS)
-                .push(widgets::section_header(
-                    i18n.re_section_context.to_uppercase(),
-                    i18n.re_context_title,
-                    i18n.re_context_detail,
-                ))
-                .push(
-                    Row::new()
-                        .spacing(theme::spacing::XS)
-                        .push(widgets::info_chip::<RebaseEditorMessage>(
-                            i18n.re_start_point_fmt.replace("{}", short_commit_id(&state.base_branch)),
-                            BadgeTone::Accent,
-                        ))
-                        .push(widgets::info_chip::<RebaseEditorMessage>(
-                            state.todo_base_ref.as_deref().map_or_else(
-                                || i18n.re_from_root.to_string(),
-                                |base| i18n.re_base_point_fmt.replace("{}", short_commit_id(base)),
-                            ),
-                            BadgeTone::Neutral,
-                        )),
-                )
-                .push(
-                    Text::new(if state.todo_is_editable {
-                        i18n.re_editable_hint
-                    } else {
-                        i18n.re_viewing_hint
-                    })
-                    .size(11)
-                    .width(Length::Fill)
-                    .wrapping(text::Wrapping::WordOrGlyph)
-                    .color(theme::darcula::TEXT_SECONDARY),
-                ),
-        )
-        .padding([12, 12])
-        .style(theme::panel_style(Surface::Panel))
-        .into()
+                Column::new()
+                    .spacing(theme::spacing::XS)
+                    .push(widgets::section_header(
+                        i18n.re_section_context.to_uppercase(),
+                        i18n.re_context_title,
+                        i18n.re_context_detail,
+                    ))
+                    .push(
+                        Row::new()
+                            .spacing(theme::spacing::XS)
+                            .push(widgets::info_chip::<RebaseEditorMessage>(
+                                i18n.re_start_point_fmt
+                                    .replace("{}", short_commit_id(&state.base_branch)),
+                                BadgeTone::Accent,
+                            ))
+                            .push(widgets::info_chip::<RebaseEditorMessage>(
+                                state.todo_base_ref.as_deref().map_or_else(
+                                    || i18n.re_from_root.to_string(),
+                                    |base| {
+                                        i18n.re_base_point_fmt.replace("{}", short_commit_id(base))
+                                    },
+                                ),
+                                BadgeTone::Neutral,
+                            )),
+                    )
+                    .push(
+                        Text::new(if state.todo_is_editable {
+                            i18n.re_editable_hint
+                        } else {
+                            i18n.re_viewing_hint
+                        })
+                        .size(11)
+                        .width(Length::Fill)
+                        .wrapping(text::Wrapping::WordOrGlyph)
+                        .color(theme::darcula::TEXT_SECONDARY),
+                    ),
+            )
+            .padding([12, 12])
+            .style(theme::panel_style(Surface::Panel))
+            .into()
         });
 
     Container::new(
@@ -910,7 +949,10 @@ pub fn view<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> Element<'a, Reb
                                 },
                                 BadgeTone::Accent,
                             ))
-                            .push(button::ghost(i18n.refresh, Some(RebaseEditorMessage::Refresh)))
+                            .push(button::ghost(
+                                i18n.refresh,
+                                Some(RebaseEditorMessage::Refresh),
+                            ))
                             .push(button::ghost(i18n.close, Some(RebaseEditorMessage::Close))),
                     )
                     .padding([10, 12])
@@ -934,7 +976,8 @@ pub fn view<'a>(state: &'a RebaseEditorState, i18n: &'a I18n) -> Element<'a, Reb
 
 /// Build detail panel for the selected todo item (T043)
 fn build_selected_todo_detail<'a>(
-    state: &'a RebaseEditorState, i18n: &'a I18n,
+    state: &'a RebaseEditorState,
+    i18n: &'a I18n,
 ) -> Option<Element<'a, RebaseEditorMessage>> {
     let index = state.selected_todo_index?;
     let item = state.todo_list.get(index)?;

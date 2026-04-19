@@ -4,8 +4,8 @@ use git_core::{
     abort_in_progress_commit_action, cherry_pick_commit, continue_in_progress_commit_action,
     create_commit, diff_file_to_index, diff_index_to_head, export_commit_patch, get_conflict_diff,
     get_history_for_ref, get_in_progress_commit_action, list_branch_scoped_remotes,
-    push_current_branch_to_commit, rebase_start, reset_current_branch_to_commit, resolve_conflict,
-    resolve_push_current_branch_target, revert_commit, ConflictResolution,
+    push_current_branch_to_commit, quit_merge, rebase_start, reset_current_branch_to_commit,
+    resolve_conflict, resolve_push_current_branch_target, revert_commit, ConflictResolution,
     InProgressCommitActionKind, Repository, ResetMode, SyncStatus,
 };
 use std::fs;
@@ -15,7 +15,8 @@ use tempfile::tempdir;
 use test_helpers::TestRepo;
 
 fn empty_repo() -> Result<TestRepo, git_core::GitError> {
-    let temp_dir = tempfile::tempdir().map_err(|e| git_core::GitError::Io(std::io::Error::other(e)))?;
+    let temp_dir =
+        tempfile::tempdir().map_err(|e| git_core::GitError::Io(std::io::Error::other(e)))?;
     Ok(TestRepo { path: temp_dir })
 }
 
@@ -163,6 +164,141 @@ fn repository_init_keeps_worktree_path_for_new_repo_display() {
             .file_name()
             .and_then(|name| name.to_str())
             .expect("temp dir should have a name")
+    );
+}
+
+#[test]
+fn repository_opened_from_linked_worktree_reports_worktree_context() {
+    let repo = TestRepo::new().expect("failed to create test repository");
+    repo.add_and_commit("tracked.txt", "base\n", "base commit")
+        .expect("failed to create base commit");
+
+    let worktree_path = repo.path().join("linked-worktree");
+    git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature/worktree-detect",
+            &worktree_path.display().to_string(),
+        ],
+    )
+    .expect("failed to create linked worktree");
+
+    let repository =
+        Repository::open(&worktree_path).expect("failed to open repository from linked worktree");
+
+    assert!(
+        repository.is_worktree(),
+        "linked worktree repositories should be recognized as worktrees"
+    );
+    assert_eq!(
+        std::fs::canonicalize(repository.path()).expect("failed to canonicalize worktree path"),
+        std::fs::canonicalize(&worktree_path)
+            .expect("failed to canonicalize expected worktree path")
+    );
+    assert_eq!(
+        std::fs::canonicalize(repository.command_cwd())
+            .expect("failed to canonicalize command working directory"),
+        std::fs::canonicalize(&worktree_path)
+            .expect("failed to canonicalize expected worktree path")
+    );
+}
+
+#[test]
+fn linked_worktree_refresh_clears_merge_state_after_merge_commit() {
+    let repo = TestRepo::new().expect("failed to create test repository");
+    repo.add_and_commit("shared.txt", "base\n", "base commit")
+        .expect("failed to create base commit");
+
+    let worktree_path = repo.path().join("merge-worktree");
+    git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature/worktree-merge-refresh",
+            &worktree_path.display().to_string(),
+        ],
+    )
+    .expect("failed to create linked worktree");
+
+    repo.write_file("shared.txt", "main change\n")
+        .expect("failed to write main branch change");
+    git(repo.path(), &["add", "shared.txt"]).expect("failed to stage main branch change");
+    git(repo.path(), &["commit", "-m", "main change"])
+        .expect("failed to commit main branch change");
+
+    fs::write(worktree_path.join("shared.txt"), "worktree change\n")
+        .expect("failed to write worktree change");
+    git(&worktree_path, &["add", "shared.txt"]).expect("failed to stage worktree change");
+    git(&worktree_path, &["commit", "-m", "worktree change"])
+        .expect("failed to commit worktree change");
+
+    let merge_output = Command::new("git")
+        .args(["merge", "master", "--no-edit"])
+        .current_dir(&worktree_path)
+        .output()
+        .expect("failed to start merge");
+    assert!(
+        !merge_output.status.success(),
+        "merge should stop on conflict"
+    );
+
+    let mut worktree_repo =
+        Repository::open(&worktree_path).expect("failed to open repository from worktree");
+    assert_eq!(
+        worktree_repo.get_state(),
+        git_core::repository::RepositoryState::Merging
+    );
+
+    resolve_conflict(
+        &worktree_repo,
+        Path::new("shared.txt"),
+        ConflictResolution::Ours,
+    )
+    .expect("failed to resolve conflict");
+    create_commit(&worktree_repo, "merge resolved", "", "").expect("failed to create merge commit");
+
+    worktree_repo.refresh().expect("failed to refresh worktree repo");
+
+    assert_eq!(
+        worktree_repo.get_state(),
+        git_core::repository::RepositoryState::Clean
+    );
+    assert_eq!(
+        std::fs::canonicalize(worktree_repo.path()).expect("failed to canonicalize repo path"),
+        std::fs::canonicalize(&worktree_path)
+            .expect("failed to canonicalize expected worktree path")
+    );
+}
+
+#[test]
+fn quit_merge_clears_residual_merge_state_without_moving_head() {
+    let repo = create_conflicted_repository().0;
+    let repository = Repository::open(repo.path()).expect("failed to open conflicted repository");
+
+    resolve_conflict(
+        &repository,
+        Path::new("shared.txt"),
+        ConflictResolution::Ours,
+    )
+    .expect("failed to resolve conflict");
+    let head_before = git(repo.path(), &["rev-parse", "HEAD"]).expect("failed to read HEAD");
+
+    quit_merge(&repository).expect("failed to quit merge");
+
+    let refreshed = Repository::open(repo.path()).expect("failed to reopen repository");
+    assert_eq!(refreshed.get_state(), git_core::repository::RepositoryState::Clean);
+    assert_eq!(
+        git(repo.path(), &["rev-parse", "HEAD"]).expect("failed to read HEAD after quit"),
+        head_before
+    );
+    assert!(
+        !repo.path().join(".git").join("MERGE_HEAD").exists(),
+        "MERGE_HEAD should be removed after quitting merge"
     );
 }
 

@@ -77,7 +77,11 @@ pub fn view<'a>(state: &'a WorktreeState, i18n: &'a I18n) -> Element<'a, Worktre
         ))
     } else {
         state.success_message.as_ref().map(|msg| {
-            widgets::status_banner::<WorktreeMessage>(i18n.wt_done, msg.as_str(), BadgeTone::Success)
+            widgets::status_banner::<WorktreeMessage>(
+                i18n.wt_done,
+                msg.as_str(),
+                BadgeTone::Success,
+            )
         })
     };
 

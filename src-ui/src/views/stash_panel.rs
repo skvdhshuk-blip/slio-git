@@ -253,7 +253,10 @@ fn build_stash_row(stash: &StashInfo, is_selected: bool) -> Element<'_, StashPan
         .into()
 }
 
-fn build_stashes_list<'a>(state: &'a StashPanelState, i18n: &'a I18n) -> Element<'a, StashPanelMessage> {
+fn build_stashes_list<'a>(
+    state: &'a StashPanelState,
+    i18n: &'a I18n,
+) -> Element<'a, StashPanelMessage> {
     let list = if state.stashes.is_empty() {
         Column::new().push(
             Text::new(i18n.sp_no_stashes)
@@ -299,7 +302,10 @@ fn build_stashes_list<'a>(state: &'a StashPanelState, i18n: &'a I18n) -> Element
     .into()
 }
 
-fn build_stash_input<'a>(state: &'a StashPanelState, i18n: &'a I18n) -> Element<'a, StashPanelMessage> {
+fn build_stash_input<'a>(
+    state: &'a StashPanelState,
+    i18n: &'a I18n,
+) -> Element<'a, StashPanelMessage> {
     Container::new(
         Column::new()
             .spacing(theme::spacing::SM)
@@ -333,7 +339,10 @@ fn build_stash_input<'a>(state: &'a StashPanelState, i18n: &'a I18n) -> Element<
     .into()
 }
 
-fn build_action_buttons<'a>(state: &'a StashPanelState, i18n: &'a I18n) -> Element<'a, StashPanelMessage> {
+fn build_action_buttons<'a>(
+    state: &'a StashPanelState,
+    i18n: &'a I18n,
+) -> Element<'a, StashPanelMessage> {
     scrollable::styled_horizontal(
         Row::new()
             .spacing(theme::spacing::XS)
@@ -415,7 +424,8 @@ pub fn view<'a>(state: &'a StashPanelState, i18n: &'a I18n) -> Element<'a, Stash
             .align_y(Alignment::Center)
             .push(Text::new(i18n.sp_title).size(16))
             .push(widgets::info_chip::<StashPanelMessage>(
-                i18n.sp_total_count_fmt.replace("{}", &state.stashes.len().to_string()),
+                i18n.sp_total_count_fmt
+                    .replace("{}", &state.stashes.len().to_string()),
                 BadgeTone::Neutral,
             ))
             .push_maybe(state.selected_stash.map(|index| {
@@ -424,7 +434,10 @@ pub fn view<'a>(state: &'a StashPanelState, i18n: &'a I18n) -> Element<'a, Stash
                     BadgeTone::Accent,
                 )
             }))
-            .push(button::ghost(i18n.refresh, Some(StashPanelMessage::Refresh)))
+            .push(button::ghost(
+                i18n.refresh,
+                Some(StashPanelMessage::Refresh),
+            ))
             .push(button::ghost(i18n.close, Some(StashPanelMessage::Close))),
     )
     .padding([10, 12])

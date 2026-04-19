@@ -114,7 +114,10 @@ impl Repository {
 
     /// Check if this is a worktree (not the main repository)
     pub fn is_worktree(&self) -> bool {
-        self.path.join(".git").is_file()
+        self.workdir
+            .as_ref()
+            .map(|workdir| workdir.join(".git").is_file())
+            .unwrap_or(false)
     }
 
     /// Get worktree paths for this repository (if it's the main repo)
@@ -308,17 +311,46 @@ impl Repository {
 
     /// Refresh repository state from disk
     pub fn refresh(&mut self) -> Result<(), GitError> {
+        let refresh_path = self.command_cwd();
         let new_repo =
-            Git2Repository::open(&self.path).map_err(|_| GitError::RepositoryNotFound {
-                path: self.path.display().to_string(),
+            Git2Repository::discover(&refresh_path).map_err(|_| GitError::RepositoryNotFound {
+                path: refresh_path.display().to_string(),
             })?;
 
+        self.path = new_repo.path().to_path_buf();
+        self.workdir = new_repo.workdir().map(|path| path.to_path_buf());
         self.state = convert_state(new_repo.state());
         *self.inner.write().unwrap() = new_repo;
 
         info!("Repository refreshed, state: {:?}", self.state);
         Ok(())
     }
+}
+
+/// Quit an in-progress merge without creating a merge commit.
+///
+/// This clears merge state files such as `MERGE_HEAD` and `MERGE_MSG`, while keeping
+/// the current `HEAD`, index and worktree contents intact.
+pub fn quit_merge(repo: &Repository) -> Result<(), GitError> {
+    let repo_lock = repo.inner.write().unwrap();
+    let state = repo_lock.state();
+
+    if state != git2::RepositoryState::Merge {
+        return Err(GitError::OperationFailed {
+            operation: "quit_merge".to_string(),
+            details: "当前仓库没有进行中的合并状态".to_string(),
+        });
+    }
+
+    repo_lock
+        .cleanup_state()
+        .map_err(|e| GitError::OperationFailed {
+            operation: "quit_merge".to_string(),
+            details: format!("Failed to clear merge state: {e}"),
+        })?;
+
+    info!("Merge state cleared");
+    Ok(())
 }
 
 /// Convert git2 repository state to our state enum
