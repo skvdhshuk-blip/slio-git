@@ -3831,7 +3831,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     let branch_name = state.stash_panel.unstash_branch_name.clone();
                     if branch_name.trim().is_empty() {
                         state.stash_panel.error = Some(i18n.branch_name_empty.to_string());
-                    } else if let Ok(repo) = require_repository(state) {
+                    } else { match require_repository(state) { Ok(repo) => {
                         match git_core::unstash_as_branch(&repo, index, &branch_name) {
                             Ok(()) => {
                                 let _ = refresh_repository_after_action(state, &repo, false, i18n);
@@ -3848,7 +3848,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 );
                             }
                         }
-                    }
+                    } _ => {}}}
                 }
             }
             StashPanelMessage::CancelUnstashDialog => {

@@ -18,7 +18,7 @@ pub fn subscription(repo_path: PathBuf) -> Subscription<RepositoryWatchEvent> {
     Subscription::run_with(repo_path, |repo_path| watch_repository(repo_path.as_path()))
 }
 
-fn watch_repository(repo_path: &Path) -> impl iced::futures::Stream<Item = RepositoryWatchEvent> {
+fn watch_repository(repo_path: &Path) -> impl iced::futures::Stream<Item = RepositoryWatchEvent> + use<> {
     let repo_path = repo_path.to_path_buf();
 
     stream::channel(32, async move |mut output| {

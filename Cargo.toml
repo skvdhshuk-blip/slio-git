@@ -6,8 +6,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.26"
-edition = "2021"
+version = "0.0.27"
+edition = "2024"
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 authors = ["slio-git contributors"]
 repository = "https://github.com/your-org/slio-git"

@@ -110,7 +110,7 @@ pub fn unstage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
     })?;
 
     // If file exists in HEAD tree, we need to restore it to index from HEAD
-    if let Ok(entry) = tree.get_path(path) {
+    match tree.get_path(path) { Ok(entry) => {
         // Remove the staged version
         index
             .remove_path(path)
@@ -146,10 +146,10 @@ pub fn unstage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
                 operation: "unstage_file".to_string(),
                 details: e.to_string(),
             })?;
-    } else {
+    } _ => {
         // File didn't exist in HEAD, just remove from index
         index.remove_path(path).ok(); // Ignore error if not in index
-    }
+    }}
 
     index.write().map_err(|e| GitError::OperationFailed {
         operation: "unstage_file".to_string(),
