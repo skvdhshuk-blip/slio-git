@@ -3,9 +3,9 @@
 //! Provides functionality to compare two commits.
 
 use crate::theme::{self, BadgeTone, Surface};
-use crate::widgets::{self, button, diff_viewer, scrollable, OptionalPush};
-use git_core::diff::{diff_commits, Diff};
-use git_core::history::{get_history, HistoryEntry};
+use crate::widgets::{self, OptionalPush, button, diff_viewer, scrollable};
+use git_core::diff::{Diff, diff_commits};
+use git_core::history::{HistoryEntry, get_history};
 use git_core::repository::Repository;
 use iced::widget::{Column, Container, PickList, Row, Text};
 use iced::{Element, Length};

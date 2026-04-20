@@ -6,12 +6,12 @@ use crate::theme::{self, BadgeTone, Surface};
 use crate::widgets::syntax_highlighting::{
     CodeLineHighlighter, CodeSyntaxHighlighter, HighlightedSegment,
 };
-use crate::widgets::{self, button, scrollable, OptionalPush};
+use crate::widgets::{self, OptionalPush, button, scrollable};
 use git_core::diff::{
-    join_lines_preserving_trailing_newline, ConflictHunk, ConflictHunkType, ConflictLineType,
-    MergeChunkType, ThreeWayDiff,
+    ConflictHunk, ConflictHunkType, ConflictLineType, MergeChunkType, ThreeWayDiff,
+    join_lines_preserving_trailing_newline,
 };
-use iced::widget::{container, Button, Column, Container, Row, Space, Text};
+use iced::widget::{Button, Column, Container, Row, Space, Text, container};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
 /// Message types for conflict resolver.
@@ -404,9 +404,7 @@ impl ConflictResolver {
                                 .push(widgets::info_chip::<ConflictResolverMessage>(
                                     match conflict_type {
                                         ConflictHunkType::Modified => "Needs manual resolution",
-                                        ConflictHunkType::BothChanged => {
-                                            "Both sides already agree"
-                                        }
+                                        ConflictHunkType::BothChanged => "Both sides already agree",
                                         ConflictHunkType::OursOnly => "Left side can be accepted",
                                         ConflictHunkType::TheirsOnly => {
                                             "Right side can be accepted"

@@ -1,8 +1,8 @@
 //! Styled text input helpers.
 
 use crate::theme;
-use crate::widgets::{button::compact_ghost, OptionalPush};
-use iced::widget::{text, Container, Row, Text, TextInput};
+use crate::widgets::{OptionalPush, button::compact_ghost};
+use iced::widget::{Container, Row, Text, TextInput, text};
 use iced::{Element, Length};
 
 pub fn styled<'a, Message: Clone + 'a>(

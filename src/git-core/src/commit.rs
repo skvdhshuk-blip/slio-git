@@ -98,9 +98,9 @@ pub fn create_commit(
             &parent_refs,
         )
         .map_err(|e| GitError::OperationFailed {
-        operation: "create_commit".to_string(),
-        details: e.to_string(),
-    })?;
+            operation: "create_commit".to_string(),
+            details: e.to_string(),
+        })?;
 
     if repository_state == git2::RepositoryState::Merge {
         repo_lock
@@ -116,27 +116,30 @@ pub fn create_commit(
     Ok(commit_oid.to_string())
 }
 
-fn load_merge_head_parents(
-    repo: &git2::Repository,
-) -> Result<Vec<git2::Commit<'_>>, GitError> {
+fn load_merge_head_parents(repo: &git2::Repository) -> Result<Vec<git2::Commit<'_>>, GitError> {
     let merge_head_path = repo.path().join("MERGE_HEAD");
-    let merge_head_contents = fs::read_to_string(&merge_head_path).map_err(|e| {
-        GitError::OperationFailed {
+    let merge_head_contents =
+        fs::read_to_string(&merge_head_path).map_err(|e| GitError::OperationFailed {
             operation: "create_commit".to_string(),
             details: format!("Failed to read MERGE_HEAD: {e}"),
-        }
-    })?;
+        })?;
 
     let mut commits = Vec::new();
-    for commit_id in merge_head_contents.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for commit_id in merge_head_contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         let oid = git2::Oid::from_str(commit_id).map_err(|e| GitError::OperationFailed {
             operation: "create_commit".to_string(),
             details: format!("Invalid MERGE_HEAD commit id '{commit_id}': {e}"),
         })?;
-        let commit = repo.find_commit(oid).map_err(|e| GitError::OperationFailed {
-            operation: "create_commit".to_string(),
-            details: format!("Failed to load MERGE_HEAD commit '{commit_id}': {e}"),
-        })?;
+        let commit = repo
+            .find_commit(oid)
+            .map_err(|e| GitError::OperationFailed {
+                operation: "create_commit".to_string(),
+                details: format!("Failed to load MERGE_HEAD commit '{commit_id}': {e}"),
+            })?;
         commits.push(commit);
     }
 
@@ -343,7 +346,9 @@ pub fn get_commit_changed_files(
                     .clone()
                     .or_else(|| old_path.clone())
                     .unwrap_or_default(),
-                old_path: (status == CommitChangeStatus::Renamed).then_some(old_path).flatten(),
+                old_path: (status == CommitChangeStatus::Renamed)
+                    .then_some(old_path)
+                    .flatten(),
                 status,
             }
         })
@@ -436,9 +441,9 @@ pub fn save_recent_message(repo_path: &Path, message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_commit_changed_files, CommitChangeStatus};
+    use super::{CommitChangeStatus, get_commit_changed_files};
     use crate::commit;
-    use crate::diff::{resolve_conflict, ConflictResolution};
+    use crate::diff::{ConflictResolution, resolve_conflict};
     use crate::index;
     use crate::repository::{Repository, RepositoryState};
     use std::fs;
@@ -649,12 +654,8 @@ mod tests {
         let repo = Repository::discover(temp_dir.path()).expect("discover conflicted repo");
         assert_eq!(repo.get_state(), RepositoryState::Merging);
 
-        resolve_conflict(
-            &repo,
-            Path::new("shared.txt"),
-            ConflictResolution::Ours,
-        )
-        .expect("resolve conflict");
+        resolve_conflict(&repo, Path::new("shared.txt"), ConflictResolution::Ours)
+            .expect("resolve conflict");
 
         let commit_id =
             commit::create_commit(&repo, "merge resolved", "", "").expect("create merge commit");

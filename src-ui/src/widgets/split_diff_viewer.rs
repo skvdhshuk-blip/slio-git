@@ -2,7 +2,7 @@
 
 use crate::theme::{self, BadgeTone};
 use crate::widgets::diff_editor::{DiffEditorEvent, SplitDiffEditorState};
-use crate::widgets::{self, button, diff_core, OptionalPush};
+use crate::widgets::{self, OptionalPush, button, diff_core};
 use git_core::diff::{EditorDiffHunk, EditorDiffModel};
 use iced::widget::{Column, Container, Row, Space, Text};
 use iced::{Alignment, Element, Length};

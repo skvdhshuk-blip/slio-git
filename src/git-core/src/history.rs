@@ -285,35 +285,39 @@ pub fn get_history_for_path(
                         .ok()
                         .and_then(|t| t.get_path(target_path).ok())
                         .is_some()
-                } else { match commit.parent(0) { Ok(parent) => {
-                    // Compare parent tree to this commit's tree
-                    let old_tree = parent.tree().ok();
-                    let new_tree = commit.tree().ok();
-                    match (old_tree, new_tree) { (Some(old), Some(new)) => {
-                        let diff = repo_lock
-                            .diff_tree_to_tree(Some(&old), Some(&new), None)
-                            .ok();
-                        diff.map(|d| {
-                            d.deltas().any(|delta| {
-                                delta
-                                    .new_file()
-                                    .path()
-                                    .map(|p| p == target_path)
+                } else {
+                    match commit.parent(0) {
+                        Ok(parent) => {
+                            // Compare parent tree to this commit's tree
+                            let old_tree = parent.tree().ok();
+                            let new_tree = commit.tree().ok();
+                            match (old_tree, new_tree) {
+                                (Some(old), Some(new)) => {
+                                    let diff = repo_lock
+                                        .diff_tree_to_tree(Some(&old), Some(&new), None)
+                                        .ok();
+                                    diff.map(|d| {
+                                        d.deltas().any(|delta| {
+                                            delta
+                                                .new_file()
+                                                .path()
+                                                .map(|p| p == target_path)
+                                                .unwrap_or(false)
+                                                || delta
+                                                    .old_file()
+                                                    .path()
+                                                    .map(|p| p == target_path)
+                                                    .unwrap_or(false)
+                                        })
+                                    })
                                     .unwrap_or(false)
-                                    || delta
-                                        .old_file()
-                                        .path()
-                                        .map(|p| p == target_path)
-                                        .unwrap_or(false)
-                            })
-                        })
-                        .unwrap_or(false)
-                    } _ => {
-                        false
-                    }}
-                } _ => {
-                    false
-                }}};
+                                }
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    }
+                };
 
                 if touches_path {
                     history.push(entry_from_commit(&commit, oid));

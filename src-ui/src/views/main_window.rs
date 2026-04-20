@@ -8,9 +8,9 @@ use crate::state::{
 };
 use crate::theme::{self, BadgeTone, ButtonTone, Surface};
 use crate::views;
-use crate::widgets::{self, button, scrollable, OptionalPush};
+use crate::widgets::{self, OptionalPush, button, scrollable};
 use git_core::remote::RemoteInfo;
-use iced::widget::{rule, stack, text, Button, Column, Container, Row, Space, Text};
+use iced::widget::{Button, Column, Container, Row, Space, Text, rule, stack, text};
 use iced::{Alignment, Element, Length};
 use std::path::PathBuf;
 

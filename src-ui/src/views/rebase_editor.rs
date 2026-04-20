@@ -4,9 +4,9 @@
 
 use crate::i18n::I18n;
 use crate::theme::{self, BadgeTone, Surface};
-use crate::widgets::{self, button, scrollable, text_input, OptionalPush};
+use crate::widgets::{self, OptionalPush, button, scrollable, text_input};
 use git_core::Repository;
-use iced::widget::{mouse_area, text, Button, Column, Container, Row, Text};
+use iced::widget::{Button, Column, Container, Row, Text, mouse_area, text};
 use iced::{Alignment, Color, Element, Length};
 
 const FIRST_TODO_ACTIONS: [&str; 4] = ["pick", "reword", "edit", "drop"];

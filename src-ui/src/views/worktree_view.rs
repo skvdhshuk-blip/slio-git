@@ -3,8 +3,8 @@
 use crate::i18n::I18n;
 use crate::theme::{self, BadgeTone, Surface};
 use crate::widgets::{self, button, scrollable};
-use git_core::worktree::{self, WorkingTree};
 use git_core::Repository;
+use git_core::worktree::{self, WorkingTree};
 use iced::widget::{Column, Container, Row, Space, Text};
 use iced::{Alignment, Element, Length};
 

@@ -4,12 +4,12 @@
 
 use crate::i18n::I18n;
 use crate::theme::{self, BadgeTone, Surface};
-use crate::widgets::{self, button, scrollable, text_input, OptionalPush};
+use crate::widgets::{self, OptionalPush, button, scrollable, text_input};
 use git_core::{
-    stash::{list_stashes, stash_drop, stash_pop, StashInfo},
     Repository,
+    stash::{StashInfo, list_stashes, stash_drop, stash_pop},
 };
-use iced::widget::{text, Button, Column, Container, Row, Text};
+use iced::widget::{Button, Column, Container, Row, Text, text};
 use iced::{Alignment, Element, Length};
 
 /// Message types for stash panel.

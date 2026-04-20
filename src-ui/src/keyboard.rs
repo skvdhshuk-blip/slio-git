@@ -4,8 +4,8 @@
 
 #![allow(dead_code)]
 
-use iced::keyboard;
 use iced::Event;
+use iced::keyboard;
 
 /// Keyboard shortcut actions
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -248,7 +248,7 @@ pub fn action_description(action: ShortcutAction) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{action_description, get_shortcuts, KeyboardShortcut, ShortcutAction};
+    use super::{KeyboardShortcut, ShortcutAction, action_description, get_shortcuts};
     use iced::keyboard::{Key, Modifiers};
 
     fn has_shortcut(shortcut: &KeyboardShortcut, modifiers: Modifiers, key: Key) -> bool {

@@ -1,7 +1,7 @@
 //! Status icon helpers for file changes and shell badges.
 
-use crate::theme::{darcula, BadgeTone};
-use iced::widget::{container, Container, Text};
+use crate::theme::{BadgeTone, darcula};
+use iced::widget::{Container, Text, container};
 use iced::{Background, Border, Color, Element};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

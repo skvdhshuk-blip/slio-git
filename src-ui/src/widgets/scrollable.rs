@@ -1,8 +1,8 @@
 //! Styled scrollable helpers.
 
 use crate::theme;
-use iced::widget::{scrollable, Scrollable};
 use iced::Element;
+use iced::widget::{Scrollable, scrollable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScrollbarRole {

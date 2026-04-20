@@ -1,7 +1,7 @@
 use crate::theme::{self, BadgeTone};
 use crate::widgets::{self, OptionalPush};
 use git_core::diff::FileDiff;
-use iced::widget::{text, Column, Container, Row, Text};
+use iced::widget::{Column, Container, Row, Text, text};
 use iced::{Alignment, Element, Length};
 use std::path::Path;
 

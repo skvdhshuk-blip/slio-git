@@ -5,11 +5,11 @@
 
 use crate::theme::{self, BadgeTone, Surface};
 use crate::widgets::diff_core;
-use crate::widgets::{self, button, OptionalPush};
-use git_core::diff::{join_lines_preserving_trailing_newline, MergeChunkType, MergeEditorModel};
+use crate::widgets::{self, OptionalPush, button};
+use git_core::diff::{MergeChunkType, MergeEditorModel, join_lines_preserving_trailing_newline};
 use iced::widget::canvas::{self, Canvas};
 use iced::widget::{Column, Container, Row, Space, Stack, Text};
-use iced::{mouse, Alignment, Element, Length, Point, Rectangle, Renderer, Size, Theme};
+use iced::{Alignment, Element, Length, Point, Rectangle, Renderer, Size, Theme, mouse};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
 use std::cell::Cell;
 use std::ops::Range;
@@ -301,12 +301,8 @@ impl MergeEditorState {
                 self.current_chunk = Some(id);
                 self.scroll_to_chunk(id, HUNK_NAV_SYNC_POINT)
             }
-            MergeEditorEvent::PrevChunk => {
-                self.navigate_conflict(false)
-            }
-            MergeEditorEvent::NextChunk => {
-                self.navigate_conflict(true)
-            }
+            MergeEditorEvent::PrevChunk => self.navigate_conflict(false),
+            MergeEditorEvent::NextChunk => self.navigate_conflict(true),
             MergeEditorEvent::Editor { pane, message } => self.handle_editor_event(pane, message),
             MergeEditorEvent::BackToList | MergeEditorEvent::Apply => iced::Task::none(),
         }
@@ -507,14 +503,28 @@ impl MergeEditorState {
         let center_anchor = anchor_line_for_fraction(fraction, source_total_lines);
         let left_anchor = self
             .map_anchor(MergePane::Center, MergePane::Left, center_anchor)
-            .unwrap_or(scale_anchor(center_anchor, source_total_lines, self.left_line_count));
+            .unwrap_or(scale_anchor(
+                center_anchor,
+                source_total_lines,
+                self.left_line_count,
+            ));
         let right_anchor = self
             .map_anchor(MergePane::Center, MergePane::Right, center_anchor)
-            .unwrap_or(scale_anchor(center_anchor, source_total_lines, self.right_line_count));
+            .unwrap_or(scale_anchor(
+                center_anchor,
+                source_total_lines,
+                self.right_line_count,
+            ));
 
-        self.current_chunk = current_chunk_from_anchor(&self.chunk_layouts, MergePane::Center, center_anchor);
+        self.current_chunk =
+            current_chunk_from_anchor(&self.chunk_layouts, MergePane::Center, center_anchor);
 
-        self.scroll_to_anchor_lines(left_anchor, center_anchor, right_anchor, OVERVIEW_SYNC_POINT)
+        self.scroll_to_anchor_lines(
+            left_anchor,
+            center_anchor,
+            right_anchor,
+            OVERVIEW_SYNC_POINT,
+        )
     }
 
     fn scroll_to_current_chunk(&mut self) -> iced::Task<MergeEditorEvent> {
@@ -528,7 +538,11 @@ impl MergeEditorState {
         chunk_id: usize,
         sync_point: f32,
     ) -> iced::Task<MergeEditorEvent> {
-        let Some(layout) = self.chunk_layouts.iter().find(|layout| layout.chunk_id == chunk_id) else {
+        let Some(layout) = self
+            .chunk_layouts
+            .iter()
+            .find(|layout| layout.chunk_id == chunk_id)
+        else {
             return iced::Task::none();
         };
 
@@ -776,7 +790,11 @@ impl MergeEditorState {
 
         let active_range = self
             .current_chunk
-            .and_then(|id| self.chunk_layouts.iter().find(|layout| layout.chunk_id == id))
+            .and_then(|id| {
+                self.chunk_layouts
+                    .iter()
+                    .find(|layout| layout.chunk_id == id)
+            })
             .map(|layout| match pane {
                 MergePane::Left => layout.left_range.clone(),
                 MergePane::Right => layout.right_range.clone(),
@@ -874,8 +892,11 @@ impl MergeEditorState {
 
     fn overview_viewport_range(&self) -> Range<f32> {
         let editor = &self.center;
-        let total_height =
-            content_height(self.pane_line_count(MergePane::Center), editor.line_height()).max(1.0);
+        let total_height = content_height(
+            self.pane_line_count(MergePane::Center),
+            editor.line_height(),
+        )
+        .max(1.0);
         let start = (editor.viewport_scroll() / total_height).clamp(0.0, 1.0);
         let end = ((editor.viewport_scroll() + editor.viewport_height()) / total_height)
             .clamp(start, 1.0);
@@ -1091,10 +1112,7 @@ impl canvas::Program<MergeEditorEvent> for MergeActionGutterCanvas {
                 MIN_EMPTY_BLOCK_HEIGHT,
             );
 
-            if !(left.1 < 0.0
-                || right.1 < 0.0
-                || left.0 > bounds.height
-                || right.0 > bounds.height)
+            if !(left.1 < 0.0 || right.1 < 0.0 || left.0 > bounds.height || right.0 > bounds.height)
             {
                 let curve = canvas::Path::new(|builder| {
                     builder.move_to(Point::new(0.0, left.0));
@@ -1134,13 +1152,8 @@ impl canvas::Program<MergeEditorEvent> for MergeActionGutterCanvas {
                 LinkMapSide::Left => (self.right_scroll, self.right_line_height),
                 LinkMapSide::Right => (self.left_scroll, self.left_line_height),
             };
-            let row_bounds = gutter_row_bounds(
-                self.side,
-                block,
-                anchor_scroll,
-                anchor_line_height,
-                bounds,
-            );
+            let row_bounds =
+                gutter_row_bounds(self.side, block, anchor_scroll, anchor_line_height, bounds);
             if row_bounds.y + row_bounds.height < 0.0 || row_bounds.y > bounds.height {
                 continue;
             }
@@ -1382,7 +1395,8 @@ fn build_chunk_layouts(
             Some(ChunkResolution::Base) => chunk.lines_base.clone(),
             None => {
                 // Unresolved: show conflict markers
-                let mut conflict_lines = Vec::with_capacity(chunk.lines_ours.len() + chunk.lines_theirs.len() + 3);
+                let mut conflict_lines =
+                    Vec::with_capacity(chunk.lines_ours.len() + chunk.lines_theirs.len() + 3);
                 conflict_lines.push("<<<<<<< ours".to_string());
                 conflict_lines.extend(chunk.lines_ours.iter().cloned());
                 conflict_lines.push("=======".to_string());
@@ -1881,10 +1895,7 @@ fn gutter_row_bounds(
         ACTION_ROW_HEIGHT,
     );
     let desired_y = top + ACTION_ROW_PADDING;
-    let y = desired_y.clamp(
-        2.0,
-        (bounds.height - ACTION_ROW_HEIGHT - 2.0).max(2.0),
-    );
+    let y = desired_y.clamp(2.0, (bounds.height - ACTION_ROW_HEIGHT - 2.0).max(2.0));
     let width = (bounds.width - ACTION_ROW_PADDING * 2.0).max(1.0);
     let height = ACTION_ROW_HEIGHT.min((bottom - top).max(ACTION_ROW_HEIGHT));
 
@@ -1909,11 +1920,7 @@ fn gutter_button_bounds(row_bounds: Rectangle, index: usize, button_count: usize
     }
 }
 
-fn gutter_row_fill(
-    chunk_type: MergeChunkType,
-    resolved: bool,
-    active_chunk: bool,
-) -> iced::Color {
+fn gutter_row_fill(chunk_type: MergeChunkType, resolved: bool, active_chunk: bool) -> iced::Color {
     let base = merge_link_fill(chunk_type, resolved, active_chunk);
     if active_chunk {
         blend(base, theme::darcula::ACCENT, 0.08)
@@ -1941,15 +1948,27 @@ fn gutter_button_style(
 ) -> (iced::Color, iced::Color, iced::Color) {
     let (fill, border) = match kind {
         GutterButtonKind::Base => (
-            blend(theme::darcula::BG_RAISED, theme::darcula::WARNING, if active { 0.24 } else { 0.10 }),
+            blend(
+                theme::darcula::BG_RAISED,
+                theme::darcula::WARNING,
+                if active { 0.24 } else { 0.10 },
+            ),
             theme::darcula::WARNING.scale_alpha(if active { 0.78 } else { 0.42 }),
         ),
         GutterButtonKind::Ours => (
-            blend(theme::darcula::BG_RAISED, theme::darcula::ACCENT, if active { 0.28 } else { 0.12 }),
+            blend(
+                theme::darcula::BG_RAISED,
+                theme::darcula::ACCENT,
+                if active { 0.28 } else { 0.12 },
+            ),
             theme::darcula::ACCENT.scale_alpha(if active { 0.82 } else { 0.48 }),
         ),
         GutterButtonKind::Theirs => (
-            blend(theme::darcula::BG_RAISED, theme::darcula::DANGER, if active { 0.28 } else { 0.12 }),
+            blend(
+                theme::darcula::BG_RAISED,
+                theme::darcula::DANGER,
+                if active { 0.28 } else { 0.12 },
+            ),
             theme::darcula::DANGER.scale_alpha(if active { 0.82 } else { 0.48 }),
         ),
     };
@@ -1999,7 +2018,10 @@ fn gutter_event_at_position(
         }
 
         for (index, button) in buttons.iter().enumerate() {
-            if point_in_rect(point, gutter_button_bounds(row_bounds, index, buttons.len())) {
+            if point_in_rect(
+                point,
+                gutter_button_bounds(row_bounds, index, buttons.len()),
+            ) {
                 return Some(button.event.clone());
             }
         }
@@ -2026,7 +2048,9 @@ fn chunk_range_for_pane(layout: &ChunkLayout, pane: MergePane) -> Range<usize> {
 }
 
 fn chunk_index(layouts: &[ChunkLayout], chunk_id: usize) -> Option<usize> {
-    layouts.iter().position(|layout| layout.chunk_id == chunk_id)
+    layouts
+        .iter()
+        .position(|layout| layout.chunk_id == chunk_id)
 }
 
 fn current_chunk_from_anchor(
@@ -2066,7 +2090,11 @@ fn conflict_position_for_chunk(layouts: &[ChunkLayout], chunk_id: usize) -> Opti
     conflicts
         .iter()
         .position(|(_, conflict_id)| *conflict_id == chunk_id)
-        .or_else(|| conflicts.iter().position(|(index, _)| *index >= current_index))
+        .or_else(|| {
+            conflicts
+                .iter()
+                .position(|(index, _)| *index >= current_index)
+        })
         .or(Some(conflicts.len().saturating_sub(1)))
 }
 
@@ -2090,13 +2118,21 @@ fn navigate_conflict_target(
         Some(index) if forward => conflicts
             .iter()
             .find(|(conflict_index, _)| *conflict_index > index)
-            .or_else(|| conflicts.iter().find(|(conflict_index, _)| *conflict_index == index))
+            .or_else(|| {
+                conflicts
+                    .iter()
+                    .find(|(conflict_index, _)| *conflict_index == index)
+            })
             .or_else(|| conflicts.last()),
         Some(index) => conflicts
             .iter()
             .rev()
             .find(|(conflict_index, _)| *conflict_index < index)
-            .or_else(|| conflicts.iter().find(|(conflict_index, _)| *conflict_index == index))
+            .or_else(|| {
+                conflicts
+                    .iter()
+                    .find(|(conflict_index, _)| *conflict_index == index)
+            })
             .or_else(|| conflicts.first()),
         None if forward => conflicts.first(),
         None => conflicts.last(),
@@ -2204,14 +2240,8 @@ mod tests {
     fn navigate_conflict_target_skips_non_conflict_chunks() {
         let layouts = sample_layouts();
 
-        assert_eq!(
-            navigate_conflict_target(&layouts, Some(2), true),
-            Some(3)
-        );
-        assert_eq!(
-            navigate_conflict_target(&layouts, Some(2), false),
-            Some(1)
-        );
+        assert_eq!(navigate_conflict_target(&layouts, Some(2), true), Some(3));
+        assert_eq!(navigate_conflict_target(&layouts, Some(2), false), Some(1));
     }
 
     #[test]
@@ -2244,7 +2274,11 @@ mod tests {
         let buttons = gutter_buttons_for_block(
             LinkMapSide::Left,
             &block,
-            &[Some(ChunkResolution::Base), None, Some(ChunkResolution::Ours)],
+            &[
+                Some(ChunkResolution::Base),
+                None,
+                Some(ChunkResolution::Ours),
+            ],
         );
 
         assert_eq!(buttons.len(), 2);

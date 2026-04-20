@@ -453,12 +453,12 @@ fn mix_colors(base: Color, overlay: Color, amount: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::{
-        diff_code_render_config, resolve_syntax_for_path, sanitize_content, CodeSyntaxHighlighter,
-        FileSyntaxHighlighter, HighlightRenderConfig,
+        CodeSyntaxHighlighter, FileSyntaxHighlighter, HighlightRenderConfig,
+        diff_code_render_config, resolve_syntax_for_path, sanitize_content,
     };
     use crate::theme;
     use git_core::diff::FileDiff;
-    use iced::{widget::text, Length};
+    use iced::{Length, widget::text};
 
     #[test]
     fn resolve_syntax_for_common_extensions() {

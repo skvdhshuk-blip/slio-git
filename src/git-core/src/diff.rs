@@ -496,7 +496,9 @@ fn parse_conflict_hunks(ours: &str, theirs: &str, base: &str) -> Vec<ConflictHun
     build_merge_regions(&our_lines, &their_lines, &base_lines)
         .into_iter()
         .filter(|region| region.chunk_type != MergeChunkType::Equal)
-        .map(|region| build_conflict_hunk_from_region(&region, &our_lines, &their_lines, &base_lines))
+        .map(|region| {
+            build_conflict_hunk_from_region(&region, &our_lines, &their_lines, &base_lines)
+        })
         .collect()
 }
 
@@ -1326,9 +1328,7 @@ pub fn build_editor_diff_model(
     }
 
     Ok(build_editor_diff_model_from_file_contents(
-        file_diff,
-        &old_bytes,
-        &new_bytes,
+        file_diff, &old_bytes, &new_bytes,
     ))
 }
 
@@ -1731,10 +1731,10 @@ pub fn build_full_file_diff(
 
 #[cfg(test)]
 mod tests {
-    use super::build_editor_diff_model;
-    use super::diff_file_to_index;
     use super::DiffLineOrigin;
     use super::EditorDiffBlockKind;
+    use super::build_editor_diff_model;
+    use super::diff_file_to_index;
     use crate::commit;
     use crate::index;
     use crate::repository::Repository;
@@ -1780,13 +1780,15 @@ mod tests {
         assert_eq!(diff.total_additions, 1);
         assert_eq!(diff.files[0].additions, 1);
         assert!(!diff.files[0].hunks.is_empty());
-        assert!(diff.files[0]
-            .hunks
-            .iter()
-            .flat_map(|hunk| hunk.lines.iter())
-            .any(|line| {
-                line.origin == DiffLineOrigin::Addition && line.content.contains("line two")
-            }));
+        assert!(
+            diff.files[0]
+                .hunks
+                .iter()
+                .flat_map(|hunk| hunk.lines.iter())
+                .any(|line| {
+                    line.origin == DiffLineOrigin::Addition && line.content.contains("line two")
+                })
+        );
     }
 
     #[test]
@@ -1808,13 +1810,15 @@ mod tests {
         assert_eq!(diff.total_additions, 1);
         assert_eq!(diff.files[0].additions, 1);
         assert!(!diff.files[0].hunks.is_empty());
-        assert!(diff.files[0]
-            .hunks
-            .iter()
-            .flat_map(|hunk| hunk.lines.iter())
-            .any(|line| {
-                line.origin == DiffLineOrigin::Addition && line.content.contains("fresh line")
-            }));
+        assert!(
+            diff.files[0]
+                .hunks
+                .iter()
+                .flat_map(|hunk| hunk.lines.iter())
+                .any(|line| {
+                    line.origin == DiffLineOrigin::Addition && line.content.contains("fresh line")
+                })
+        );
     }
 
     #[test]
@@ -1854,10 +1858,12 @@ mod tests {
 
         assert_eq!(replace_block.old_lines.len(), 1);
         assert_eq!(replace_block.new_lines.len(), 1);
-        assert!(replace_block.old_lines[0]
-            .inline_changes
-            .iter()
-            .any(|span| span.changed));
+        assert!(
+            replace_block.old_lines[0]
+                .inline_changes
+                .iter()
+                .any(|span| span.changed)
+        );
         assert!(
             model.line_map.iter().any(|entry| {
                 entry.kind == EditorDiffBlockKind::Replace
@@ -2174,9 +2180,7 @@ fn collect_change_ranges(segments: &[SideSegment]) -> Vec<std::ops::Range<usize>
         .collect()
 }
 
-fn merge_change_ranges(
-    mut ranges: Vec<std::ops::Range<usize>>,
-) -> Vec<std::ops::Range<usize>> {
+fn merge_change_ranges(mut ranges: Vec<std::ops::Range<usize>>) -> Vec<std::ops::Range<usize>> {
     if ranges.is_empty() {
         return Vec::new();
     }
@@ -2279,7 +2283,8 @@ fn side_cursor_at_boundary(segments: &[SideSegment], boundary: usize) -> usize {
             continue;
         }
 
-        if segment.base_range.start == segment.base_range.end && segment.base_range.start == boundary
+        if segment.base_range.start == segment.base_range.end
+            && segment.base_range.start == boundary
         {
             break;
         }
@@ -2327,7 +2332,7 @@ pub fn join_lines_preserving_trailing_newline(lines: Vec<String>, originals: &[&
 
 #[cfg(test)]
 mod merge_model_tests {
-    use super::{auto_merge_conflict, ConflictHunkType, MergeChunkType, ThreeWayDiff};
+    use super::{ConflictHunkType, MergeChunkType, ThreeWayDiff, auto_merge_conflict};
 
     fn diff_from_contents(base: &str, ours: &str, theirs: &str) -> ThreeWayDiff {
         let mut diff = ThreeWayDiff {
@@ -2370,7 +2375,10 @@ mod merge_model_tests {
         );
 
         let merged = auto_merge_conflict(&diff);
-        assert!(!merged.has_conflicts, "independent insertions should auto-merge");
+        assert!(
+            !merged.has_conflicts,
+            "independent insertions should auto-merge"
+        );
         assert_eq!(
             merged.content,
             "alpha\nours insert\nbravo\ntheirs insert\ncharlie\n"
@@ -2388,7 +2396,10 @@ mod merge_model_tests {
         let model = diff.to_merge_editor_model();
         assert_eq!(model.chunks.len(), 2);
         assert_eq!(model.chunks[1].chunk_type, MergeChunkType::BothChanged);
-        assert_eq!(super::classify_hunk_type(&diff.hunks[0]), ConflictHunkType::BothChanged);
+        assert_eq!(
+            super::classify_hunk_type(&diff.hunks[0]),
+            ConflictHunkType::BothChanged
+        );
 
         let merged = auto_merge_conflict(&diff);
         assert!(!merged.has_conflicts);

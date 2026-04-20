@@ -2,7 +2,7 @@
 
 use crate::theme::{self, BadgeTone};
 // OptionalPush removed — no longer needed after compact menu refactor
-use iced::widget::{button, container, Button, Column, Container, Row, Text};
+use iced::widget::{Button, Column, Container, Row, Text, button, container};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme, Vector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

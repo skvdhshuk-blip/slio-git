@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use iced::widget::{button, checkbox, container, rule, scrollable, text_editor, text_input};
-use iced::{border, Background, Border, Color, Shadow, Theme, Vector};
+use iced::{Background, Border, Color, Shadow, Theme, Vector, border};
 
 /// Historical module name kept so the rest of the UI can reuse existing imports.
 /// Re-themed to MotionSites dark stage palette.

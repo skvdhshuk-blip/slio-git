@@ -6,8 +6,8 @@
 use crate::i18n::I18n;
 use crate::theme::{self, BadgeTone, Surface};
 use crate::views::commit_dialog::{CommitDialogMessage, CommitDialogState};
-use crate::widgets::{self, button, OptionalPush};
-use iced::widget::{text, text_editor, Column, Container, Row, Space, Text};
+use crate::widgets::{self, OptionalPush, button};
+use iced::widget::{Column, Container, Row, Space, Text, text, text_editor};
 use iced::{Alignment, Element, Length};
 
 /// Build an embedded commit panel view backed by commit-dialog state.

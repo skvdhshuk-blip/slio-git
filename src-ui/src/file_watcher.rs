@@ -1,11 +1,11 @@
 //! Repository file watching for event-driven workspace refresh.
 
-use iced::{futures::SinkExt, stream, Subscription};
+use iced::{Subscription, futures::SinkExt, stream};
 use log::{info, warn};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
-use tokio::time::{sleep_until, Duration, Instant as TokioInstant};
+use tokio::time::{Duration, Instant as TokioInstant, sleep_until};
 
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(180);
 
@@ -18,7 +18,9 @@ pub fn subscription(repo_path: PathBuf) -> Subscription<RepositoryWatchEvent> {
     Subscription::run_with(repo_path, |repo_path| watch_repository(repo_path.as_path()))
 }
 
-fn watch_repository(repo_path: &Path) -> impl iced::futures::Stream<Item = RepositoryWatchEvent> + use<> {
+fn watch_repository(
+    repo_path: &Path,
+) -> impl iced::futures::Stream<Item = RepositoryWatchEvent> + use<> {
     let repo_path = repo_path.to_path_buf();
 
     stream::channel(32, async move |mut output| {

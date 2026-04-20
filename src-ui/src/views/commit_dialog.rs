@@ -5,11 +5,11 @@
 use crate::components::status_icons::FileStatus;
 use crate::i18n::I18n;
 use crate::theme::{self, BadgeTone, Surface};
-use crate::widgets::{self, button, diff_viewer, scrollable, OptionalPush};
+use crate::widgets::{self, OptionalPush, button, diff_viewer, scrollable};
 use git_core::commit::CommitInfo;
 use git_core::diff::{Diff, FileDiff};
 use git_core::index::Change;
-use iced::widget::{text, text_editor, Button, Checkbox, Column, Container, Row, Space, Text};
+use iced::widget::{Button, Checkbox, Column, Container, Row, Space, Text, text, text_editor};
 use iced::{Alignment, Element, Length};
 
 /// Message types for commit dialog.
@@ -743,7 +743,7 @@ fn amend_checkbox_message(checked: bool) -> CommitDialogMessage {
 
 #[cfg(test)]
 mod tests {
-    use super::{amend_checkbox_message, CommitDialogMessage, CommitDialogState};
+    use super::{CommitDialogMessage, CommitDialogState, amend_checkbox_message};
     use git_core::commit::CommitInfo;
     use git_core::diff::Diff;
     use git_core::index::{Change, ChangeStatus};

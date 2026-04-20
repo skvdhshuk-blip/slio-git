@@ -14,7 +14,7 @@ pub mod worktree_view;
 use crate::state::{FeedbackLevel, FeedbackState, ToastNotificationState};
 use crate::theme::{self, BadgeTone, Surface};
 use crate::widgets::{self, OptionalPush};
-use iced::widget::{container, Button, Column, Container, Row, Space, Text};
+use iced::widget::{Button, Column, Container, Row, Space, Text, container};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
 pub fn render_feedback_banner<'a, Message: Clone + 'a>(

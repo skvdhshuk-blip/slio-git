@@ -22,7 +22,7 @@ pub mod text_input;
 pub mod tree_widget;
 
 use crate::theme::{self, BadgeTone, Surface};
-use iced::widget::{container, text, Checkbox, Column, Container, Row, Space, Text};
+use iced::widget::{Checkbox, Column, Container, Row, Space, Text, container, text};
 use iced::{Alignment, Background, Element, Length};
 
 pub trait OptionalPush<'a, Message, Theme, Renderer>: Sized {
