@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use log::{error, info, warn, LevelFilter};
+use log::{LevelFilter, error, info, warn};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;

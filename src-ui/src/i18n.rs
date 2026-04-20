@@ -1363,8 +1363,7 @@ impl I18n {
             current_branch: "当前分支",
             no_repository: "尚未打开仓库",
             no_repository_sidebar_title: "先选择一个仓库，再进入主工作区",
-            no_repository_sidebar_detail:
-                "打开已有仓库会直接进入变更工作台；如果目录还不是 Git 仓库，也可以立即初始化。",
+            no_repository_sidebar_detail: "打开已有仓库会直接进入变更工作台；如果目录还不是 Git 仓库，也可以立即初始化。",
             repo_health: "仓库状态",
             primary_actions: "主操作",
             primary_workspace: "主工作区",
@@ -1382,8 +1381,7 @@ impl I18n {
             clean_workspace: "工作区目前是干净的",
             clean_workspace_detail: "当前没有待处理改动。",
             residual_merge_state: "检测到残留的合并状态",
-            residual_merge_state_detail:
-                "当前没有冲突和待处理改动，但仓库还保留着一次未结束的合并状态。",
+            residual_merge_state_detail: "当前没有冲突和待处理改动，但仓库还保留着一次未结束的合并状态。",
             stage_file: "暂存",
             unstage_file: "取消暂存",
             stage_all: "暂存全部",
@@ -1410,8 +1408,7 @@ impl I18n {
             quit_merge_state: "结束残留合并",
             quit_merge_failed: "结束残留合并失败",
             merge_state_cleared: "已结束残留合并状态",
-            merge_state_cleared_detail:
-                "MERGE_HEAD 等状态文件已清理，仓库已回到普通工作状态。",
+            merge_state_cleared_detail: "MERGE_HEAD 等状态文件已清理，仓库已回到普通工作状态。",
             loading: "处理中",
             unsupported_action: "该动作还未接入完整实现，已记录到缺陷台账候选项。",
 
@@ -2672,8 +2669,7 @@ pub static ZH_CN: I18n = I18n {
     current_branch: "当前分支",
     no_repository: "尚未打开仓库",
     no_repository_sidebar_title: "先选择一个仓库，再进入主工作区",
-    no_repository_sidebar_detail:
-        "打开已有仓库会直接进入变更工作台；如果目录还不是 Git 仓库，也可以立即初始化。",
+    no_repository_sidebar_detail: "打开已有仓库会直接进入变更工作台；如果目录还不是 Git 仓库，也可以立即初始化。",
     repo_health: "仓库状态",
     primary_actions: "主操作",
     primary_workspace: "主工作区",
@@ -3972,8 +3968,7 @@ pub static EN: I18n = I18n {
     current_branch: "Current Branch",
     no_repository: "No repository opened",
     no_repository_sidebar_title: "Select a repository to enter the workspace",
-    no_repository_sidebar_detail:
-        "Opening an existing repository enters the changes workspace; you can also initialize a new Git repository.",
+    no_repository_sidebar_detail: "Opening an existing repository enters the changes workspace; you can also initialize a new Git repository.",
     repo_health: "Repository Status",
     primary_actions: "Actions",
     primary_workspace: "Workspace",
@@ -3990,8 +3985,7 @@ pub static EN: I18n = I18n {
     clean_workspace: "Nothing to commit, working tree clean",
     clean_workspace_detail: "No pending changes to process.",
     residual_merge_state: "Residual merge state detected",
-    residual_merge_state_detail:
-        "There are no conflicts or pending changes, but the repository still keeps an unfinished merge state.",
+    residual_merge_state_detail: "There are no conflicts or pending changes, but the repository still keeps an unfinished merge state.",
     stage_file: "Stage",
     unstage_file: "Unstage",
     stage_all: "Stage All",
@@ -4015,8 +4009,7 @@ pub static EN: I18n = I18n {
     quit_merge_state: "Clear Merge State",
     quit_merge_failed: "Failed to clear merge state",
     merge_state_cleared: "Merge state cleared",
-    merge_state_cleared_detail:
-        "MERGE_HEAD and related state files were removed. The repository is back to a normal working state.",
+    merge_state_cleared_detail: "MERGE_HEAD and related state files were removed. The repository is back to a normal working state.",
     loading: "Loading",
     unsupported_action: "This action is not yet fully implemented.",
 

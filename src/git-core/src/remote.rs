@@ -4,7 +4,8 @@ use crate::error::GitError;
 use crate::process::git_command;
 use crate::repository::Repository;
 use git2::{
-    Config, Cred, CredentialHelper, Error as Git2Error, FetchOptions, PushOptions, RemoteCallbacks,
+    Config, Cred, CredentialHelper, Error as Git2Error, FetchOptions,
+    PushOptions as Git2PushOptions, RemoteCallbacks,
 };
 use log::info;
 
@@ -23,6 +24,14 @@ pub struct PullOptions<'a> {
     pub no_ff: bool,
     pub squash: bool,
     pub force_autocrlf_true: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PushOptions<'a> {
+    pub target_branch: Option<&'a str>,
+    pub force_with_lease: bool,
+    pub push_tags: bool,
+    pub set_upstream: bool,
 }
 
 fn remote_url_uses_ssh(url: &str) -> bool {
@@ -193,10 +202,7 @@ fn has_explicit_credentials(credentials: Option<(&str, &str)>) -> bool {
     })
 }
 
-fn should_use_system_git_for_push(
-    repo: &Repository,
-    credentials: Option<(&str, &str)>,
-) -> bool {
+fn should_use_system_git_for_push(repo: &Repository, credentials: Option<(&str, &str)>) -> bool {
     repo.is_worktree() && !has_explicit_credentials(credentials)
 }
 
@@ -263,7 +269,10 @@ fn build_pull_args(
         args.push("--squash".to_string());
     }
 
-    let explicit_branch = options.branch_name.map(str::trim).filter(|branch| !branch.is_empty());
+    let explicit_branch = options
+        .branch_name
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty());
     if let Some(branch_name) = explicit_branch {
         args.push(remote_name.to_string());
         args.push(branch_name.to_string());
@@ -280,6 +289,74 @@ fn build_pull_args(
     args.push(remote_name.to_string());
     args.push(branch_name);
     Ok(args)
+}
+
+fn is_explicit_refspec(value: &str) -> bool {
+    value.contains(':') || value.starts_with("refs/")
+}
+
+fn normalize_target_branch<'a>(branch_name: &'a str, options: PushOptions<'a>) -> &'a str {
+    options
+        .target_branch
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .unwrap_or(branch_name)
+}
+
+fn build_push_refspec(branch_name: &str, target_branch: &str) -> String {
+    if is_explicit_refspec(branch_name) {
+        return branch_name.to_string();
+    }
+
+    format!("refs/heads/{branch_name}:refs/heads/{target_branch}")
+}
+
+fn should_auto_set_upstream(repo: &Repository, branch_name: &str, target_branch: &str) -> bool {
+    if is_explicit_refspec(branch_name) || branch_name != target_branch {
+        return false;
+    }
+
+    let Ok(Some(current_branch)) = repo.current_branch() else {
+        return false;
+    };
+
+    current_branch == branch_name && repo.current_upstream_ref().is_none()
+}
+
+fn build_push_args(
+    repo: &Repository,
+    remote_name: &str,
+    branch_name: &str,
+    options: PushOptions<'_>,
+) -> Vec<String> {
+    let target_branch = normalize_target_branch(branch_name, options);
+    let refspec = build_push_refspec(branch_name, target_branch);
+    let should_set_upstream =
+        options.set_upstream || should_auto_set_upstream(repo, branch_name, target_branch);
+
+    let mut args = vec!["push".to_string()];
+    if options.force_with_lease {
+        args.push("--force-with-lease".to_string());
+    }
+    if should_set_upstream {
+        args.push("--set-upstream".to_string());
+    }
+    if options.push_tags {
+        args.push("--tags".to_string());
+    }
+    args.push(remote_name.to_string());
+    args.push(refspec);
+    args
+}
+
+fn run_git_remote_command_with_owned_args(
+    repo: &Repository,
+    operation: &str,
+    remote_name: &str,
+    args: Vec<String>,
+) -> Result<(), GitError> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git_remote_command(repo, operation, remote_name, &arg_refs)
 }
 
 /// List all remotes
@@ -393,21 +470,45 @@ pub fn push(
     branch_name: &str,
     credentials: Option<(&str, &str)>,
 ) -> Result<(), GitError> {
+    push_with_options(
+        repo,
+        remote_name,
+        branch_name,
+        PushOptions::default(),
+        credentials,
+    )
+}
+
+pub fn push_with_options(
+    repo: &Repository,
+    remote_name: &str,
+    branch_name: &str,
+    options: PushOptions<'_>,
+    credentials: Option<(&str, &str)>,
+) -> Result<(), GitError> {
     info!(
         "Pushing branch '{}' to remote '{}'",
         branch_name, remote_name
     );
 
-    let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
+    let target_branch = normalize_target_branch(branch_name, options);
+    let refspec = build_push_refspec(branch_name, target_branch);
+    let should_set_upstream =
+        options.set_upstream || should_auto_set_upstream(repo, branch_name, target_branch);
+    let requires_system_git = should_use_system_git_for_push(repo, credentials)
+        || should_set_upstream
+        || options.force_with_lease
+        || options.push_tags
+        || branch_name != target_branch
+        || is_explicit_refspec(branch_name);
 
-    // libgit2 can hang when pushing from a worktree, so use system git directly.
-    if should_use_system_git_for_push(repo, credentials) {
-        info!("Repository is a worktree; using system git for push");
-        return run_git_remote_command(
+    if requires_system_git {
+        info!("Using system git for push with options {:?}", options);
+        return run_git_remote_command_with_owned_args(
             repo,
             "push",
             remote_name,
-            &["push", remote_name, &refspec],
+            build_push_args(repo, remote_name, branch_name, options),
         );
     }
 
@@ -432,7 +533,7 @@ pub fn push(
             Ok(())
         });
 
-        let mut push_options = PushOptions::new();
+        let mut push_options = Git2PushOptions::new();
         push_options.remote_callbacks(callbacks);
 
         remote
@@ -455,7 +556,12 @@ pub fn push(
         "libgit2 push failed ({}), falling back to system git",
         libgit2_result.as_ref().unwrap_err()
     );
-    run_git_remote_command(repo, "push", remote_name, &["push", remote_name, &refspec])
+    run_git_remote_command_with_owned_args(
+        repo,
+        "push",
+        remote_name,
+        build_push_args(repo, remote_name, branch_name, options),
+    )
 }
 
 /// Force push with --force-with-lease semantics
@@ -465,29 +571,16 @@ pub fn force_push(repo: &Repository, remote_name: &str, branch_name: &str) -> Re
         branch_name, remote_name
     );
 
-    let repo_path = repo.command_cwd();
-
-    let output = git_command()
-        .args(["push", "--force-with-lease", remote_name, branch_name])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "force_push".to_string(),
-            details: format!("Failed to execute git push --force-with-lease: {}", e),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::RemoteFailed {
-            remote: remote_name.to_string(),
-            details: format!(
-                "git push --force-with-lease failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
-    info!("Force push completed successfully");
-    Ok(())
+    push_with_options(
+        repo,
+        remote_name,
+        branch_name,
+        PushOptions {
+            force_with_lease: true,
+            ..PushOptions::default()
+        },
+        None,
+    )
 }
 
 /// Pull from a remote.
@@ -548,15 +641,15 @@ pub fn pull_with_options(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pull_args, remote_url_uses_ssh, resolve_auth_username,
-        should_use_system_git_for_push, PullOptions,
+        PullOptions, PushOptions, build_pull_args, build_push_args, push, remote_url_uses_ssh,
+        resolve_auth_username, should_use_system_git_for_push,
     };
     use crate::repository::Repository;
     use git2::Config;
     use std::fs;
     use std::path::Path;
     use std::process::Command;
-    use tempfile::{tempdir, TempDir};
+    use tempfile::{TempDir, tempdir};
 
     fn config_with_username(username: &str) -> (TempDir, Config) {
         let temp_dir = tempdir().unwrap();
@@ -590,7 +683,10 @@ mod tests {
     fn create_committed_repo() -> (TempDir, String) {
         let repo_dir = tempdir().unwrap();
         git(repo_dir.path(), &["init"]);
-        git(repo_dir.path(), &["config", "user.email", "tests@example.com"]);
+        git(
+            repo_dir.path(),
+            &["config", "user.email", "tests@example.com"],
+        );
         git(repo_dir.path(), &["config", "user.name", "Test User"]);
         fs::write(repo_dir.path().join("tracked.txt"), "base\n").unwrap();
         git(repo_dir.path(), &["add", "tracked.txt"]);
@@ -648,7 +744,12 @@ mod tests {
         git(remote_dir.path(), &["init", "--bare"]);
         git(
             repo_dir.path(),
-            &["remote", "add", "origin", &remote_dir.path().display().to_string()],
+            &[
+                "remote",
+                "add",
+                "origin",
+                &remote_dir.path().display().to_string(),
+            ],
         );
         git(repo_dir.path(), &["push", "-u", "origin", &branch_name]);
 
@@ -665,7 +766,12 @@ mod tests {
         git(remote_dir.path(), &["init", "--bare"]);
         git(
             repo_dir.path(),
-            &["remote", "add", "origin", &remote_dir.path().display().to_string()],
+            &[
+                "remote",
+                "add",
+                "origin",
+                &remote_dir.path().display().to_string(),
+            ],
         );
 
         let repo = Repository::open(repo_dir.path()).unwrap();
@@ -699,7 +805,12 @@ mod tests {
         git(remote_dir.path(), &["init", "--bare"]);
         git(
             repo_dir.path(),
-            &["remote", "add", "origin", &remote_dir.path().display().to_string()],
+            &[
+                "remote",
+                "add",
+                "origin",
+                &remote_dir.path().display().to_string(),
+            ],
         );
 
         let repo = Repository::open(repo_dir.path()).unwrap();
@@ -724,6 +835,112 @@ mod tests {
                 &branch_name
             ]
         );
+    }
+
+    #[test]
+    fn build_push_args_sets_upstream_when_branch_has_no_upstream() {
+        let (repo_dir, branch_name) = create_committed_repo();
+        let remote_dir = tempdir().unwrap();
+        git(remote_dir.path(), &["init", "--bare"]);
+        git(
+            repo_dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                &remote_dir.path().display().to_string(),
+            ],
+        );
+
+        let repo = Repository::open(repo_dir.path()).unwrap();
+        let args = build_push_args(&repo, "origin", &branch_name, PushOptions::default());
+
+        assert_eq!(
+            args,
+            vec![
+                "push".to_string(),
+                "--set-upstream".to_string(),
+                "origin".to_string(),
+                format!("refs/heads/{branch_name}:refs/heads/{branch_name}")
+            ]
+        );
+    }
+
+    #[test]
+    fn build_push_args_honors_target_branch_and_manual_upstream() {
+        let (repo_dir, branch_name) = create_committed_repo();
+        let repo = Repository::open(repo_dir.path()).unwrap();
+        let args = build_push_args(
+            &repo,
+            "origin",
+            &branch_name,
+            PushOptions {
+                target_branch: Some("review/main"),
+                set_upstream: true,
+                ..PushOptions::default()
+            },
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "push".to_string(),
+                "--set-upstream".to_string(),
+                "origin".to_string(),
+                format!("refs/heads/{branch_name}:refs/heads/review/main")
+            ]
+        );
+    }
+
+    #[test]
+    fn build_push_args_preserves_explicit_refspecs() {
+        let (repo_dir, _) = create_committed_repo();
+        let repo = Repository::open(repo_dir.path()).unwrap();
+        let args = build_push_args(
+            &repo,
+            "origin",
+            "abc123:refs/heads/main",
+            PushOptions::default(),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "push".to_string(),
+                "origin".to_string(),
+                "abc123:refs/heads/main".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn push_creates_branch_on_empty_remote_and_sets_upstream() {
+        let (repo_dir, branch_name) = create_committed_repo();
+        let remote_dir = tempdir().unwrap();
+        git(remote_dir.path(), &["init", "--bare"]);
+        git(
+            repo_dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                &remote_dir.path().display().to_string(),
+            ],
+        );
+
+        let repo = Repository::open(repo_dir.path()).unwrap();
+        push(&repo, "origin", &branch_name, None).unwrap();
+
+        let upstream = git(
+            repo_dir.path(),
+            &[
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ],
+        );
+        assert_eq!(upstream, format!("origin/{branch_name}"));
     }
 
     #[test]

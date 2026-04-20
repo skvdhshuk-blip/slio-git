@@ -724,9 +724,9 @@ pub struct RebaseStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_todo_contents, get_current_rebase_step, get_rebase_status, get_rebase_todo,
-        is_rebase_in_progress, prepare_interactive_rebase_plan, rebase_abort,
-        start_interactive_rebase, RebaseTodoEntry,
+        RebaseTodoEntry, build_todo_contents, get_current_rebase_step, get_rebase_status,
+        get_rebase_todo, is_rebase_in_progress, prepare_interactive_rebase_plan, rebase_abort,
+        start_interactive_rebase,
     };
     use crate::error::GitError;
     use crate::repository::Repository;

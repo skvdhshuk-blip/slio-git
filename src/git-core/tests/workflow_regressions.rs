@@ -1,12 +1,12 @@
 mod test_helpers;
 
 use git_core::{
+    ConflictResolution, InProgressCommitActionKind, Repository, ResetMode, SyncStatus,
     abort_in_progress_commit_action, cherry_pick_commit, continue_in_progress_commit_action,
     create_commit, diff_file_to_index, diff_index_to_head, export_commit_patch, get_conflict_diff,
     get_history_for_ref, get_in_progress_commit_action, list_branch_scoped_remotes,
     push_current_branch_to_commit, quit_merge, rebase_start, reset_current_branch_to_commit,
-    resolve_conflict, resolve_push_current_branch_target, revert_commit, ConflictResolution,
-    InProgressCommitActionKind, Repository, ResetMode, SyncStatus,
+    resolve_conflict, resolve_push_current_branch_target, revert_commit,
 };
 use std::fs;
 use std::path::Path;
@@ -262,7 +262,9 @@ fn linked_worktree_refresh_clears_merge_state_after_merge_commit() {
     .expect("failed to resolve conflict");
     create_commit(&worktree_repo, "merge resolved", "", "").expect("failed to create merge commit");
 
-    worktree_repo.refresh().expect("failed to refresh worktree repo");
+    worktree_repo
+        .refresh()
+        .expect("failed to refresh worktree repo");
 
     assert_eq!(
         worktree_repo.get_state(),
@@ -291,7 +293,10 @@ fn quit_merge_clears_residual_merge_state_without_moving_head() {
     quit_merge(&repository).expect("failed to quit merge");
 
     let refreshed = Repository::open(repo.path()).expect("failed to reopen repository");
-    assert_eq!(refreshed.get_state(), git_core::repository::RepositoryState::Clean);
+    assert_eq!(
+        refreshed.get_state(),
+        git_core::repository::RepositoryState::Clean
+    );
     assert_eq!(
         git(repo.path(), &["rev-parse", "HEAD"]).expect("failed to read HEAD after quit"),
         head_before

@@ -60,62 +60,63 @@ pub mod worktree;
 
 pub use branch::Branch;
 pub use commit::{
-    amend_commit, create_commit, create_signature, get_commit, get_commit_changed_files,
-    get_default_signature, load_recent_messages, save_recent_message, validate_commit_ref,
-    CommitChangeStatus, CommitChangedFile, CommitInfo,
+    CommitChangeStatus, CommitChangedFile, CommitInfo, amend_commit, create_commit,
+    create_signature, get_commit, get_commit_changed_files, get_default_signature,
+    load_recent_messages, save_recent_message, validate_commit_ref,
 };
 pub use commit_actions::{
-    abort_in_progress_commit_action, cherry_pick_commit, continue_in_progress_commit_action,
-    drop_commit_from_history, edit_commit_message, export_commit_patch, fixup_commit_to_previous,
-    get_in_progress_commit_action, push_current_branch_to_commit, reset_current_branch_to_commit,
+    InProgressCommitAction, InProgressCommitActionKind, PushCurrentBranchTarget, ResetMode,
+    RewriteExecution, abort_in_progress_commit_action, cherry_pick_commit,
+    continue_in_progress_commit_action, drop_commit_from_history, edit_commit_message,
+    export_commit_patch, fixup_commit_to_previous, get_in_progress_commit_action,
+    push_current_branch_to_commit, reset_current_branch_to_commit,
     resolve_push_current_branch_target, revert_commit, squash_commit_to_previous,
-    uncommit_to_commit, InProgressCommitAction, InProgressCommitActionKind,
-    PushCurrentBranchTarget, ResetMode, RewriteExecution,
+    uncommit_to_commit,
 };
 pub use diff::{
+    AutoMergeResult, ConflictHunk, ConflictHunkType, ConflictLine, ConflictLineType,
+    ConflictResolution, Diff, DiffHunk, DiffLine, DiffLineOrigin, FileDiff, FullFilePreview,
+    InlineChangeSpan, MergeChunk, MergeChunkType, MergeEditorModel, ThreeWayDiff,
     auto_merge_conflict, build_full_file_diff, compute_inline_changes, diff_commits,
     diff_file_to_index, diff_index_to_head, diff_ref_to_workdir, diff_refs, diff_workdir_to_index,
-    file_is_binary, get_conflict_diff, resolve_conflict, resolve_conflict_hunk, AutoMergeResult,
-    ConflictHunk, ConflictHunkType, ConflictLine, ConflictLineType, ConflictResolution, Diff,
-    DiffHunk, DiffLine, DiffLineOrigin, FileDiff, FullFilePreview, InlineChangeSpan, MergeChunk,
-    MergeChunkType, MergeEditorModel, ThreeWayDiff,
+    file_is_binary, get_conflict_diff, resolve_conflict, resolve_conflict_hunk,
 };
 pub use error::GitError;
 pub use history::{
-    get_history, get_history_for_author, get_history_for_date_range, get_history_for_path,
-    get_history_for_ref, search_history, HistoryEntry,
+    HistoryEntry, get_history, get_history_for_author, get_history_for_date_range,
+    get_history_for_path, get_history_for_ref, search_history,
 };
 pub use index::{
-    discard_file, get_file_hunks, get_status, stage_file, stage_hunk, unstage_file, unstage_hunk,
-    Change, ChangeStatus, Hunk, HunkLine, Index, IndexEntry,
+    Change, ChangeStatus, Hunk, HunkLine, Index, IndexEntry, discard_file, get_file_hunks,
+    get_status, stage_file, stage_hunk, unstage_file, unstage_hunk,
 };
 pub use process::{background_command, configure_background_command, git_command};
 pub use rebase::{
-    get_current_rebase_step, get_rebase_status, get_rebase_todo, has_rebase_conflicts,
-    prepare_interactive_rebase_plan, rebase_abort, rebase_continue, rebase_skip, rebase_start,
-    start_interactive_rebase, InteractiveRebasePlan, RebaseResult, RebaseStatus, RebaseTodoEntry,
+    InteractiveRebasePlan, RebaseResult, RebaseStatus, RebaseTodoEntry, get_current_rebase_step,
+    get_rebase_status, get_rebase_todo, has_rebase_conflicts, prepare_interactive_rebase_plan,
+    rebase_abort, rebase_continue, rebase_skip, rebase_start, start_interactive_rebase,
 };
 pub use remote::{
-    fetch, force_push, list_branch_scoped_remotes, list_remotes, pull, pull_with_options, push,
-    PullOptions, RemoteInfo,
+    PullOptions, PushOptions, RemoteInfo, fetch, force_push, list_branch_scoped_remotes,
+    list_remotes, pull, pull_with_options, push, push_with_options,
 };
-pub use repository::{quit_merge, Repository, RepositoryManager, SyncStatus};
+pub use repository::{Repository, RepositoryManager, SyncStatus, quit_merge};
 pub use stash::{
-    list_stashes, stash_apply, stash_clear, stash_diff, stash_drop, stash_pop, stash_save,
-    stash_save_with_options, unstash_as_branch, StashInfo,
+    StashInfo, list_stashes, stash_apply, stash_clear, stash_diff, stash_drop, stash_pop,
+    stash_save, stash_save_with_options, unstash_as_branch,
 };
 pub use tag::{
-    create_lightweight_tag, create_tag, delete_remote_tag, delete_tag, list_tags, push_tag, TagInfo,
+    TagInfo, create_lightweight_tag, create_tag, delete_remote_tag, delete_tag, list_tags, push_tag,
 };
 
 // New modules for IDEA git parity
-pub use blame::{blame_file, BlameEntry};
+pub use blame::{BlameEntry, blame_file};
 pub use graph::{
-    compute_graph, compute_ref_labels, EdgeType, GraphEdge, GraphNode, RefLabel, RefType,
+    EdgeType, GraphEdge, GraphNode, RefLabel, RefType, compute_graph, compute_ref_labels,
 };
-pub use signature::{verify_commit_signature, SignatureCache, SignatureStatus, SignatureType};
-pub use submodule::{is_submodule, list_submodules, submodule_summary, SubmoduleChange};
-pub use worktree::{create_worktree, list_worktrees, remove_worktree, WorkingTree};
+pub use signature::{SignatureCache, SignatureStatus, SignatureType, verify_commit_signature};
+pub use submodule::{SubmoduleChange, is_submodule, list_submodules, submodule_summary};
+pub use worktree::{WorkingTree, create_worktree, list_worktrees, remove_worktree};
 
 use log::info;
 use std::path::Path;

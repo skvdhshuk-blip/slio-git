@@ -4,9 +4,12 @@
 
 use crate::i18n::I18n;
 use crate::theme::{self, BadgeTone, Surface};
-use crate::widgets::{self, button, scrollable, text_input, OptionalPush};
-use git_core::{remote::PullOptions, remote::RemoteInfo, Repository};
-use iced::widget::{text, Button, Column, Container, Row, Text};
+use crate::widgets::{self, OptionalPush, button, scrollable, text_input};
+use git_core::{
+    Repository,
+    remote::{PullOptions, PushOptions, RemoteInfo},
+};
+use iced::widget::{Button, Column, Container, Row, Text, text};
 use iced::{Alignment, Element, Length};
 
 /// Active mode of the remote dialog
@@ -108,6 +111,7 @@ impl RemoteDialogState {
     pub fn load_remotes(&mut self, repo: &Repository, i18n: &I18n) {
         self.is_loading = true;
         self.error = None;
+        self.success_message = None;
         self.current_branch_name = repo.current_branch().ok().flatten();
         self.current_branch_display = self
             .current_branch_name
@@ -134,6 +138,7 @@ impl RemoteDialogState {
                 }) {
                     self.selected_remote = self.remotes.first().map(|remote| remote.name.clone());
                 }
+                self.reset_push_defaults();
                 self.is_loading = false;
             }
             Err(error) => {
@@ -142,6 +147,13 @@ impl RemoteDialogState {
                 self.is_loading = false;
             }
         }
+    }
+
+    pub fn select_remote(&mut self, name: String) {
+        self.selected_remote = Some(name);
+        self.error = None;
+        self.success_message = None;
+        self.reset_push_defaults();
     }
 
     fn credentials(&self) -> Option<(String, String)> {
@@ -161,6 +173,25 @@ impl RemoteDialogState {
         let upstream_ref = self.current_upstream_ref.as_deref()?;
         let (upstream_remote, upstream_branch) = upstream_ref.split_once('/')?;
         (upstream_remote == remote_name && !upstream_branch.is_empty()).then_some(upstream_branch)
+    }
+
+    fn default_push_branch(&self, remote_name: &str) -> String {
+        self.default_pull_branch(remote_name)
+            .or(self.current_branch_name.as_deref())
+            .unwrap_or("main")
+            .to_string()
+    }
+
+    fn reset_push_defaults(&mut self) {
+        if let Some(remote_name) = self
+            .selected_remote
+            .as_deref()
+            .or(self.preferred_remote.as_deref())
+            .map(str::to_string)
+        {
+            self.target_branch = self.default_push_branch(&remote_name);
+        }
+        self.set_upstream = self.has_current_branch() && self.current_upstream_ref.is_none();
     }
 
     fn pull_branch_label(&self, remote_name: &str) -> String {
@@ -323,22 +354,97 @@ impl RemoteDialogState {
         self.success_message = None;
         let credentials = self.credentials();
 
-        match git_core::remote::push(
+        match git_core::remote::push_with_options(
             repo,
             &remote_name,
             &branch_name,
+            PushOptions {
+                target_branch: Some(self.target_branch.trim()),
+                set_upstream: self.set_upstream,
+                ..PushOptions::default()
+            },
             credentials
                 .as_ref()
                 .map(|(username, password)| (username.as_str(), password.as_str())),
         ) {
             Ok(()) => {
                 self.is_loading = false;
-                self.success_message = Some(format!("Pushed {branch_name} -> {remote_name}"));
+                let target_branch = self.push_target_branch(&branch_name);
+                self.success_message = Some(format!(
+                    "Pushed {branch_name} -> {remote_name}/{target_branch}"
+                ));
             }
             Err(error) => {
                 self.error = Some(format!("Failed to push to remote: {error}"));
                 self.is_loading = false;
             }
+        }
+    }
+
+    pub fn execute_push(&mut self, repo: &Repository) {
+        let Some(remote_name) = self
+            .selected_remote
+            .clone()
+            .or_else(|| self.preferred_remote.clone())
+        else {
+            self.error = Some("Please select a remote first".to_string());
+            self.success_message = None;
+            return;
+        };
+
+        let branch_name = match repo.current_branch() {
+            Ok(Some(branch)) => branch,
+            Ok(None) => {
+                self.error = Some("Detached HEAD, cannot push.".to_string());
+                self.success_message = None;
+                return;
+            }
+            Err(error) => {
+                self.error = Some(format!("Failed to read current branch: {error}"));
+                self.success_message = None;
+                return;
+            }
+        };
+
+        self.is_loading = true;
+        self.error = None;
+        self.success_message = None;
+        let credentials = self.credentials();
+        let result = git_core::remote::push_with_options(
+            repo,
+            &remote_name,
+            &branch_name,
+            PushOptions {
+                target_branch: Some(self.target_branch.trim()),
+                force_with_lease: self.force_push,
+                push_tags: self.push_tags,
+                set_upstream: self.set_upstream,
+            },
+            credentials
+                .as_ref()
+                .map(|(username, password)| (username.as_str(), password.as_str())),
+        );
+
+        self.is_loading = false;
+        match result {
+            Ok(()) => {
+                let target_branch = self.push_target_branch(&branch_name);
+                self.success_message = Some(format!(
+                    "Pushed {branch_name} -> {remote_name}/{target_branch}"
+                ));
+            }
+            Err(error) => {
+                self.error = Some(format!("Failed to push to remote: {error}"));
+            }
+        }
+    }
+
+    pub fn push_target_branch<'a>(&'a self, branch_name: &'a str) -> &'a str {
+        let target_branch = self.target_branch.trim();
+        if target_branch.is_empty() {
+            branch_name
+        } else {
+            target_branch
         }
     }
 }

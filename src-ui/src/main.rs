@@ -39,8 +39,8 @@ use git_core::{
     diff::{ConflictHunk, ConflictHunkType, ConflictLineType, ConflictResolution, ThreeWayDiff},
     Repository,
 };
-use iced::widget::operation::{scroll_to, AbsoluteOffset};
 use iced::widget::Id;
+use iced::widget::operation::{scroll_to, AbsoluteOffset};
 use iced::widget::{
     mouse_area, opaque, stack, text, Button, Column, Container, Row, Space, Text,
 };
@@ -677,15 +677,11 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::ShowFileHistory(path) => {
             // Switch to Log tab with path filter set
-            state.shell.git_tool_window_tab = state::GitToolWindowTab::Log;
             if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
                 tab.path_filter = Some(path);
             }
+            state.switch_git_tool_window_tab(state::GitToolWindowTab::Log, i18n);
             state.change_context_menu_path = None;
-            if let Some(repo) = state.current_repository.clone() {
-                let i18n = i18n::locale(state.git_settings.language.as_deref());
-                state.history_view.load_history(&repo, i18n);
-            }
         }
         Message::ToggleBlameAnnotation => {
             state.blame_active = !state.blame_active;
@@ -1135,26 +1131,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::ShowHistory => {
             state.switch_git_tool_window_tab(GitToolWindowTab::Log, i18n);
-            if let Some(repo) = state.current_repository.clone() {
-                let i18n = i18n::locale(state.git_settings.language.as_deref());
-                state.history_view.load_history(&repo, i18n);
-                // Also load branches for the dashboard sidebar
-                if state.branch_popup.local_branches.is_empty() {
-                    state.branch_popup.load_branches(&repo, i18n);
-                }
-            }
         }
         Message::SwitchGitToolWindowTab(tab) => {
             state.switch_git_tool_window_tab(tab, i18n);
-            if tab == GitToolWindowTab::Log {
-                if let Some(repo) = state.current_repository.clone() {
-                    let i18n = i18n::locale(state.git_settings.language.as_deref());
-                    state.history_view.load_history(&repo, i18n);
-                    if state.branch_popup.local_branches.is_empty() {
-                        state.branch_popup.load_branches(&repo, i18n);
-                    }
-                }
-            }
         }
         Message::ShowRemotes => {
             if let Err(error) = open_remote_dialog(state) {
@@ -2460,9 +2439,8 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             let i18n = i18n::locale(state.git_settings.language.as_deref());
             match message {
                 HistoryMessage::Refresh => {
-                    if let Ok(repo) = require_repository(state) {
-                        let i18n = i18n::locale(state.git_settings.language.as_deref());
-                        state.history_view.load_history(&repo, i18n);
+                    if require_repository(state).is_ok() {
+                        state.refresh_log_tool_window_data(i18n);
                         state.history_view.context_menu_commit = None;
                         if let Some(error) = state.history_view.error.clone() {
                             report_async_failure(
@@ -3225,7 +3203,11 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     }
                 }
                 HistoryMessage::ToggleBranchesDashboard => {
-                    state.log_branches_dashboard_visible = !state.log_branches_dashboard_visible;
+                    let will_show = !state.log_branches_dashboard_visible;
+                    state.log_branches_dashboard_visible = will_show;
+                    if will_show {
+                        state.refresh_log_tool_window_data(i18n);
+                    }
                 }
                 HistoryMessage::DashboardSelectBranch(branch) => {
                     // Filter log to this branch
@@ -3271,8 +3253,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::RemoteDialogMessage(message) => match message {
             RemoteDialogMessage::SelectRemote(name) => {
-                state.remote_dialog.selected_remote = Some(name);
-                state.remote_dialog.error = None;
+                state.remote_dialog.select_remote(name);
             }
             RemoteDialogMessage::Fetch => {
                 if let Ok(repo) = require_repository(state) {
@@ -3408,41 +3389,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             }
             RemoteDialogMessage::ExecutePush => {
                 if let Ok(repo) = require_repository(state) {
-                    let remote = state
-                        .remote_dialog
-                        .selected_remote
-                        .clone()
-                        .or_else(|| state.remote_dialog.preferred_remote.clone())
-                        .unwrap_or_else(|| "origin".to_string());
-                    let branch = state
-                        .remote_dialog
-                        .current_branch_name
-                        .clone()
-                        .unwrap_or_else(|| "main".to_string());
-
-                    state.remote_dialog.is_loading = true;
-                    state.remote_dialog.error = None;
-
-                    let result = if state.remote_dialog.force_push {
-                        git_core::force_push(&repo, &remote, &branch)
-                    } else {
-                        git_core::push(&repo, &remote, &branch, None)
-                    };
-
-                    state.remote_dialog.is_loading = false;
-                    match result {
-                        Ok(()) => {
-                            state.remote_dialog.success_message = Some(
-                                i18n.pushed_fmt
-                                    .replace("{}", &branch)
-                                    .replacen("{}", &remote, 1)
-                                    .replacen("{}", &branch, 1),
-                            );
-                            let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                        }
-                        Err(e) => {
-                            state.remote_dialog.error = Some(e.to_string());
-                        }
+                    state.remote_dialog.execute_push(&repo);
+                    if state.remote_dialog.error.is_none() {
+                        let _ = refresh_repository_after_action(state, &repo, false, i18n);
                     }
                 }
             }
@@ -3831,24 +3780,29 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     let branch_name = state.stash_panel.unstash_branch_name.clone();
                     if branch_name.trim().is_empty() {
                         state.stash_panel.error = Some(i18n.branch_name_empty.to_string());
-                    } else { match require_repository(state) { Ok(repo) => {
-                        match git_core::unstash_as_branch(&repo, index, &branch_name) {
-                            Ok(()) => {
-                                let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                                state.stash_panel.success_message =
-                                    Some(i18n.applied_to_branch_fmt.replace("{}", &branch_name));
-                                if let Some(current) = state.current_repository.clone() {
-                                    state.stash_panel.load_stashes(&current);
+                    } else {
+                        match require_repository(state) {
+                            Ok(repo) => {
+                                match git_core::unstash_as_branch(&repo, index, &branch_name) {
+                                    Ok(()) => {
+                                        let _ = refresh_repository_after_action(state, &repo, false, i18n);
+                                        state.stash_panel.success_message =
+                                            Some(i18n.applied_to_branch_fmt.replace("{}", &branch_name));
+                                        if let Some(current) = state.current_repository.clone() {
+                                            state.stash_panel.load_stashes(&current);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        state.stash_panel.error = Some(
+                                            i18n.apply_to_branch_failed_fmt
+                                                .replace("{}", &e.to_string()),
+                                        );
+                                    }
                                 }
                             }
-                            Err(e) => {
-                                state.stash_panel.error = Some(
-                                    i18n.apply_to_branch_failed_fmt
-                                        .replace("{}", &e.to_string()),
-                                );
-                            }
+                            _ => {}
                         }
-                    } _ => {}}}
+                    }
                 }
             }
             StashPanelMessage::CancelUnstashDialog => {

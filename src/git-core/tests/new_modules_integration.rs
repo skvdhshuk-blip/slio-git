@@ -384,9 +384,21 @@ fn compute_inline_changes_identical_lines_have_no_changes() {
     // segments exist (both sides are symmetric).
     let old_total: usize = old_spans.iter().map(|s| s.len).sum();
     let new_total: usize = new_spans.iter().map(|s| s.len).sum();
-    assert_eq!(old_total, "same line".len(), "old spans should cover full string");
-    assert_eq!(new_total, "same line".len(), "new spans should cover full string");
-    assert_eq!(old_spans.len(), new_spans.len(), "identical lines should produce symmetric spans");
+    assert_eq!(
+        old_total,
+        "same line".len(),
+        "old spans should cover full string"
+    );
+    assert_eq!(
+        new_total,
+        "same line".len(),
+        "new spans should cover full string"
+    );
+    assert_eq!(
+        old_spans.len(),
+        new_spans.len(),
+        "identical lines should produce symmetric spans"
+    );
 }
 
 #[test]
@@ -791,7 +803,7 @@ fn stash_diff_returns_content() {
 
 #[test]
 fn enhance_hunk_pairs_deletions_with_additions() {
-    use git_core::diff::{enhance_hunk_with_inline_changes, DiffHunk, DiffLine, DiffLineOrigin};
+    use git_core::diff::{DiffHunk, DiffLine, DiffLineOrigin, enhance_hunk_with_inline_changes};
 
     let mut hunk = DiffHunk {
         header: "@@ -1,1 +1,1 @@".to_string(),
@@ -848,7 +860,7 @@ fn enhance_hunk_pairs_deletions_with_additions() {
 
 #[test]
 fn enhance_hunk_skips_context_lines() {
-    use git_core::diff::{enhance_hunk_with_inline_changes, DiffHunk, DiffLine, DiffLineOrigin};
+    use git_core::diff::{DiffHunk, DiffLine, DiffLineOrigin, enhance_hunk_with_inline_changes};
 
     let mut hunk = DiffHunk {
         header: "@@".to_string(),

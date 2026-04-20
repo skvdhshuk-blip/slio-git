@@ -929,6 +929,9 @@ impl AppState {
         }
 
         self.sync_shell_state(Some(i18n));
+        if self.is_log_tool_window_active() {
+            self.refresh_log_tool_window_data(i18n);
+        }
         if let Some(active_path) = self
             .current_repository
             .as_ref()
@@ -1017,6 +1020,20 @@ impl AppState {
         self.sync_shell_state(Some(i18n));
     }
 
+    fn is_log_tool_window_active(&self) -> bool {
+        self.shell.active_section == ShellSection::Changes
+            && self.shell.git_tool_window_tab == GitToolWindowTab::Log
+    }
+
+    pub(crate) fn refresh_log_tool_window_data(&mut self, i18n: &I18n) {
+        let Some(repo) = self.current_repository.clone() else {
+            return;
+        };
+
+        self.history_view.load_history(&repo, i18n);
+        self.branch_popup.load_branches(&repo, i18n);
+    }
+
     pub fn switch_git_tool_window_tab(&mut self, tab: GitToolWindowTab, i18n: &I18n) {
         self.close_toolbar_remote_menu();
         self.close_history_commit_diff_popup();
@@ -1024,6 +1041,9 @@ impl AppState {
         self.show_branch_dropdown = false;
         self.shell.git_tool_window_tab = tab;
         self.sync_shell_state(Some(i18n));
+        if tab == GitToolWindowTab::Log {
+            self.refresh_log_tool_window_data(i18n);
+        }
     }
 
     pub fn toggle_toolbar_remote_menu(
@@ -1534,6 +1554,10 @@ impl AppState {
             previous_auxiliary.filter(|_| target_section != ShellSection::Conflicts)
         {
             self.open_auxiliary_view(auxiliary, i18n);
+        }
+
+        if self.is_log_tool_window_active() {
+            self.refresh_log_tool_window_data(i18n);
         }
 
         self.mark_workspace_refreshed(Instant::now());
@@ -2355,10 +2379,13 @@ pub fn is_docked_auxiliary_view(_view: AuxiliaryView) -> bool {
 mod tests {
     use super::{AppState, PersistedWorkspaceMemory, ProjectEntry, RecoveryAction, ShellSection};
     use crate::i18n::EN;
+    use crate::views::branch_popup::MetadataDensity;
     use git_core::diff::{Diff, DiffHunk, DiffLine, DiffLineOrigin, FileDiff};
+    use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::time::{Duration, Instant};
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
     fn sample_history_file_diff(path: &str) -> Diff {
         Diff {
@@ -2394,6 +2421,41 @@ mod tests {
             total_additions: 1,
             total_deletions: 1,
         }
+    }
+
+    fn create_committed_repo() -> (TempDir, git_core::Repository) {
+        let temp_dir = tempdir().expect("temp dir");
+        git_core::Repository::init(temp_dir.path()).expect("repository should initialize");
+
+        fs::write(temp_dir.path().join("README.md"), "hello\n").expect("write file");
+        let status = Command::new("git")
+            .args(["config", "user.name", "slio-git tests"])
+            .current_dir(temp_dir.path())
+            .status()
+            .expect("configure user.name");
+        assert!(status.success(), "git config user.name should succeed");
+        let status = Command::new("git")
+            .args(["config", "user.email", "tests@slio-git.local"])
+            .current_dir(temp_dir.path())
+            .status()
+            .expect("configure user.email");
+        assert!(status.success(), "git config user.email should succeed");
+        let status = Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(temp_dir.path())
+            .status()
+            .expect("git add");
+        assert!(status.success(), "git add should succeed");
+        let status = Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(temp_dir.path())
+            .status()
+            .expect("git commit");
+        assert!(status.success(), "git commit should succeed");
+
+        let repo = git_core::Repository::open(temp_dir.path()).expect("repository should reopen");
+
+        (temp_dir, repo)
     }
 
     #[test]
@@ -2531,6 +2593,67 @@ mod tests {
         assert_eq!(state.shell.title, expected_title);
         assert_eq!(state.shell.subtitle, expected_subtitle);
         assert_eq!(state.shell.chrome.tool_window_title, None);
+    }
+
+    #[test]
+    fn switching_to_log_preloads_branch_dashboard_data() {
+        let (_temp_dir, repo) = create_committed_repo();
+        let mut state = AppState::new();
+
+        state.set_repository(repo, &EN);
+        assert_eq!(
+            state.branch_popup.metadata_density,
+            MetadataDensity::Compact
+        );
+
+        state.switch_git_tool_window_tab(super::GitToolWindowTab::Log, &EN);
+
+        assert_eq!(
+            state.branch_popup.metadata_density,
+            MetadataDensity::Minimal
+        );
+        assert!(state.branch_popup.error.is_none());
+        assert!(state.history_view.error.is_none());
+    }
+
+    #[test]
+    fn set_repository_refreshes_log_branch_data_when_log_is_active() {
+        let (_first_dir, first_repo) = create_committed_repo();
+        let (_second_dir, second_repo) = create_committed_repo();
+        let mut state = AppState::new();
+
+        state.set_repository(first_repo, &EN);
+        state.switch_git_tool_window_tab(super::GitToolWindowTab::Log, &EN);
+        state.set_repository(second_repo, &EN);
+
+        assert_eq!(
+            state.branch_popup.metadata_density,
+            MetadataDensity::Minimal
+        );
+        assert!(state.branch_popup.error.is_none());
+        assert!(state.history_view.error.is_none());
+    }
+
+    #[test]
+    fn refresh_current_repository_refreshes_log_branch_data_when_log_is_active() {
+        let (_temp_dir, repo) = create_committed_repo();
+        let mut state = AppState::new();
+
+        state.set_repository(repo, &EN);
+        state.switch_git_tool_window_tab(super::GitToolWindowTab::Log, &EN);
+        state.branch_popup = Default::default();
+        state.history_view = Default::default();
+
+        state
+            .refresh_current_repository(false, &EN)
+            .expect("repository should refresh");
+
+        assert_eq!(
+            state.branch_popup.metadata_density,
+            MetadataDensity::Minimal
+        );
+        assert!(state.branch_popup.error.is_none());
+        assert!(state.history_view.error.is_none());
     }
 
     #[test]

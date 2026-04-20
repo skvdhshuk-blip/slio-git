@@ -8,7 +8,7 @@ use git_core::diff::{
 };
 use iced::widget::canvas::{self, Canvas, Frame};
 use iced::widget::{Container, Row, Stack};
-use iced::{mouse, Element, Length, Point, Rectangle, Renderer, Size, Theme};
+use iced::{Element, Length, Point, Rectangle, Renderer, Size, Theme, mouse};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
 use std::cell::Cell;
 use std::ops::Range;

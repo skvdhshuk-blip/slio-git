@@ -4,16 +4,16 @@ use std::collections::BTreeMap;
 
 use crate::i18n::I18n;
 use crate::theme::{self, BadgeTone, Surface};
-use crate::widgets::{self, button, diff_viewer, scrollable, text_input, OptionalPush};
+use crate::widgets::{self, OptionalPush, button, diff_viewer, scrollable, text_input};
 use chrono::DateTime;
 use git_core::{
-    branch::Branch, commit::CommitInfo, diff::Diff, history::HistoryEntry, rebase, remote,
     InProgressCommitAction, InProgressCommitActionKind, PushCurrentBranchTarget, Repository,
+    branch::Branch, commit::CommitInfo, diff::Diff, history::HistoryEntry, rebase, remote,
 };
 use iced::widget::{
-    container, mouse_area, opaque, stack, text, Button, Column, Container, Row, Space, Text,
+    Button, Column, Container, Row, Space, Text, container, mouse_area, opaque, stack, text,
 };
-use iced::{mouse, Alignment, Background, Border, Color, Element, Length, Theme};
+use iced::{Alignment, Background, Border, Color, Element, Length, Theme, mouse};
 
 #[derive(Debug, Clone)]
 pub enum BranchPopupMessage {

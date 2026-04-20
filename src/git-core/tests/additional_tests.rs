@@ -288,16 +288,24 @@ fn compute_inline_changes_detects_character_diffs() {
     // Compute inline changes for a deletion/addition pair
     if let Some(file) = diff.files.first() {
         if let Some(hunk) = file.hunks.first() {
-            let deletions: Vec<_> = hunk.lines.iter()
+            let deletions: Vec<_> = hunk
+                .lines
+                .iter()
                 .filter(|l| l.origin == git_core::DiffLineOrigin::Deletion)
                 .collect();
-            let additions: Vec<_> = hunk.lines.iter()
+            let additions: Vec<_> = hunk
+                .lines
+                .iter()
                 .filter(|l| l.origin == git_core::DiffLineOrigin::Addition)
                 .collect();
             if let (Some(del), Some(add)) = (deletions.first(), additions.first()) {
-                let (old_spans, new_spans) = git_core::compute_inline_changes(&del.content, &add.content);
+                let (old_spans, new_spans) =
+                    git_core::compute_inline_changes(&del.content, &add.content);
                 // Should have some spans marked as changed
-                assert!(!old_spans.is_empty() || !new_spans.is_empty(), "should have inline change spans");
+                assert!(
+                    !old_spans.is_empty() || !new_spans.is_empty(),
+                    "should have inline change spans"
+                );
             }
         }
     }

@@ -1,7 +1,7 @@
 //! Styled button helpers shared across the Darcula shell.
 
 use crate::theme::{self, ButtonChrome, ButtonTone};
-use iced::widget::{text, Button, Container, Text};
+use iced::widget::{Button, Container, Text, text};
 use iced::{Element, Length};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

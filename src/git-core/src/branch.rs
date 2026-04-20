@@ -3,7 +3,7 @@
 use crate::error::GitError;
 use crate::index;
 use crate::process::git_command;
-use crate::repository::{compact_branch_sync_hint, compact_relative_time, Repository, SyncStatus};
+use crate::repository::{Repository, SyncStatus, compact_branch_sync_hint, compact_relative_time};
 use log::info;
 
 /// A Git branch

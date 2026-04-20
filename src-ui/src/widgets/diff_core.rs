@@ -7,7 +7,7 @@
 use crate::theme;
 use crate::widgets::syntax_highlighting::{HighlightedSegment, HunkSyntaxHighlighter};
 use git_core::diff::{DiffHunk, DiffLine, DiffLineOrigin, InlineChangeSpan};
-use iced::widget::{container, text, Column, Container, Row, Space, Text};
+use iced::widget::{Column, Container, Row, Space, Text, container, text};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
 // ── Layout constants ──────────────────────────────────────────────────────

@@ -5,16 +5,16 @@
 use crate::i18n::I18n;
 use crate::state::FileDisplayMode;
 use crate::theme::{self, BadgeTone, Surface};
-use crate::widgets::{self, button, scrollable, text_input, OptionalPush};
+use crate::widgets::{self, OptionalPush, button, scrollable, text_input};
 use chrono::DateTime;
 use git_core::{
-    commit::{get_commit, get_commit_changed_files, CommitChangeStatus, CommitChangedFile},
-    history::{get_history, search_history, HistoryEntry},
     Repository,
+    commit::{CommitChangeStatus, CommitChangedFile, get_commit, get_commit_changed_files},
+    history::{HistoryEntry, get_history, search_history},
 };
 use iced::mouse;
 use iced::widget::canvas::{self, Canvas};
-use iced::widget::{mouse_area, opaque, stack, text, Button, Column, Container, Row, Space, Text};
+use iced::widget::{Button, Column, Container, Row, Space, Text, mouse_area, opaque, stack, text};
 use iced::{Alignment, Color, Element, Font, Length, Point, Rectangle, Renderer, Theme};
 use std::collections::{BTreeMap, HashSet};
 

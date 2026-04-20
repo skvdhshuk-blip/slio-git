@@ -1365,7 +1365,22 @@ impl canvas::Program<Message> for CodeEditor {
                 width: (bounds.width - ctx.gutter_width).max(0.0),
                 height: bounds.height,
             };
-            let mut highlighter = syntax_ref.zip(syntax_theme).map(|(s, t)| HighlightLines::new(s, t));
+            let mut highlighter = syntax_ref
+                .zip(syntax_theme)
+                .map(|(s, t)| HighlightLines::new(s, t));
+            if let (Some(highlighter), Some(first_visible_line)) = (
+                highlighter.as_mut(),
+                visual_lines_for_content
+                    .get(start_idx)
+                    .map(|line| line.logical_line),
+            ) {
+                warm_syntax_highlighter_to_line(
+                    highlighter,
+                    syntax_set,
+                    &self.buffer,
+                    first_visible_line,
+                );
+            }
             let mut cached_logical_line: Option<usize> = None;
             let mut cached_ranges: Vec<(Style, &str)> = Vec::new();
 
@@ -1391,13 +1406,7 @@ impl canvas::Program<Message> for CodeEditor {
                         None
                     };
 
-                    self.draw_text_with_syntax_highlighting(
-                        f,
-                        &ctx,
-                        visual_line,
-                        y,
-                        ranges,
-                    );
+                    self.draw_text_with_syntax_highlighting(f, &ctx, visual_line, y, ranges);
                 }
             });
 
@@ -1492,6 +1501,19 @@ impl canvas::Program<Message> for CodeEditor {
     }
 }
 
+fn warm_syntax_highlighter_to_line(
+    highlighter: &mut HighlightLines<'_>,
+    syntax_set: &SyntaxSet,
+    buffer: &crate::text_buffer::TextBuffer,
+    target_logical_line: usize,
+) {
+    let end = target_logical_line.min(buffer.line_count());
+
+    for line_index in 0..end {
+        let _ = highlighter.highlight_line(buffer.line(line_index), syntax_set);
+    }
+}
+
 /// Validates that the selection indices fall on valid UTF-8 character boundaries
 /// to prevent panics during string slicing.
 ///
@@ -1527,7 +1549,80 @@ fn validate_selection_indices(content: &str, start: usize, end: usize) -> Option
 mod tests {
     use super::*;
     use crate::canvas_editor::{CHAR_WIDTH, FONT_SIZE, compare_floats};
+    use crate::text_buffer::TextBuffer;
     use std::cmp::Ordering;
+
+    fn php_ranges_for_line(
+        buffer: &TextBuffer,
+        target_line: usize,
+        warm: bool,
+    ) -> Vec<(Style, String)> {
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let theme_set = ThemeSet::load_defaults();
+        let syntax = syntax_set
+            .find_syntax_by_name("PHP")
+            .or_else(|| syntax_set.find_syntax_by_name("PHP Source"))
+            .or_else(|| syntax_set.find_syntax_by_extension("php"))
+            .expect("PHP syntax should be available");
+        let theme = theme_set
+            .themes
+            .get("base16-ocean.dark")
+            .or_else(|| theme_set.themes.values().next())
+            .expect("syntax theme should be available");
+        let mut highlighter = HighlightLines::new(syntax, theme);
+
+        if warm {
+            warm_syntax_highlighter_to_line(&mut highlighter, &syntax_set, buffer, target_line);
+        }
+
+        highlighter
+            .highlight_line(buffer.line(target_line), &syntax_set)
+            .expect("highlight PHP line")
+            .into_iter()
+            .map(|(style, text)| (style, text.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn syntax_highlighter_warms_php_state_before_visible_line() {
+        let content = [
+            "<?php",
+            "class IndexExploreService",
+            "{",
+            "    public function getExploreRequestParam()",
+            "    {",
+            "        return array($keywords, $fangshi);",
+            "    }",
+            "",
+            "    public function getExploreABTestVersion()",
+            "    {",
+            "        // 用cookie来ab",
+            "        if (!empty($_COOKIE['explore_new_version_ab'])) {",
+            "            return ExploreConstants::EXPLORE_VERSION;",
+            "        }",
+            "    }",
+            "}",
+        ]
+        .join("\n");
+        let buffer = TextBuffer::new(&content);
+        let target_line = 11;
+
+        let cold = php_ranges_for_line(&buffer, target_line, false);
+        let warm = php_ranges_for_line(&buffer, target_line, true);
+        let cold_color = cold
+            .first()
+            .map(|(style, _)| style.foreground)
+            .expect("cold PHP range");
+        let warm_color = warm
+            .first()
+            .map(|(style, _)| style.foreground)
+            .expect("warm PHP range");
+
+        assert!(
+            cold_color != warm_color,
+            "warming from file start should advance syntax state before drawing a mid-file PHP line"
+        );
+    }
 
     #[test]
     fn test_calculate_segment_geometry_ascii() {

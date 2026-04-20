@@ -1,7 +1,7 @@
 //! Multi-tab bar widget for the log view
 
 use crate::theme;
-use iced::widget::{button, container, Container, Row, Space, Text};
+use iced::widget::{Container, Row, Space, Text, button, container};
 use iced::{Alignment, Background, Element, Length};
 
 /// Messages emitted by the log tabs widget

@@ -110,46 +110,49 @@ pub fn unstage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
     })?;
 
     // If file exists in HEAD tree, we need to restore it to index from HEAD
-    match tree.get_path(path) { Ok(entry) => {
-        // Remove the staged version
-        index
-            .remove_path(path)
-            .map_err(|e| GitError::OperationFailed {
-                operation: "unstage_file".to_string(),
-                details: e.to_string(),
-            })?;
+    match tree.get_path(path) {
+        Ok(entry) => {
+            // Remove the staged version
+            index
+                .remove_path(path)
+                .map_err(|e| GitError::OperationFailed {
+                    operation: "unstage_file".to_string(),
+                    details: e.to_string(),
+                })?;
 
-        // Create an IndexEntry from the tree entry and add it back
-        let id = entry.id();
-        let mode = entry.filemode();
-        let path_str = path.to_string_lossy().to_string();
+            // Create an IndexEntry from the tree entry and add it back
+            let id = entry.id();
+            let mode = entry.filemode();
+            let path_str = path.to_string_lossy().to_string();
 
-        // Create IndexEntry manually for git2 0.19
-        let index_entry = git2::IndexEntry {
-            dev: 0,
-            ino: 0,
-            id,
-            mode: mode as u32,
-            uid: 0,
-            gid: 0,
-            file_size: 0,
-            mtime: git2::IndexTime::new(0, 0),
-            ctime: git2::IndexTime::new(0, 0),
-            path: path_str.into_bytes(),
-            flags: 0,
-            flags_extended: 0,
-        };
+            // Create IndexEntry manually for git2 0.19
+            let index_entry = git2::IndexEntry {
+                dev: 0,
+                ino: 0,
+                id,
+                mode: mode as u32,
+                uid: 0,
+                gid: 0,
+                file_size: 0,
+                mtime: git2::IndexTime::new(0, 0),
+                ctime: git2::IndexTime::new(0, 0),
+                path: path_str.into_bytes(),
+                flags: 0,
+                flags_extended: 0,
+            };
 
-        index
-            .add(&index_entry)
-            .map_err(|e| GitError::OperationFailed {
-                operation: "unstage_file".to_string(),
-                details: e.to_string(),
-            })?;
-    } _ => {
-        // File didn't exist in HEAD, just remove from index
-        index.remove_path(path).ok(); // Ignore error if not in index
-    }}
+            index
+                .add(&index_entry)
+                .map_err(|e| GitError::OperationFailed {
+                    operation: "unstage_file".to_string(),
+                    details: e.to_string(),
+                })?;
+        }
+        _ => {
+            // File didn't exist in HEAD, just remove from index
+            index.remove_path(path).ok(); // Ignore error if not in index
+        }
+    }
 
     index.write().map_err(|e| GitError::OperationFailed {
         operation: "unstage_file".to_string(),

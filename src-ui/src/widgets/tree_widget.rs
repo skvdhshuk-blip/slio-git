@@ -1,7 +1,7 @@
 //! Generic collapsible tree widget for branch/file display
 
 use crate::theme;
-use iced::widget::{button, Column, Container, Row, Space, Text};
+use iced::widget::{Column, Container, Row, Space, Text, button};
 use iced::{Alignment, Element, Length, Point};
 
 /// A node in the tree
@@ -115,11 +115,7 @@ fn render_node<'a, Message: Clone + 'a>(
     let indent = depth as f32 * 16.0;
 
     let expand_icon = if !node.is_leaf {
-        if node.expanded {
-            "▼"
-        } else {
-            "▶"
-        }
+        if node.expanded { "▼" } else { "▶" }
     } else {
         "  "
     };

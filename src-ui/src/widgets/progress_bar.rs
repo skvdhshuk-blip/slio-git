@@ -1,7 +1,7 @@
 //! Network operation progress bar widget with cancel button
 
 use crate::theme;
-use iced::widget::{button, container, Container, Row, Space, Text};
+use iced::widget::{Container, Row, Space, Text, button, container};
 use iced::{Alignment, Background, Color, Element, Length};
 
 /// Messages emitted by the progress bar
