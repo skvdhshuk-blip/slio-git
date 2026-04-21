@@ -7,8 +7,11 @@ use git_core::diff::{
     EditorLineMapEntry, InlineChangeSpan,
 };
 use iced::widget::canvas::{self, Canvas, Frame};
-use iced::widget::{Container, Row, Stack};
-use iced::{Element, Length, Point, Rectangle, Renderer, Size, Theme, mouse};
+use iced::widget::{Button, Column, Container, Row, Stack, Text};
+use iced::{
+    Alignment, Background, Border, Color, Element, Length, Padding, Point, Rectangle, Renderer,
+    Size, Theme, mouse,
+};
 use iced_code_editor::{CodeEditor, Message as EditorMessage};
 use std::cell::Cell;
 use std::ops::Range;
@@ -39,6 +42,15 @@ pub enum DiffEditorEvent {
     },
     JumpToOverviewFraction(f32),
     SelectVisibleHunk(usize),
+    ContextMenuCopy,
+    ContextMenuSelectAll,
+    ContextMenuDismiss,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SplitContextMenu {
+    pane: DiffEditorPane,
+    position: Point,
 }
 
 pub struct SplitDiffEditorState {
@@ -54,6 +66,7 @@ pub struct SplitDiffEditorState {
     right_line_count: usize,
     current_hunk_index: Option<usize>,
     suppress_sync: [bool; 2],
+    context_menu: Option<SplitContextMenu>,
 }
 
 impl std::fmt::Debug for SplitDiffEditorState {
@@ -108,6 +121,7 @@ impl SplitDiffEditorState {
             right_line_count,
             current_hunk_index: None,
             suppress_sync: [false, false],
+            context_menu: None,
         }
     }
 
@@ -133,7 +147,30 @@ impl SplitDiffEditorState {
                 let changed = self.emit_current_hunk_change(Some(hunk_index));
                 (self.scroll_to_hunk(hunk_index), changed)
             }
+            DiffEditorEvent::ContextMenuCopy => {
+                (self.run_context_menu_action(EditorMessage::Copy), None)
+            }
+            DiffEditorEvent::ContextMenuSelectAll => {
+                (self.run_context_menu_action(EditorMessage::SelectAll), None)
+            }
+            DiffEditorEvent::ContextMenuDismiss => {
+                self.context_menu = None;
+                (iced::Task::none(), None)
+            }
         }
+    }
+
+    fn run_context_menu_action(&mut self, message: EditorMessage) -> iced::Task<DiffEditorEvent> {
+        let Some(menu) = self.context_menu.take() else {
+            return iced::Task::none();
+        };
+        let pane = menu.pane;
+        self.editor_mut(pane)
+            .update(&message)
+            .map(move |editor_message| DiffEditorEvent::Editor {
+                pane,
+                message: editor_message,
+            })
     }
 
     pub fn scroll_to_hunk(&mut self, hunk_index: usize) -> iced::Task<DiffEditorEvent> {
@@ -175,6 +212,23 @@ impl SplitDiffEditorState {
         pane: DiffEditorPane,
         message: EditorMessage,
     ) -> (iced::Task<DiffEditorEvent>, Option<usize>) {
+        // Context-menu bookkeeping happens before any editor mutation so that
+        // a right-click captures the click position and a subsequent mouse
+        // click dismisses any open menu.
+        match &message {
+            EditorMessage::RightClick(point) => {
+                self.context_menu = Some(SplitContextMenu {
+                    pane,
+                    position: *point,
+                });
+                return (iced::Task::none(), None);
+            }
+            EditorMessage::MouseClick(_) if self.context_menu.is_some() => {
+                self.context_menu = None;
+            }
+            _ => {}
+        }
+
         let pane_idx = pane_index(pane);
         let should_skip_sync =
             matches!(message, EditorMessage::Scrolled(_)) && self.suppress_sync[pane_idx];
@@ -288,7 +342,21 @@ impl SplitDiffEditorState {
                 message: editor_message,
             });
 
-        Container::new(Stack::new().push(background).push(editor_view))
+        let mut stack = Stack::new().push(background).push(editor_view);
+
+        if let Some(menu) = self.context_menu
+            && menu.pane == pane
+        {
+            let has_selection = editor.has_selection();
+            stack = stack.push(context_menu_overlay::<DiffEditorEvent>(
+                menu.position,
+                has_selection,
+                DiffEditorEvent::ContextMenuCopy,
+                DiffEditorEvent::ContextMenuSelectAll,
+            ));
+        }
+
+        Container::new(stack)
             .width(Length::Fill)
             .height(Length::Fill)
     }
@@ -1005,6 +1073,118 @@ pub fn build_editor_with_font_size(
 
 const DEFAULT_EDITOR_FONT_SIZE: f32 = 13.0;
 
+const CONTEXT_MENU_MIN_WIDTH: f32 = 168.0;
+
+/// Builds a positioned context-menu overlay with Copy / Select All actions.
+///
+/// `position` is the menu anchor in viewport-local coordinates (i.e. relative
+/// to the pane Stack's top-left). `copy_message` is fired when the user clicks
+/// Copy; it is only enabled when `has_selection` is `true`. `select_all_message`
+/// is always enabled.
+fn context_menu_overlay<Message: Clone + 'static>(
+    position: Point,
+    has_selection: bool,
+    copy_message: Message,
+    select_all_message: Message,
+) -> Element<'static, Message> {
+    let copy = context_menu_item(
+        "Copy",
+        if has_selection {
+            Some(copy_message)
+        } else {
+            None
+        },
+    );
+    let select_all = context_menu_item("Select All", Some(select_all_message));
+
+    let panel = Container::new(Column::new().spacing(0).push(copy).push(select_all))
+        .padding(Padding::from([4, 0]))
+        .width(Length::Fixed(CONTEXT_MENU_MIN_WIDTH))
+        .style(|_theme: &Theme| iced::widget::container::Style {
+            background: Some(Background::Color(theme::darcula::BG_RAISED)),
+            border: Border {
+                width: 1.0,
+                color: theme::darcula::BORDER.scale_alpha(0.92),
+                radius: theme::radius::SM.into(),
+            },
+            shadow: iced::Shadow {
+                color: Color {
+                    a: 0.28,
+                    ..theme::darcula::BG_MAIN
+                },
+                offset: iced::Vector::new(0.0, 4.0),
+                blur_radius: 12.0,
+            },
+            ..Default::default()
+        });
+
+    // Use padding on an outer fill Container to place the menu at `position`
+    // inside the enclosing Stack.
+    Container::new(panel)
+        .padding(Padding {
+            top: position.y.max(0.0),
+            right: 0.0,
+            bottom: 0.0,
+            left: position.x.max(0.0),
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced::alignment::Horizontal::Left)
+        .align_y(iced::alignment::Vertical::Top)
+        .into()
+}
+
+fn context_menu_item<Message: Clone + 'static>(
+    label: &'static str,
+    on_press: Option<Message>,
+) -> Element<'static, Message> {
+    let enabled = on_press.is_some();
+    let text_color = if enabled {
+        theme::darcula::TEXT_PRIMARY
+    } else {
+        theme::darcula::TEXT_DISABLED
+    };
+
+    let row = Row::new()
+        .align_y(Alignment::Center)
+        .push(Text::new(label).size(12).color(text_color));
+
+    let button = Button::new(
+        Container::new(row)
+            .padding(Padding::from([4, 10]))
+            .width(Length::Fill),
+    )
+    .width(Length::Fill)
+    .style(move |_theme: &Theme, status| {
+        let background = match status {
+            iced::widget::button::Status::Hovered if enabled => {
+                theme::darcula::ACCENT.scale_alpha(0.22)
+            }
+            iced::widget::button::Status::Pressed if enabled => {
+                theme::darcula::ACCENT.scale_alpha(0.32)
+            }
+            _ => Color::TRANSPARENT,
+        };
+
+        iced::widget::button::Style {
+            background: Some(Background::Color(background)),
+            border: Border {
+                width: 0.0,
+                color: Color::TRANSPARENT,
+                radius: 0.0.into(),
+            },
+            text_color,
+            ..Default::default()
+        }
+    });
+
+    if let Some(message) = on_press {
+        button.on_press(message).into()
+    } else {
+        button.into()
+    }
+}
+
 fn editor_style() -> iced_code_editor::theme::Style {
     iced_code_editor::theme::Style {
         background: iced::Color::TRANSPARENT,
@@ -1559,6 +1739,7 @@ pub struct UnifiedDiffEditorState {
     /// Stored for clone/rebuild
     source_diff: git_core::diff::Diff,
     font_size: f32,
+    context_menu: Option<Point>,
 }
 
 impl std::fmt::Debug for UnifiedDiffEditorState {
@@ -1636,16 +1817,48 @@ impl UnifiedDiffEditorState {
             hunk_start_lines: Arc::from(hunk_start_lines),
             source_diff: diff.clone(),
             font_size,
+            context_menu: None,
         }
     }
 
-    pub fn update(&mut self, message: EditorMessage) -> iced::Task<UnifiedDiffEditorEvent> {
-        if is_mutating_message(&message) {
-            return iced::Task::none();
+    pub fn update(&mut self, event: UnifiedDiffEditorEvent) -> iced::Task<UnifiedDiffEditorEvent> {
+        match event {
+            UnifiedDiffEditorEvent::Editor(message) => {
+                match &message {
+                    EditorMessage::RightClick(point) => {
+                        self.context_menu = Some(*point);
+                        return iced::Task::none();
+                    }
+                    EditorMessage::MouseClick(_) if self.context_menu.is_some() => {
+                        self.context_menu = None;
+                    }
+                    _ => {}
+                }
+
+                if is_mutating_message(&message) {
+                    return iced::Task::none();
+                }
+                self.editor
+                    .update(&message)
+                    .map(UnifiedDiffEditorEvent::Editor)
+            }
+            UnifiedDiffEditorEvent::ContextMenuCopy => {
+                self.context_menu = None;
+                self.editor
+                    .update(&EditorMessage::Copy)
+                    .map(UnifiedDiffEditorEvent::Editor)
+            }
+            UnifiedDiffEditorEvent::ContextMenuSelectAll => {
+                self.context_menu = None;
+                self.editor
+                    .update(&EditorMessage::SelectAll)
+                    .map(UnifiedDiffEditorEvent::Editor)
+            }
+            UnifiedDiffEditorEvent::ContextMenuDismiss => {
+                self.context_menu = None;
+                iced::Task::none()
+            }
         }
-        self.editor
-            .update(&message)
-            .map(UnifiedDiffEditorEvent::Editor)
     }
 
     pub fn scroll_to_hunk(&mut self, hunk_index: usize) -> iced::Task<UnifiedDiffEditorEvent> {
@@ -1675,7 +1888,19 @@ impl UnifiedDiffEditorState {
 
         let editor_view = self.editor.view().map(UnifiedDiffEditorEvent::Editor);
 
-        Container::new(Stack::new().push(background).push(editor_view))
+        let mut stack = Stack::new().push(background).push(editor_view);
+
+        if let Some(position) = self.context_menu {
+            let has_selection = self.editor.has_selection();
+            stack = stack.push(context_menu_overlay::<UnifiedDiffEditorEvent>(
+                position,
+                has_selection,
+                UnifiedDiffEditorEvent::ContextMenuCopy,
+                UnifiedDiffEditorEvent::ContextMenuSelectAll,
+            ));
+        }
+
+        Container::new(stack)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -1685,6 +1910,9 @@ impl UnifiedDiffEditorState {
 #[derive(Debug, Clone)]
 pub enum UnifiedDiffEditorEvent {
     Editor(EditorMessage),
+    ContextMenuCopy,
+    ContextMenuSelectAll,
+    ContextMenuDismiss,
 }
 
 fn build_unified_decorations(
@@ -1856,5 +2084,92 @@ mod tests {
         assert_eq!(state.emit_current_hunk_change(Some(0)), Some(0));
         assert_eq!(state.emit_current_hunk_change(Some(0)), None);
         assert_eq!(state.emit_current_hunk_change(Some(1)), Some(1));
+    }
+
+    fn sample_split_state() -> SplitDiffEditorState {
+        SplitDiffEditorState::new(EditorDiffModel {
+            left_text: "alpha\nbeta\n".to_string(),
+            right_text: "alpha\nbeta\n".to_string(),
+            hunks: Vec::new(),
+            line_map: Vec::new(),
+            old_path: Some("a.txt".to_string()),
+            new_path: Some("a.txt".to_string()),
+        })
+    }
+
+    #[test]
+    fn split_right_click_opens_context_menu_and_mouse_click_closes_it() {
+        let mut state = sample_split_state();
+        assert!(state.context_menu.is_none());
+
+        let _ = state.update(DiffEditorEvent::Editor {
+            pane: DiffEditorPane::Right,
+            message: EditorMessage::RightClick(Point::new(42.0, 17.0)),
+        });
+
+        let menu = state.context_menu.expect("right-click should open menu");
+        assert_eq!(menu.pane, DiffEditorPane::Right);
+        assert_eq!(menu.position, Point::new(42.0, 17.0));
+
+        let _ = state.update(DiffEditorEvent::Editor {
+            pane: DiffEditorPane::Right,
+            message: EditorMessage::MouseClick(Point::new(10.0, 10.0)),
+        });
+
+        assert!(state.context_menu.is_none());
+    }
+
+    #[test]
+    fn split_context_menu_dismiss_clears_state_without_side_effects() {
+        let mut state = sample_split_state();
+        let _ = state.update(DiffEditorEvent::Editor {
+            pane: DiffEditorPane::Left,
+            message: EditorMessage::RightClick(Point::new(5.0, 5.0)),
+        });
+        assert!(state.context_menu.is_some());
+
+        let _ = state.update(DiffEditorEvent::ContextMenuDismiss);
+
+        assert!(state.context_menu.is_none());
+    }
+
+    #[test]
+    fn split_context_menu_copy_clears_menu_state() {
+        let mut state = sample_split_state();
+        let _ = state.update(DiffEditorEvent::Editor {
+            pane: DiffEditorPane::Right,
+            message: EditorMessage::RightClick(Point::new(5.0, 5.0)),
+        });
+
+        let _ = state.update(DiffEditorEvent::ContextMenuCopy);
+
+        assert!(
+            state.context_menu.is_none(),
+            "Copy action should consume the open context menu"
+        );
+    }
+
+    #[test]
+    fn unified_right_click_opens_context_menu_and_select_all_clears_it() {
+        let diff = git_core::diff::Diff {
+            files: vec![git_core::diff::FileDiff {
+                old_path: Some("a.txt".to_string()),
+                new_path: Some("a.txt".to_string()),
+                hunks: Vec::new(),
+                additions: 0,
+                deletions: 0,
+            }],
+            total_additions: 0,
+            total_deletions: 0,
+        };
+        let mut state = UnifiedDiffEditorState::from_diff(&diff, DEFAULT_EDITOR_FONT_SIZE);
+
+        let _ = state.update(UnifiedDiffEditorEvent::Editor(EditorMessage::RightClick(
+            Point::new(7.0, 9.0),
+        )));
+        assert_eq!(state.context_menu, Some(Point::new(7.0, 9.0)));
+
+        let _ = state.update(UnifiedDiffEditorEvent::ContextMenuSelectAll);
+        assert!(state.context_menu.is_none());
     }
 }

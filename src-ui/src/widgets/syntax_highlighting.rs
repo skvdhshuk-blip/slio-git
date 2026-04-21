@@ -376,9 +376,13 @@ fn syntax_for_extension<'a>(
     extension: &str,
 ) -> Option<&'a SyntaxReference> {
     match extension {
+        // Prefer "PHP Source" (scope source.php) over "PHP" (scope embedding.php).
+        // The embedding variant starts in HTML context and only enters PHP mode
+        // after seeing `<?php`, so diff hunks that don't include the opening tag
+        // render as uniform-colored plain text.
         "php" => syntax_set
-            .find_syntax_by_name("PHP")
-            .or_else(|| syntax_set.find_syntax_by_name("PHP Source"))
+            .find_syntax_by_name("PHP Source")
+            .or_else(|| syntax_set.find_syntax_by_name("PHP"))
             .or_else(|| syntax_set.find_syntax_by_extension("php")),
         _ => syntax_set
             .find_syntax_by_extension(extension)
@@ -456,7 +460,6 @@ mod tests {
         CodeSyntaxHighlighter, FileSyntaxHighlighter, HighlightRenderConfig,
         diff_code_render_config, resolve_syntax_for_path, sanitize_content,
     };
-    use crate::theme;
     use git_core::diff::FileDiff;
     use iced::{Length, widget::text};
 
@@ -496,10 +499,12 @@ mod tests {
         let syntax = resolve_syntax_for_path("controller/PermissionManage.php")
             .expect("php files should resolve to a syntax");
 
-        assert!(
-            !syntax.name.contains("HTML"),
-            "php diffs should use a pure PHP syntax, got {}",
-            syntax.name
+        assert_eq!(
+            syntax.scope.build_string(),
+            "source.php",
+            "php diffs must use the source.php scope so hunks without <?php still get tokenized as PHP, got {} ({})",
+            syntax.name,
+            syntax.scope.build_string()
         );
     }
 
@@ -509,11 +514,24 @@ mod tests {
             CodeSyntaxHighlighter::for_path("controller/PermissionManage.php").start();
         let segments = highlighter.highlight_segments("public function handle($request): array");
 
+        let distinct_colors: std::collections::HashSet<_> = segments
+            .iter()
+            .map(|segment| {
+                (
+                    (segment.color.r * 1000.0) as i32,
+                    (segment.color.g * 1000.0) as i32,
+                    (segment.color.b * 1000.0) as i32,
+                )
+            })
+            .collect();
+
         assert!(
+            distinct_colors.len() > 1,
+            "php keywords/variables should produce multiple distinct colors, got segments: {:?}",
             segments
                 .iter()
-                .any(|segment| segment.color != theme::darcula::TEXT_PRIMARY),
-            "php keywords should produce highlighted colors instead of plain text fallback"
+                .map(|s| (s.text.clone(), s.color))
+                .collect::<Vec<_>>()
         );
     }
 

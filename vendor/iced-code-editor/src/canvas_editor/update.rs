@@ -570,6 +570,20 @@ impl CodeEditor {
         }
     }
 
+    /// Selects the entire buffer.
+    fn handle_select_all_msg(&mut self) -> Task<Message> {
+        let line_count = self.buffer.line_count();
+        if line_count == 0 {
+            return Task::none();
+        }
+        let last_line = line_count - 1;
+        let last_col = self.buffer.line_len(last_line);
+        self.selection_start = Some((0, 0));
+        self.selection_end = Some((last_line, last_col));
+        self.overlay_cache.clear();
+        Task::none()
+    }
+
     // =========================================================================
     // History (Undo/Redo) Handlers
     // =========================================================================
@@ -1149,6 +1163,11 @@ impl CodeEditor {
             // Clipboard operations
             Message::Copy => self.copy_selection(),
             Message::Paste(text) => self.handle_paste_msg(text),
+            Message::SelectAll => self.handle_select_all_msg(),
+
+            // Right-click is consumed by upstream context-menu logic; the
+            // editor itself has nothing to do for it.
+            Message::RightClick(_) => Task::none(),
 
             // History operations
             Message::Undo => self.handle_undo_msg(),
