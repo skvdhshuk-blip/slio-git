@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style, ThemeSet};
-use syntect::parsing::SyntaxSet;
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 /// Computes geometry (x start and width) for a text segment used in rendering or highlighting.
 ///
@@ -1127,6 +1127,18 @@ impl CodeEditor {
                     None
                 }
             }
+            mouse::Event::ButtonPressed(mouse::Button::Right) => {
+                cursor.position_in(bounds).map(|position| {
+                    // Translate canvas-local coordinates into viewport-local
+                    // coordinates so the caller can position a menu overlay at
+                    // the click position even when the content is scrolled.
+                    let viewport_point = iced::Point::new(
+                        position.x - self.horizontal_scroll_offset,
+                        position.y - self.viewport_scroll,
+                    );
+                    Action::publish(Message::RightClick(viewport_point)).and_capture()
+                })
+            }
             _ => None,
         }
     }
@@ -1319,7 +1331,7 @@ impl canvas::Program<Message> for CodeEditor {
         let visual_lines_for_content = visual_lines.clone();
         let content_geometry = self.content_cache.draw(renderer, bounds.size(), |frame| {
             // syntect initialization is relatively expensive; keep it global.
-            let syntax_set = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+            let syntax_set = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_nonewlines);
             let theme_set = THEME_SET.get_or_init(ThemeSet::load_defaults);
             let syntax_theme = theme_set
                 .themes
@@ -1327,21 +1339,8 @@ impl canvas::Program<Message> for CodeEditor {
                 .or_else(|| theme_set.themes.values().next());
 
             // Normalize common language aliases/extensions used by consumers.
-            let syntax_ref = match self.syntax.as_str() {
-                "python" => syntax_set.find_syntax_by_extension("py"),
-                "rust" => syntax_set.find_syntax_by_extension("rs"),
-                "javascript" => syntax_set.find_syntax_by_extension("js"),
-                "php" => syntax_set
-                    .find_syntax_by_name("PHP")
-                    .or_else(|| syntax_set.find_syntax_by_name("PHP Source"))
-                    .or_else(|| syntax_set.find_syntax_by_extension("php")),
-                "htm" => syntax_set.find_syntax_by_extension("html"),
-                "svg" => syntax_set.find_syntax_by_extension("xml"),
-                "markdown" => syntax_set.find_syntax_by_extension("md"),
-                "text" => Some(syntax_set.find_syntax_plain_text()),
-                _ => syntax_set.find_syntax_by_extension(self.syntax.as_str()),
-            }
-            .or(Some(syntax_set.find_syntax_plain_text()));
+            let syntax_ref = syntax_ref_for_language(syntax_set, self.syntax.as_str())
+                .or(Some(syntax_set.find_syntax_plain_text()));
 
             let ctx = RenderContext {
                 visual_lines: visual_lines_for_content.as_ref(),
@@ -1514,6 +1513,26 @@ fn warm_syntax_highlighter_to_line(
     }
 }
 
+fn syntax_ref_for_language<'a>(
+    syntax_set: &'a SyntaxSet,
+    syntax: &str,
+) -> Option<&'a SyntaxReference> {
+    match syntax {
+        "python" => syntax_set.find_syntax_by_extension("py"),
+        "rust" => syntax_set.find_syntax_by_extension("rs"),
+        "javascript" => syntax_set.find_syntax_by_extension("js"),
+        "php" => syntax_set
+            .find_syntax_by_name("PHP Source")
+            .or_else(|| syntax_set.find_syntax_by_name("PHP"))
+            .or_else(|| syntax_set.find_syntax_by_extension("php")),
+        "htm" => syntax_set.find_syntax_by_extension("html"),
+        "svg" => syntax_set.find_syntax_by_extension("xml"),
+        "markdown" => syntax_set.find_syntax_by_extension("md"),
+        "text" => Some(syntax_set.find_syntax_plain_text()),
+        _ => syntax_set.find_syntax_by_extension(syntax),
+    }
+}
+
 /// Validates that the selection indices fall on valid UTF-8 character boundaries
 /// to prevent panics during string slicing.
 ///
@@ -1552,18 +1571,16 @@ mod tests {
     use crate::text_buffer::TextBuffer;
     use std::cmp::Ordering;
 
-    fn php_ranges_for_line(
+    fn ranges_for_line(
+        syntax_name: &str,
         buffer: &TextBuffer,
         target_line: usize,
         warm: bool,
     ) -> Vec<(Style, String)> {
-        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let syntax_set = SyntaxSet::load_defaults_nonewlines();
         let theme_set = ThemeSet::load_defaults();
-        let syntax = syntax_set
-            .find_syntax_by_name("PHP")
-            .or_else(|| syntax_set.find_syntax_by_name("PHP Source"))
-            .or_else(|| syntax_set.find_syntax_by_extension("php"))
-            .expect("PHP syntax should be available");
+        let syntax =
+            syntax_ref_for_language(&syntax_set, syntax_name).expect("syntax should be available");
         let theme = theme_set
             .themes
             .get("base16-ocean.dark")
@@ -1577,14 +1594,42 @@ mod tests {
 
         highlighter
             .highlight_line(buffer.line(target_line), &syntax_set)
-            .expect("highlight PHP line")
+            .expect("highlight line")
             .into_iter()
             .map(|(style, text)| (style, text.to_string()))
             .collect()
     }
 
     #[test]
-    fn syntax_highlighter_warms_php_state_before_visible_line() {
+    fn syntax_highlighter_uses_php_source_scope() {
+        let syntax_set = SyntaxSet::load_defaults_nonewlines();
+        let syntax = syntax_ref_for_language(&syntax_set, "php").expect("PHP syntax");
+
+        assert_eq!(
+            syntax.scope.build_string(),
+            "source.php",
+            "PHP canvas highlighting should not require an opening <?php tag"
+        );
+    }
+
+    #[test]
+    fn syntax_highlighter_line_comments_do_not_leak_into_next_python_line() {
+        let content = ["# module comment", "from typing import List"].join("\n");
+        let buffer = TextBuffer::new(&content);
+        let target_line = 1;
+
+        let cold = ranges_for_line("py", &buffer, target_line, false);
+        let warm = ranges_for_line("py", &buffer, target_line, true);
+
+        assert_eq!(
+            style_text_signature(&warm),
+            style_text_signature(&cold),
+            "warming over a line comment must not keep the next Python line in comment scope"
+        );
+    }
+
+    #[test]
+    fn syntax_highlighter_line_comments_do_not_leak_into_next_php_line() {
         let content = [
             "<?php",
             "class IndexExploreService",
@@ -1607,21 +1652,28 @@ mod tests {
         let buffer = TextBuffer::new(&content);
         let target_line = 11;
 
-        let cold = php_ranges_for_line(&buffer, target_line, false);
-        let warm = php_ranges_for_line(&buffer, target_line, true);
-        let cold_color = cold
-            .first()
-            .map(|(style, _)| style.foreground)
-            .expect("cold PHP range");
-        let warm_color = warm
-            .first()
-            .map(|(style, _)| style.foreground)
-            .expect("warm PHP range");
+        let cold = ranges_for_line("php", &buffer, target_line, false);
+        let warm = ranges_for_line("php", &buffer, target_line, true);
 
-        assert!(
-            cold_color != warm_color,
-            "warming from file start should advance syntax state before drawing a mid-file PHP line"
+        assert_eq!(
+            style_text_signature(&warm),
+            style_text_signature(&cold),
+            "warming over a // comment must not keep the next PHP line in comment scope"
         );
+    }
+
+    fn style_text_signature(ranges: &[(Style, String)]) -> Vec<(u8, u8, u8, String)> {
+        ranges
+            .iter()
+            .map(|(style, text)| {
+                (
+                    style.foreground.r,
+                    style.foreground.g,
+                    style.foreground.b,
+                    text.clone(),
+                )
+            })
+            .collect()
     }
 
     #[test]

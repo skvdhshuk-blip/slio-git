@@ -4,6 +4,7 @@ use crate::error::GitError;
 use crate::repository::Repository;
 use log::info;
 use std::fs;
+use std::path::Path;
 
 /// A Git commit
 #[derive(Debug, Clone)]
@@ -117,33 +118,168 @@ pub fn create_commit(
 }
 
 fn load_merge_head_parents(repo: &git2::Repository) -> Result<Vec<git2::Commit<'_>>, GitError> {
-    let merge_head_path = repo.path().join("MERGE_HEAD");
+    let oids = read_merge_head_oids(repo.path(), "create_commit")?;
+    let mut commits = Vec::with_capacity(oids.len());
+    for oid in oids {
+        let commit = repo
+            .find_commit(oid)
+            .map_err(|e| GitError::OperationFailed {
+                operation: "create_commit".to_string(),
+                details: format!("Failed to load MERGE_HEAD commit '{oid}': {e}"),
+            })?;
+        commits.push(commit);
+    }
+
+    Ok(commits)
+}
+
+fn read_merge_head_oids(git_dir: &Path, operation: &str) -> Result<Vec<git2::Oid>, GitError> {
+    let merge_head_path = git_dir.join("MERGE_HEAD");
     let merge_head_contents =
         fs::read_to_string(&merge_head_path).map_err(|e| GitError::OperationFailed {
-            operation: "create_commit".to_string(),
+            operation: operation.to_string(),
             details: format!("Failed to read MERGE_HEAD: {e}"),
         })?;
 
-    let mut commits = Vec::new();
+    let mut oids = Vec::new();
     for commit_id in merge_head_contents
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
     {
         let oid = git2::Oid::from_str(commit_id).map_err(|e| GitError::OperationFailed {
-            operation: "create_commit".to_string(),
+            operation: operation.to_string(),
             details: format!("Invalid MERGE_HEAD commit id '{commit_id}': {e}"),
         })?;
-        let commit = repo
-            .find_commit(oid)
-            .map_err(|e| GitError::OperationFailed {
-                operation: "create_commit".to_string(),
-                details: format!("Failed to load MERGE_HEAD commit '{commit_id}': {e}"),
-            })?;
-        commits.push(commit);
+        oids.push(oid);
     }
 
-    Ok(commits)
+    Ok(oids)
+}
+
+/// Read the commit message Git has prepared in `.git/MERGE_MSG`.
+///
+/// Returns `Ok(Some(contents))` when the file exists and holds non-empty text
+/// (with trailing whitespace trimmed), `Ok(None)` when it is missing or empty,
+/// and an error only for unexpected I/O failures. Non-UTF-8 bytes are replaced
+/// losslessly via [`String::from_utf8_lossy`] so the caller always gets text it
+/// can display.
+pub fn prepared_merge_message(repo: &Repository) -> Result<Option<String>, GitError> {
+    let merge_msg_path = {
+        let repo_lock = repo.inner.read().unwrap();
+        repo_lock.path().join("MERGE_MSG")
+    };
+
+    let bytes = match fs::read(&merge_msg_path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(GitError::OperationFailed {
+                operation: "prepared_merge_message".to_string(),
+                details: format!("Failed to read MERGE_MSG: {e}"),
+            });
+        }
+    };
+
+    let text = String::from_utf8_lossy(&bytes);
+    let trimmed = text.trim_end();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
+/// Build a fallback merge commit message from `MERGE_HEAD` and the current branch.
+///
+/// Matches Git's conventional English phrasing:
+/// - `Merge branch '<source>' into <target>` when there is exactly one merge
+///   source and it resolves to a branch short name.
+/// - `Merge commit '<short-oid>' into <target>` when a single source cannot be
+///   resolved to a branch name.
+/// - `Merge branches 'a', 'b' into <target>` for multi-parent (octopus) merges,
+///   substituting a short OID for any entry that cannot be resolved.
+/// - The ` into <target>` suffix is dropped when `HEAD` is detached.
+pub fn synthesize_merge_message(repo: &Repository) -> Result<String, GitError> {
+    let repo_lock = repo.inner.read().unwrap();
+    let oids = read_merge_head_oids(repo_lock.path(), "synthesize_merge_message")?;
+
+    if oids.is_empty() {
+        return Err(GitError::OperationFailed {
+            operation: "synthesize_merge_message".to_string(),
+            details: "MERGE_HEAD is empty; nothing to synthesize".to_string(),
+        });
+    }
+
+    let target_branch = current_branch_short_name(&repo_lock);
+
+    let sources: Vec<MergeSource> = oids
+        .iter()
+        .map(|oid| resolve_merge_source(&repo_lock, *oid))
+        .collect();
+
+    let body = if sources.len() == 1 {
+        match &sources[0] {
+            MergeSource::Branch(name) => format!("Merge branch '{name}'"),
+            MergeSource::Commit(short) => format!("Merge commit '{short}'"),
+        }
+    } else {
+        let joined = sources
+            .iter()
+            .map(|source| match source {
+                MergeSource::Branch(name) => format!("'{name}'"),
+                MergeSource::Commit(short) => format!("'{short}'"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("Merge branches {joined}")
+    };
+
+    Ok(match target_branch {
+        Some(target) => format!("{body} into {target}"),
+        None => body,
+    })
+}
+
+enum MergeSource {
+    Branch(String),
+    Commit(String),
+}
+
+fn current_branch_short_name(repo: &git2::Repository) -> Option<String> {
+    let head = repo.head().ok()?;
+    if !head.is_branch() {
+        return None;
+    }
+    head.shorthand().map(str::to_string)
+}
+
+fn resolve_merge_source(repo: &git2::Repository, oid: git2::Oid) -> MergeSource {
+    if let Some(name) = find_branch_name_for_oid(repo, oid) {
+        MergeSource::Branch(name)
+    } else {
+        MergeSource::Commit(short_oid(oid))
+    }
+}
+
+fn find_branch_name_for_oid(repo: &git2::Repository, oid: git2::Oid) -> Option<String> {
+    for branch_type in [git2::BranchType::Local, git2::BranchType::Remote] {
+        let branches = repo.branches(Some(branch_type)).ok()?;
+        for entry in branches.flatten() {
+            let (branch, _) = entry;
+            if branch.get().target() == Some(oid)
+                && let Ok(Some(name)) = branch.name()
+            {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn short_oid(oid: git2::Oid) -> String {
+    let hex = oid.to_string();
+    hex.chars().take(7).collect()
 }
 
 /// Amend a commit with a new message
@@ -367,7 +503,7 @@ pub fn get_commit_changed_files(
 // --- Commit message history persistence ---
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const MAX_RECENT_MESSAGES: usize = 10;
 
@@ -712,5 +848,160 @@ mod tests {
 
         let merge_commit = commit::get_commit(&refreshed_repo, &commit_id).expect("load commit");
         assert_eq!(merge_commit.parent_ids.len(), 2);
+    }
+
+    fn setup_conflicted_merge(temp_dir: &TempDir) -> (Repository, String) {
+        let repo = Repository::init(temp_dir.path()).expect("init repo");
+        configure_signature(&repo);
+
+        write_file(temp_dir.path(), "shared.txt", "base\n");
+        commit_all(&repo, "baseline");
+
+        let base_branch = repo
+            .current_branch()
+            .expect("current branch")
+            .expect("branch name");
+
+        run_git(temp_dir.path(), &["checkout", "-b", "feature"]);
+        write_file(temp_dir.path(), "shared.txt", "feature change\n");
+        commit_all(&repo, "feature change");
+
+        run_git(temp_dir.path(), &["checkout", &base_branch]);
+        write_file(temp_dir.path(), "shared.txt", "main change\n");
+        commit_all(&repo, "main change");
+
+        assert!(
+            !try_run_git(temp_dir.path(), &["merge", "feature", "--no-edit"]),
+            "merge should stop on conflict"
+        );
+
+        let repo = Repository::discover(temp_dir.path()).expect("discover conflicted repo");
+        assert_eq!(repo.get_state(), RepositoryState::Merging);
+
+        (repo, base_branch)
+    }
+
+    fn git_dir(repo: &Repository) -> std::path::PathBuf {
+        repo.inner.read().expect("repo lock").path().to_path_buf()
+    }
+
+    #[test]
+    fn prepared_merge_message_returns_merge_msg_contents_during_conflict() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (repo, _base_branch) = setup_conflicted_merge(&temp_dir);
+
+        let message = commit::prepared_merge_message(&repo)
+            .expect("read MERGE_MSG")
+            .expect("MERGE_MSG should exist during a conflicted merge");
+
+        assert!(
+            message.contains("Merge branch"),
+            "expected Merge branch in message, got: {message:?}"
+        );
+        assert!(
+            message.contains("# Conflicts:"),
+            "expected conflicts block in message, got: {message:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_merge_message_returns_none_and_synthesizes_branch_into_target() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (repo, base_branch) = setup_conflicted_merge(&temp_dir);
+
+        fs::remove_file(git_dir(&repo).join("MERGE_MSG")).expect("remove MERGE_MSG");
+
+        assert!(
+            commit::prepared_merge_message(&repo)
+                .expect("read MERGE_MSG")
+                .is_none(),
+            "MERGE_MSG should be gone"
+        );
+
+        let synthesized =
+            commit::synthesize_merge_message(&repo).expect("synthesize fallback message");
+
+        assert_eq!(
+            synthesized,
+            format!("Merge branch 'feature' into {base_branch}")
+        );
+    }
+
+    #[test]
+    fn synthesize_merge_message_omits_into_when_head_is_detached() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (repo, _base_branch) = setup_conflicted_merge(&temp_dir);
+
+        let feature_oid = feature_oid(temp_dir.path());
+        run_git(temp_dir.path(), &["merge", "--abort"]);
+        let current_head = head_oid(temp_dir.path());
+        run_git(temp_dir.path(), &["checkout", "--detach", &current_head]);
+
+        let git_dir_path = git_dir(&repo);
+        fs::write(git_dir_path.join("MERGE_HEAD"), format!("{feature_oid}\n"))
+            .expect("write MERGE_HEAD");
+        let _ = fs::remove_file(git_dir_path.join("MERGE_MSG"));
+
+        let repo = Repository::discover(temp_dir.path()).expect("rediscover repo");
+        let synthesized =
+            commit::synthesize_merge_message(&repo).expect("synthesize fallback message");
+
+        assert_eq!(synthesized, "Merge branch 'feature'");
+    }
+
+    #[test]
+    fn synthesize_merge_message_handles_multiple_merge_head_entries() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let repo = Repository::init(temp_dir.path()).expect("init repo");
+        configure_signature(&repo);
+
+        write_file(temp_dir.path(), "base.txt", "base\n");
+        commit_all(&repo, "baseline");
+        let base_branch = repo
+            .current_branch()
+            .expect("current branch")
+            .expect("branch name");
+
+        run_git(temp_dir.path(), &["checkout", "-b", "alpha"]);
+        write_file(temp_dir.path(), "a.txt", "alpha\n");
+        commit_all(&repo, "alpha change");
+        let alpha_oid = head_oid(temp_dir.path());
+
+        run_git(temp_dir.path(), &["checkout", &base_branch]);
+        run_git(temp_dir.path(), &["checkout", "-b", "beta"]);
+        write_file(temp_dir.path(), "b.txt", "beta\n");
+        commit_all(&repo, "beta change");
+        let beta_oid = head_oid(temp_dir.path());
+
+        run_git(temp_dir.path(), &["checkout", &base_branch]);
+        let git_dir_path = git_dir(&repo);
+        fs::write(
+            git_dir_path.join("MERGE_HEAD"),
+            format!("{alpha_oid}\n{beta_oid}\n"),
+        )
+        .expect("write MERGE_HEAD");
+        let _ = fs::remove_file(git_dir_path.join("MERGE_MSG"));
+
+        let synthesized =
+            commit::synthesize_merge_message(&repo).expect("synthesize fallback message");
+
+        assert_eq!(
+            synthesized,
+            format!("Merge branches 'alpha', 'beta' into {base_branch}")
+        );
+    }
+
+    fn feature_oid(root: &Path) -> String {
+        let output = Command::new("git")
+            .args(["rev-parse", "feature"])
+            .current_dir(root)
+            .output()
+            .expect("git rev-parse feature");
+        assert!(
+            output.status.success(),
+            "git rev-parse feature failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 }

@@ -43,6 +43,10 @@ pub struct CommitDialogState {
     pub is_generating: bool,
     pub error: Option<String>,
     pub success_message: Option<String>,
+    /// The last default message seeded into the editor (e.g. a merge template).
+    /// Used to detect when the user has edited away from the suggestion so we
+    /// don't overwrite their input on subsequent state refreshes.
+    pub default_message: Option<String>,
 }
 
 impl CommitDialogState {
@@ -64,6 +68,7 @@ impl CommitDialogState {
             is_generating: false,
             error: None,
             success_message: None,
+            default_message: None,
         }
     }
 
@@ -86,6 +91,7 @@ impl CommitDialogState {
             is_generating: false,
             error: None,
             success_message: None,
+            default_message: None,
         }
     }
 
@@ -108,6 +114,7 @@ impl CommitDialogState {
             is_generating: false,
             error: None,
             success_message: None,
+            default_message: None,
         }
     }
 
@@ -146,6 +153,35 @@ impl CommitDialogState {
         self.success_message = None;
     }
 
+    /// Seed the editor with a default message (e.g. the Git-prepared merge
+    /// template) without overwriting anything the user has typed.
+    ///
+    /// The default is applied when the editor is currently empty, or still
+    /// contains the previous default stored in `self.default_message`. The new
+    /// default is always recorded so future calls can recognize it as "still
+    /// untouched" on subsequent refreshes.
+    pub fn set_default_message(&mut self, default: String) {
+        let current = self.message.as_str();
+        let previous_default = self.default_message.as_deref().unwrap_or("");
+        let editor_is_pristine = current.is_empty() || current == previous_default;
+
+        if editor_is_pristine && current != default {
+            self.message = default.clone();
+            self.message_editor = text_editor::Content::with_text(&default);
+        }
+
+        self.default_message = Some(default);
+    }
+
+    /// Forget any previously seeded default without modifying the editor.
+    ///
+    /// User-authored text survives; only the tracking field is reset so that
+    /// a future `set_default_message` call can seed again if the repository
+    /// re-enters a state that wants one.
+    pub fn clear_default_message(&mut self) {
+        self.default_message = None;
+    }
+
     /// Set error message.
     pub fn set_error(&mut self, error: String) {
         self.error = Some(error);
@@ -178,6 +214,7 @@ impl CommitDialogState {
         self.message_editor = text_editor::Content::new();
         self.selected_files.clear();
         self.previewed_file = None;
+        self.default_message = None;
     }
 
     pub fn selected_diff_summary(&self) -> (usize, u32, u32) {
@@ -214,6 +251,7 @@ impl CommitDialogState {
         self.commit_to_amend = Some(commit);
         self.error = None;
         self.success_message = None;
+        self.default_message = None;
         self.ensure_preview_target();
     }
 
@@ -256,6 +294,7 @@ impl Clone for CommitDialogState {
             is_generating: self.is_generating,
             error: self.error.clone(),
             success_message: self.success_message.clone(),
+            default_message: self.default_message.clone(),
         }
     }
 }
@@ -807,5 +846,151 @@ mod tests {
         assert_eq!(state.selected_files, vec!["src/lib.rs".to_string()]);
         assert_eq!(state.previewed_file.as_deref(), Some("src/lib.rs"));
         assert_eq!(state.message, "draft message");
+    }
+
+    #[test]
+    fn set_default_message_seeds_empty_editor() {
+        let mut state = CommitDialogState::new();
+
+        state.set_default_message("Merge branch 'feature' into main".to_string());
+
+        assert_eq!(state.message, "Merge branch 'feature' into main");
+        assert_eq!(
+            state.default_message.as_deref(),
+            Some("Merge branch 'feature' into main")
+        );
+    }
+
+    #[test]
+    fn set_default_message_overwrites_previous_default_but_not_user_text() {
+        let mut state = CommitDialogState::new();
+        state.set_default_message("first default".to_string());
+
+        state.set_default_message("second default".to_string());
+        assert_eq!(state.message, "second default");
+        assert_eq!(state.default_message.as_deref(), Some("second default"));
+
+        state.message = "hand-typed message".to_string();
+        state.message_editor = iced::widget::text_editor::Content::with_text("hand-typed message");
+
+        state.set_default_message("third default".to_string());
+        assert_eq!(state.message, "hand-typed message");
+        assert_eq!(state.default_message.as_deref(), Some("third default"));
+    }
+
+    #[test]
+    fn clear_default_message_keeps_user_authored_text() {
+        let mut state = CommitDialogState::new();
+        state.message = "user text".to_string();
+        state.message_editor = iced::widget::text_editor::Content::with_text("user text");
+        state.default_message = Some("some default".to_string());
+
+        state.clear_default_message();
+
+        assert_eq!(state.message, "user text");
+        assert!(state.default_message.is_none());
+    }
+
+    /// End-to-end wiring: a real conflicted-merge repo's `MERGE_MSG` should seed
+    /// the commit dialog, and subsequent user edits must survive another sync.
+    /// Covers the integration the `/opsx:apply` tasks 5.1 and 5.2 describe.
+    #[test]
+    fn merge_msg_from_real_conflict_seeds_dialog_and_preserves_user_edits() {
+        use git_core::commit as gcommit;
+        use git_core::diff::{ConflictResolution, resolve_conflict};
+        use git_core::index;
+        use git_core::repository::{Repository, RepositoryState};
+        use std::path::Path;
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        fn run_git(root: &Path, args: &[&str]) {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .expect("run git");
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        fn try_git(root: &Path, args: &[&str]) -> bool {
+            Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .expect("run git")
+                .status
+                .success()
+        }
+
+        let temp = TempDir::new().expect("temp dir");
+        let repo = Repository::init(temp.path()).expect("init repo");
+
+        run_git(temp.path(), &["config", "user.name", "slio-git tests"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "tests@slio-git.local"],
+        );
+
+        std::fs::write(temp.path().join("shared.txt"), "base\n").unwrap();
+        index::stage_all(&repo).expect("stage");
+        gcommit::create_commit(&repo, "baseline", "", "").expect("baseline commit");
+
+        let base_branch = repo
+            .current_branch()
+            .expect("current branch")
+            .expect("branch name");
+
+        run_git(temp.path(), &["checkout", "-b", "feature"]);
+        std::fs::write(temp.path().join("shared.txt"), "feature change\n").unwrap();
+        index::stage_all(&repo).unwrap();
+        gcommit::create_commit(&repo, "feature", "", "").unwrap();
+
+        run_git(temp.path(), &["checkout", &base_branch]);
+        std::fs::write(temp.path().join("shared.txt"), "main change\n").unwrap();
+        index::stage_all(&repo).unwrap();
+        gcommit::create_commit(&repo, "main", "", "").unwrap();
+
+        assert!(
+            !try_git(temp.path(), &["merge", "feature", "--no-edit"]),
+            "merge must produce a conflict"
+        );
+
+        let repo = Repository::discover(temp.path()).expect("rediscover");
+        assert_eq!(repo.get_state(), RepositoryState::Merging);
+
+        let prepared = gcommit::prepared_merge_message(&repo)
+            .expect("read MERGE_MSG")
+            .expect("MERGE_MSG should exist");
+        assert!(prepared.starts_with("Merge branch"));
+
+        let mut dialog = CommitDialogState::new();
+        dialog.set_default_message(prepared.clone());
+        assert_eq!(dialog.message, prepared);
+
+        dialog.message = "custom merge note".to_string();
+        dialog.message_editor = iced::widget::text_editor::Content::with_text("custom merge note");
+
+        // Second sync (simulating a UI refresh) must not clobber user text.
+        dialog.set_default_message(prepared.clone());
+        assert_eq!(dialog.message, "custom merge note");
+
+        resolve_conflict(&repo, Path::new("shared.txt"), ConflictResolution::Ours)
+            .expect("resolve conflict");
+        gcommit::create_commit(&repo, "custom merge note", "", "").expect("merge commit");
+
+        let refreshed = Repository::discover(temp.path()).expect("refresh repo");
+        assert_eq!(refreshed.get_state(), RepositoryState::Clean);
+
+        // After the merge completes, the dialog's post-commit cleanup should clear
+        // the default tracking and the editor starts empty for the next commit.
+        dialog.commit_success();
+        assert!(dialog.default_message.is_none());
+        assert!(dialog.message.is_empty());
     }
 }

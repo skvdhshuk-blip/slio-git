@@ -15,10 +15,10 @@ pub mod widgets;
 
 use crate::file_watcher::RepositoryWatchEvent;
 use crate::i18n::I18n;
-use crate::keyboard::{get_shortcuts, ShortcutAction};
+use crate::keyboard::{ShortcutAction, get_shortcuts};
 use crate::state::{
-    is_docked_auxiliary_view, AppState, AuxiliaryView, DiffPresentation, GitToolWindowTab,
-    ShellSection, ToolbarRemoteAction,
+    AppState, AuxiliaryView, DiffPresentation, GitToolWindowTab, ShellSection, ToolbarRemoteAction,
+    is_docked_auxiliary_view,
 };
 use crate::theme::BadgeTone;
 use crate::views::main_window::MainWindow;
@@ -33,19 +33,17 @@ use crate::views::{
 };
 use crate::widgets::conflict_resolver::{ConflictResolverMessage, ResolutionOption};
 use crate::widgets::diff_editor::DiffEditorEvent;
-use crate::widgets::{button, commit_panel, file_picker, scrollable, OptionalPush};
+use crate::widgets::{OptionalPush, button, commit_panel, file_picker, scrollable};
 use git_core::index::Change;
 use git_core::{
-    diff::{ConflictHunk, ConflictHunkType, ConflictLineType, ConflictResolution, ThreeWayDiff},
     Repository,
+    diff::{ConflictHunk, ConflictHunkType, ConflictLineType, ConflictResolution, ThreeWayDiff},
 };
 use iced::widget::Id;
-use iced::widget::operation::{scroll_to, AbsoluteOffset};
-use iced::widget::{
-    mouse_area, opaque, stack, text, Button, Column, Container, Row, Space, Text,
-};
+use iced::widget::operation::{AbsoluteOffset, scroll_to};
+use iced::widget::{Button, Column, Container, Row, Space, Text, mouse_area, opaque, stack, text};
 use iced::{
-    time, Alignment, Background, Border, Color, Element, Length, Point, Subscription, Task, Theme,
+    Alignment, Background, Border, Color, Element, Length, Point, Subscription, Task, Theme, time,
 };
 use log::{info, warn};
 use std::io::Write;
@@ -274,8 +272,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
 
             match git_core::quit_merge(&repo) {
                 Ok(()) => {
-                    if let Err(error) = refresh_repository_after_action(state, &repo, false, i18n)
-                    {
+                    if let Err(error) = refresh_repository_after_action(state, &repo, false, i18n) {
                         report_async_failure(
                             state,
                             i18n.refresh_failed,
@@ -516,17 +513,13 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::UnifiedDiffEditorEvent(event) => {
             if let Some(popup) = state.history_commit_diff_popup.as_mut() {
                 if let Some(editor) = popup.unified_diff_editor.as_mut() {
-                    let task = editor.update(match event {
-                        widgets::diff_editor::UnifiedDiffEditorEvent::Editor(m) => m,
-                    });
+                    let task = editor.update(event);
                     return task.map(Message::UnifiedDiffEditorEvent);
                 }
                 return Task::none();
             }
             if let Some(editor) = state.unified_diff_editor.as_mut() {
-                let task = editor.update(match event {
-                    widgets::diff_editor::UnifiedDiffEditorEvent::Editor(m) => m,
-                });
+                let task = editor.update(event);
                 return task.map(Message::UnifiedDiffEditorEvent);
             }
         }
@@ -3785,9 +3778,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             Ok(repo) => {
                                 match git_core::unstash_as_branch(&repo, index, &branch_name) {
                                     Ok(()) => {
-                                        let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                                        state.stash_panel.success_message =
-                                            Some(i18n.applied_to_branch_fmt.replace("{}", &branch_name));
+                                        let _ = refresh_repository_after_action(
+                                            state, &repo, false, i18n,
+                                        );
+                                        state.stash_panel.success_message = Some(
+                                            i18n.applied_to_branch_fmt.replace("{}", &branch_name),
+                                        );
                                         if let Some(current) = state.current_repository.clone() {
                                             state.stash_panel.load_stashes(&current);
                                         }
@@ -4225,7 +4221,33 @@ fn refresh_repository_after_action(
     let _ = repo;
     state.refresh_current_repository(prefer_conflicts, i18n)?;
     refresh_workspace_views(state);
+    if let Some(current) = state.current_repository.clone() {
+        sync_merge_commit_message_default(state, &current);
+    }
     Ok(())
+}
+
+/// Seed or clear the commit dialog's default message based on repository state.
+///
+/// When the repository is in `Merging`, the editor is prefilled from Git's
+/// `.git/MERGE_MSG`, falling back to a synthesized `Merge branch '<src>' into
+/// <dst>` string when the file is missing. User-authored text is never
+/// overwritten — see `CommitDialogState::set_default_message`. In any other
+/// state the stored default is dropped so future non-merge commits start empty.
+fn sync_merge_commit_message_default(state: &mut AppState, repo: &Repository) {
+    if repo.get_state() != git_core::repository::RepositoryState::Merging {
+        state.commit_dialog.clear_default_message();
+        return;
+    }
+
+    let message = match git_core::commit::prepared_merge_message(repo) {
+        Ok(Some(msg)) => Some(msg),
+        Ok(None) | Err(_) => git_core::commit::synthesize_merge_message(repo).ok(),
+    };
+
+    if let Some(msg) = message {
+        state.commit_dialog.set_default_message(msg);
+    }
 }
 
 fn refresh_workspace_views(state: &mut AppState) {
@@ -4346,7 +4368,7 @@ fn run_toolbar_remote_action(
         Err(error) => {
             return Err(i18n
                 .read_branch_failed_fmt
-                .replace("{}", &error.to_string()))
+                .replace("{}", &error.to_string()));
         }
     };
 
@@ -4414,8 +4436,10 @@ fn run_toolbar_remote_action(
 }
 
 fn open_commit_dialog(state: &mut AppState) -> Result<(), String> {
-    require_repository(state)?;
+    let repo = require_repository(state)?;
     let i18n = i18n::locale(state.git_settings.language.as_deref());
+
+    sync_merge_commit_message_default(state, &repo);
 
     state.navigate_to(ShellSection::Changes, i18n);
     state.switch_git_tool_window_tab(GitToolWindowTab::Changes, i18n);
@@ -5652,9 +5676,10 @@ fn build_change_sections<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Eleme
 fn has_residual_merge_state(state: &AppState) -> bool {
     state.workspace_change_count() == 0
         && !state.has_conflicts()
-        && state.current_repository.as_ref().is_some_and(|repo| {
-            repo.get_state() == git_core::repository::RepositoryState::Merging
-        })
+        && state
+            .current_repository
+            .as_ref()
+            .is_some_and(|repo| repo.get_state() == git_core::repository::RepositoryState::Merging)
 }
 
 const CHANGE_CONTEXT_MENU_WIDTH: f32 = 180.0;
@@ -6286,10 +6311,7 @@ fn build_conflict_list_row<'a>(
                                     .wrapping(text::Wrapping::WordOrGlyph),
                             )
                             .push_maybe(is_selected.then(|| {
-                                widgets::info_chip::<Message>(
-                                    i18n.current_label,
-                                    BadgeTone::Accent,
-                                )
+                                widgets::info_chip::<Message>(i18n.current_label, BadgeTone::Accent)
                             })),
                     )
                     .push(

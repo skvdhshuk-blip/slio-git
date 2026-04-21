@@ -315,6 +315,15 @@ pub enum Message {
     Paste(String),
     /// Delete selected text (Shift+Delete)
     DeleteSelection,
+    /// Select the entire buffer (Ctrl+A)
+    SelectAll,
+    /// Mouse right-click at the given viewport-local position.
+    ///
+    /// The editor itself does not act on this message — it is emitted so that
+    /// consumers (e.g. diff viewers) can render a context menu overlay. The
+    /// point is already translated to viewport coordinates so it can be used
+    /// directly to position an overlay on top of the editor view.
+    RightClick(iced::Point),
     /// Request redraw for cursor blink
     Tick,
     /// Page Up pressed
@@ -953,6 +962,18 @@ impl CodeEditor {
     /// ```
     pub fn is_focused(&self) -> bool {
         FOCUSED_EDITOR_ID.load(Ordering::Relaxed) == self.editor_id
+    }
+
+    /// Returns `true` when the editor currently has a non-empty selection.
+    ///
+    /// This is exposed so that consumers (e.g. context menus) can decide
+    /// whether actions like "Copy" are applicable without needing to grab a
+    /// copy of the selected text.
+    pub fn has_selection(&self) -> bool {
+        match (self.selection_start, self.selection_end) {
+            (Some(start), Some(end)) => start != end,
+            _ => false,
+        }
     }
 
     /// Resets the editor with new content.

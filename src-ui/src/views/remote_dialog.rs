@@ -98,8 +98,8 @@ impl RemoteDialogState {
             mode: RemoteDialogMode::Overview,
             target_branch: String::new(),
             force_push: false,
-            push_tags: false,
-            set_upstream: false,
+            push_tags: true,
+            set_upstream: true,
             pull_branch: String::new(),
             pull_rebase: false,
             pull_ff_only: false,
@@ -191,7 +191,8 @@ impl RemoteDialogState {
         {
             self.target_branch = self.default_push_branch(&remote_name);
         }
-        self.set_upstream = self.has_current_branch() && self.current_upstream_ref.is_none();
+        self.push_tags = true;
+        self.set_upstream = true;
     }
 
     fn pull_branch_label(&self, remote_name: &str) -> String {
@@ -1121,7 +1122,7 @@ mod tests {
     fn push_defaults_are_safe() {
         let state = RemoteDialogState::new();
         assert!(!state.force_push);
-        assert!(!state.push_tags);
-        assert!(!state.set_upstream);
+        assert!(state.push_tags);
+        assert!(state.set_upstream);
     }
 }

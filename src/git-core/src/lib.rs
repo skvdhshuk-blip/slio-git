@@ -62,7 +62,8 @@ pub use branch::Branch;
 pub use commit::{
     CommitChangeStatus, CommitChangedFile, CommitInfo, amend_commit, create_commit,
     create_signature, get_commit, get_commit_changed_files, get_default_signature,
-    load_recent_messages, save_recent_message, validate_commit_ref,
+    load_recent_messages, prepared_merge_message, save_recent_message, synthesize_merge_message,
+    validate_commit_ref,
 };
 pub use commit_actions::{
     InProgressCommitAction, InProgressCommitActionKind, PushCurrentBranchTarget, ResetMode,
