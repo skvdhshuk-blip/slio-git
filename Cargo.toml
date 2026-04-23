@@ -15,7 +15,7 @@ repository = "https://github.com/your-org/slio-git"
 
 [workspace.dependencies]
 # Git operations
-git2 = "0.19"
+git2 = { version = "0.19", features = ["vendored-openssl"] }
 
 # UI Framework
 iced = { version = "0.14", features = ["advanced", "canvas", "svg", "tokio"] }
