@@ -58,7 +58,7 @@ pub mod tag;
 pub mod updater;
 pub mod worktree;
 
-pub use branch::Branch;
+pub use branch::{Branch, BranchRef, branches_containing_commit};
 pub use commit::{
     CommitChangeStatus, CommitChangedFile, CommitInfo, amend_commit, create_commit,
     create_signature, get_commit, get_commit_changed_files, get_default_signature,

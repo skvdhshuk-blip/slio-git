@@ -45,11 +45,15 @@ pub enum EdgeType {
 /// Reference label attached to a commit
 #[derive(Debug, Clone)]
 pub struct RefLabel {
-    /// Reference display name
+    /// Reference display name.
+    /// For `RefType::RemoteBranch`, this is the full `remote/branch` form
+    /// (e.g. `origin/main`); the remote and branch parts are not split.
     pub name: String,
     /// Reference type
     pub ref_type: RefType,
-    /// Whether this is the current HEAD ref
+    /// Whether this ref is the currently checked-out branch.
+    /// Only meaningful for `RefType::LocalBranch`; for all other `RefType`
+    /// variants this value should be treated as `false`.
     pub is_current: bool,
 }
 
@@ -293,7 +297,7 @@ pub fn compute_ref_labels(repo: &Repository) -> Result<HashMap<String, Vec<RefLa
         if head_branch.is_none() {
             // Detached HEAD
             labels.entry(head_id).or_default().push(RefLabel {
-                name: "HEAD".to_string(),
+                name: String::new(),
                 ref_type: RefType::Head,
                 is_current: true,
             });

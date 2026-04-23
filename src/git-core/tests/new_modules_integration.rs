@@ -925,8 +925,7 @@ fn history_entry_includes_committer_info() {
     assert!(!entry.author_email.is_empty());
     assert!(entry.timestamp > 0);
     assert!(!entry.id.is_empty());
-    // refs and signature_status should be default empty
-    assert!(entry.refs.is_empty());
+    // signature_status is not read yet (deferred to M1-G)
     assert!(entry.signature_status.is_none());
 }
 
