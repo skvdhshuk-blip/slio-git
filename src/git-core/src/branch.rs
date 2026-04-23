@@ -6,6 +6,109 @@ use crate::process::git_command;
 use crate::repository::{Repository, SyncStatus, compact_branch_sync_hint, compact_relative_time};
 use log::info;
 
+/// Lightweight branch reference returned by branches_containing_commit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BranchRef {
+    pub name: String,
+    pub is_remote: bool,
+}
+
+/// Return all local and remote branches that contain the given commit OID.
+///
+/// Equivalent to `git branch --all --contains <oid>`.
+pub fn branches_containing_commit(
+    repo: &Repository,
+    commit_oid: &str,
+) -> Result<Vec<BranchRef>, GitError> {
+    info!("Listing branches containing commit '{}'", commit_oid);
+
+    let oid = git2::Oid::from_str(commit_oid).map_err(|_| GitError::CommitNotFound {
+        id: commit_oid.to_string(),
+    })?;
+
+    let repo_lock = repo.inner.read().unwrap();
+
+    // Verify the commit exists
+    repo_lock
+        .find_commit(oid)
+        .map_err(|_| GitError::CommitNotFound {
+            id: commit_oid.to_string(),
+        })?;
+
+    let mut results = Vec::new();
+
+    // Local branches
+    let local_branches = repo_lock
+        .branches(Some(git2::BranchType::Local))
+        .map_err(|e| GitError::OperationFailed {
+            operation: "branches_containing_commit".to_string(),
+            details: e.to_string(),
+        })?;
+
+    for branch_result in local_branches {
+        let (branch, _) = branch_result.map_err(|e| GitError::OperationFailed {
+            operation: "branches_containing_commit".to_string(),
+            details: e.to_string(),
+        })?;
+
+        let branch_oid = match branch.get().peel_to_commit() {
+            Ok(c) => c.id(),
+            Err(_) => continue,
+        };
+
+        let is_ancestor = repo_lock
+            .graph_descendant_of(branch_oid, oid)
+            .unwrap_or(false)
+            || branch_oid == oid;
+
+        if is_ancestor && let Some(name) = branch.name().ok().flatten() {
+            results.push(BranchRef {
+                name: name.to_string(),
+                is_remote: false,
+            });
+        }
+    }
+
+    // Remote branches
+    let remote_branches = repo_lock
+        .branches(Some(git2::BranchType::Remote))
+        .map_err(|e| GitError::OperationFailed {
+            operation: "branches_containing_commit".to_string(),
+            details: e.to_string(),
+        })?;
+
+    for branch_result in remote_branches {
+        let (branch, _) = branch_result.map_err(|e| GitError::OperationFailed {
+            operation: "branches_containing_commit".to_string(),
+            details: e.to_string(),
+        })?;
+
+        let branch_oid = match branch.get().peel_to_commit() {
+            Ok(c) => c.id(),
+            Err(_) => continue,
+        };
+
+        let is_ancestor = repo_lock
+            .graph_descendant_of(branch_oid, oid)
+            .unwrap_or(false)
+            || branch_oid == oid;
+
+        if is_ancestor && let Some(name) = branch.name().ok().flatten() {
+            results.push(BranchRef {
+                name: name.to_string(),
+                is_remote: true,
+            });
+        }
+    }
+
+    info!(
+        "Found {} branches containing commit '{}'",
+        results.len(),
+        commit_oid
+    );
+    Ok(results)
+}
+
 /// A Git branch
 #[derive(Debug, Clone)]
 pub struct Branch {

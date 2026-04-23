@@ -1,11 +1,12 @@
 //! History operations for git-core
 
 use crate::error::GitError;
-use crate::graph::RefLabel;
+use crate::graph::{RefLabel, compute_ref_labels};
 use crate::repository::Repository;
 use crate::signature::SignatureStatus;
 use git2::Sort;
 use log::info;
+use std::collections::HashMap;
 
 /// Commit history entry
 #[derive(Debug, Clone)]
@@ -26,8 +27,12 @@ pub struct HistoryEntry {
     pub signature_status: Option<SignatureStatus>,
 }
 
-/// Helper to build a HistoryEntry from a git2 Commit
-fn entry_from_commit(commit: &git2::Commit, oid: git2::Oid) -> HistoryEntry {
+/// Helper to build a HistoryEntry from a git2 Commit, with optional ref labels backfill.
+fn entry_from_commit(
+    commit: &git2::Commit,
+    oid: git2::Oid,
+    ref_map: Option<&HashMap<String, Vec<RefLabel>>>,
+) -> HistoryEntry {
     let author_name = commit.author().name().unwrap_or("").to_string();
     let author_email = commit.author().email().unwrap_or("").to_string();
     let committer_name_str = commit.committer().name().unwrap_or("").to_string();
@@ -44,6 +49,11 @@ fn entry_from_commit(commit: &git2::Commit, oid: git2::Oid) -> HistoryEntry {
         None
     };
 
+    let refs = ref_map
+        .and_then(|m| m.get(&oid.to_string()))
+        .cloned()
+        .unwrap_or_default();
+
     HistoryEntry {
         id: oid.to_string(),
         message: commit.message().unwrap_or("").to_string(),
@@ -53,7 +63,7 @@ fn entry_from_commit(commit: &git2::Commit, oid: git2::Oid) -> HistoryEntry {
         parent_ids: commit.parents().map(|p| p.id().to_string()).collect(),
         committer_name,
         committer_email,
-        refs: Vec::new(),
+        refs,
         signature_status: None,
     }
 }
@@ -65,6 +75,7 @@ pub fn get_history(
 ) -> Result<Vec<HistoryEntry>, GitError> {
     info!("Getting commit history, max: {:?}", max_count);
 
+    let ref_map = compute_ref_labels(repo).unwrap_or_default();
     let repo_lock = repo.inner.read().unwrap();
 
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
@@ -87,10 +98,10 @@ pub fn get_history(
             break;
         }
 
-        if let Ok(oid) = oid_result {
-            if let Ok(commit) = repo_lock.find_commit(oid) {
-                history.push(entry_from_commit(&commit, oid));
-            }
+        if let Ok(oid) = oid_result
+            && let Ok(commit) = repo_lock.find_commit(oid)
+        {
+            history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
         }
     }
 
@@ -109,6 +120,7 @@ pub fn get_history_for_ref(
         reference, max_count
     );
 
+    let ref_map = compute_ref_labels(repo).unwrap_or_default();
     let repo_lock = repo.inner.read().unwrap();
 
     let object = repo_lock
@@ -146,10 +158,10 @@ pub fn get_history_for_ref(
             break;
         }
 
-        if let Ok(oid) = oid_result {
-            if let Ok(commit) = repo_lock.find_commit(oid) {
-                history.push(entry_from_commit(&commit, oid));
-            }
+        if let Ok(oid) = oid_result
+            && let Ok(commit) = repo_lock.find_commit(oid)
+        {
+            history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
         }
     }
 
@@ -169,6 +181,7 @@ pub fn search_history(
 ) -> Result<Vec<HistoryEntry>, GitError> {
     info!("Searching history for '{}'", pattern);
 
+    let ref_map = compute_ref_labels(repo).unwrap_or_default();
     let repo_lock = repo.inner.read().unwrap();
 
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
@@ -192,12 +205,12 @@ pub fn search_history(
             break;
         }
 
-        if let Ok(oid) = oid_result {
-            if let Ok(commit) = repo_lock.find_commit(oid) {
-                let message = commit.message().unwrap_or("").to_lowercase();
-                if message.contains(&pattern_lower) {
-                    history.push(entry_from_commit(&commit, oid));
-                }
+        if let Ok(oid) = oid_result
+            && let Ok(commit) = repo_lock.find_commit(oid)
+        {
+            let message = commit.message().unwrap_or("").to_lowercase();
+            if message.contains(&pattern_lower) {
+                history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
             }
         }
     }
@@ -214,6 +227,7 @@ pub fn get_history_for_author(
 ) -> Result<Vec<HistoryEntry>, GitError> {
     info!("Getting history for author '{}'", author);
 
+    let ref_map = compute_ref_labels(repo).unwrap_or_default();
     let repo_lock = repo.inner.read().unwrap();
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
         operation: "get_history_for_author".to_string(),
@@ -233,13 +247,13 @@ pub fn get_history_for_author(
         if history.len() >= limit {
             break;
         }
-        if let Ok(oid) = oid_result {
-            if let Ok(commit) = repo_lock.find_commit(oid) {
-                let name = commit.author().name().unwrap_or("").to_lowercase();
-                let email = commit.author().email().unwrap_or("").to_lowercase();
-                if name.contains(&author_lower) || email.contains(&author_lower) {
-                    history.push(entry_from_commit(&commit, oid));
-                }
+        if let Ok(oid) = oid_result
+            && let Ok(commit) = repo_lock.find_commit(oid)
+        {
+            let name = commit.author().name().unwrap_or("").to_lowercase();
+            let email = commit.author().email().unwrap_or("").to_lowercase();
+            if name.contains(&author_lower) || email.contains(&author_lower) {
+                history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
             }
         }
     }
@@ -256,6 +270,7 @@ pub fn get_history_for_path(
 ) -> Result<Vec<HistoryEntry>, GitError> {
     info!("Getting history for path '{}'", file_path);
 
+    let ref_map = compute_ref_labels(repo).unwrap_or_default();
     let repo_lock = repo.inner.read().unwrap();
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
         operation: "get_history_for_path".to_string(),
@@ -275,53 +290,53 @@ pub fn get_history_for_path(
         if history.len() >= limit {
             break;
         }
-        if let Ok(oid) = oid_result {
-            if let Ok(commit) = repo_lock.find_commit(oid) {
-                // Check if this commit touches the target path
-                let touches_path = if commit.parent_count() == 0 {
-                    // Initial commit — check if file exists in tree
-                    commit
-                        .tree()
-                        .ok()
-                        .and_then(|t| t.get_path(target_path).ok())
-                        .is_some()
-                } else {
-                    match commit.parent(0) {
-                        Ok(parent) => {
-                            // Compare parent tree to this commit's tree
-                            let old_tree = parent.tree().ok();
-                            let new_tree = commit.tree().ok();
-                            match (old_tree, new_tree) {
-                                (Some(old), Some(new)) => {
-                                    let diff = repo_lock
-                                        .diff_tree_to_tree(Some(&old), Some(&new), None)
-                                        .ok();
-                                    diff.map(|d| {
-                                        d.deltas().any(|delta| {
-                                            delta
-                                                .new_file()
+        if let Ok(oid) = oid_result
+            && let Ok(commit) = repo_lock.find_commit(oid)
+        {
+            // Check if this commit touches the target path
+            let touches_path = if commit.parent_count() == 0 {
+                // Initial commit — check if file exists in tree
+                commit
+                    .tree()
+                    .ok()
+                    .and_then(|t| t.get_path(target_path).ok())
+                    .is_some()
+            } else {
+                match commit.parent(0) {
+                    Ok(parent) => {
+                        // Compare parent tree to this commit's tree
+                        let old_tree = parent.tree().ok();
+                        let new_tree = commit.tree().ok();
+                        match (old_tree, new_tree) {
+                            (Some(old), Some(new)) => {
+                                let diff = repo_lock
+                                    .diff_tree_to_tree(Some(&old), Some(&new), None)
+                                    .ok();
+                                diff.map(|d| {
+                                    d.deltas().any(|delta| {
+                                        delta
+                                            .new_file()
+                                            .path()
+                                            .map(|p| p == target_path)
+                                            .unwrap_or(false)
+                                            || delta
+                                                .old_file()
                                                 .path()
                                                 .map(|p| p == target_path)
                                                 .unwrap_or(false)
-                                                || delta
-                                                    .old_file()
-                                                    .path()
-                                                    .map(|p| p == target_path)
-                                                    .unwrap_or(false)
-                                        })
                                     })
-                                    .unwrap_or(false)
-                                }
-                                _ => false,
+                                })
+                                .unwrap_or(false)
                             }
+                            _ => false,
                         }
-                        _ => false,
                     }
-                };
-
-                if touches_path {
-                    history.push(entry_from_commit(&commit, oid));
+                    _ => false,
                 }
+            };
+
+            if touches_path {
+                history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
             }
         }
     }
@@ -342,6 +357,7 @@ pub fn get_history_for_date_range(
         start_time, end_time
     );
 
+    let ref_map = compute_ref_labels(repo).unwrap_or_default();
     let repo_lock = repo.inner.read().unwrap();
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
         operation: "get_history_for_date_range".to_string(),
@@ -360,16 +376,16 @@ pub fn get_history_for_date_range(
         if history.len() >= limit {
             break;
         }
-        if let Ok(oid) = oid_result {
-            if let Ok(commit) = repo_lock.find_commit(oid) {
-                let ts = commit.time().seconds();
-                // Stop early if we've passed the start of the range
-                if ts < start_time {
-                    break;
-                }
-                if ts <= end_time {
-                    history.push(entry_from_commit(&commit, oid));
-                }
+        if let Ok(oid) = oid_result
+            && let Ok(commit) = repo_lock.find_commit(oid)
+        {
+            let ts = commit.time().seconds();
+            // Stop early if we've passed the start of the range
+            if ts < start_time {
+                break;
+            }
+            if ts <= end_time {
+                history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
             }
         }
     }
