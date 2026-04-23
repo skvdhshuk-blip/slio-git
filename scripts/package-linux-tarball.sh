@@ -37,7 +37,8 @@ if ! rustup target list --installed | grep -qx "$TARGET"; then
 fi
 
 echo "Building Linux release binary..."
-cargo build --locked --release -p src-ui --target "$TARGET"
+# shellcheck disable=SC2086
+${CARGO_BUILD_CMD:-cargo build} --locked --release -p src-ui --target "$TARGET"
 
 echo "Preparing tarball contents..."
 rm -rf "$STAGING_DIR"
