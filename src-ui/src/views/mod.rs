@@ -3,6 +3,7 @@
 pub mod branch_popup;
 pub mod commit_dialog;
 pub mod history_view;
+pub mod log_filter_bar;
 pub mod main_window;
 pub mod rebase_editor;
 pub mod remote_dialog;

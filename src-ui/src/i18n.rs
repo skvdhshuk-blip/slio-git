@@ -1404,6 +1404,15 @@ pub struct I18n {
     pub welcome_minutes_ago_fmt: &'static str,
     pub welcome_hours_ago_fmt: &'static str,
     pub welcome_days_ago_fmt: &'static str,
+    pub lf_text_placeholder: &'static str,
+    pub lf_date_placeholder: &'static str,
+    pub lf_date_from_label: &'static str,
+    pub lf_date_to_label: &'static str,
+    pub lf_clear: &'static str,
+    pub lf_count_fmt: &'static str,
+    pub lf_no_match: &'static str,
+    pub lf_limit_outside_range: &'static str,
+    pub lf_limit_hint_fmt: &'static str,
 }
 
 impl I18n {
@@ -2773,6 +2782,15 @@ impl I18n {
             welcome_minutes_ago_fmt: "{} 分钟前",
             welcome_hours_ago_fmt: "{} 小时前",
             welcome_days_ago_fmt: "{} 天前",
+            lf_text_placeholder: "搜索消息 / hash / 作者",
+            lf_date_placeholder: "YYYY-MM-DD",
+            lf_date_from_label: "从",
+            lf_date_to_label: "至",
+            lf_clear: "清除",
+            lf_count_fmt: "显示 {shown} / {total} 条 commit",
+            lf_no_match: "无匹配的 commit",
+            lf_limit_outside_range: "可能在加载范围外",
+            lf_limit_hint_fmt: "已达加载上限 {n} 条，提高 Settings 中的 history limit 可搜索更多",
         }
     }
 }
@@ -4136,6 +4154,15 @@ pub static ZH_CN: I18n = I18n {
     welcome_minutes_ago_fmt: "{} 分钟前",
     welcome_hours_ago_fmt: "{} 小时前",
     welcome_days_ago_fmt: "{} 天前",
+    lf_text_placeholder: "搜索消息 / hash / 作者",
+    lf_date_placeholder: "YYYY-MM-DD",
+    lf_date_from_label: "从",
+    lf_date_to_label: "至",
+    lf_clear: "清除",
+    lf_count_fmt: "显示 {shown} / {total} 条 commit",
+    lf_no_match: "无匹配的 commit",
+    lf_limit_outside_range: "可能在加载范围外",
+    lf_limit_hint_fmt: "已达加载上限 {n} 条，提高 Settings 中的 history limit 可搜索更多",
 };
 
 pub static EN: I18n = I18n {
@@ -5498,4 +5525,13 @@ pub static EN: I18n = I18n {
     welcome_minutes_ago_fmt: "{} minutes ago",
     welcome_hours_ago_fmt: "{} hours ago",
     welcome_days_ago_fmt: "{} days ago",
+    lf_text_placeholder: "Search message / hash / author",
+    lf_date_placeholder: "YYYY-MM-DD",
+    lf_date_from_label: "From",
+    lf_date_to_label: "To",
+    lf_clear: "Clear",
+    lf_count_fmt: "Showing {shown} of {total} commits",
+    lf_no_match: "No matching commits",
+    lf_limit_outside_range: "may be outside loaded range",
+    lf_limit_hint_fmt: "Loaded limit {n} reached — raise history limit in Settings to search more",
 };

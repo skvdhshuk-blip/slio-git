@@ -102,10 +102,13 @@ pub struct LogTab {
     pub branch_filter: Option<String>,
     /// Text search filter
     pub text_filter: String,
+    pub text_filter_pending: String,
     /// Author name filter
     pub author_filter: Option<String>,
     /// Date range filter (start, end) as Unix timestamps
     pub date_range: Option<(i64, i64)>,
+    pub date_from_text: String,
+    pub date_to_text: String,
     /// File path filter
     pub path_filter: Option<String>,
     /// Vertical scroll position
@@ -123,8 +126,11 @@ impl LogTab {
             is_closable: false,
             branch_filter: None,
             text_filter: String::new(),
+            text_filter_pending: String::new(),
             author_filter: None,
             date_range: None,
+            date_from_text: String::new(),
+            date_to_text: String::new(),
             path_filter: None,
             scroll_offset: 0.0,
             selected_commit: None,
@@ -139,8 +145,11 @@ impl LogTab {
             is_closable: false,
             branch_filter: None,
             text_filter: String::new(),
+            text_filter_pending: String::new(),
             author_filter: None,
             date_range: None,
+            date_from_text: String::new(),
+            date_to_text: String::new(),
             path_filter: None,
             scroll_offset: 0.0,
             selected_commit: None,
@@ -155,8 +164,11 @@ impl LogTab {
             is_closable: true,
             branch_filter: Some(branch),
             text_filter: String::new(),
+            text_filter_pending: String::new(),
             author_filter: None,
             date_range: None,
+            date_from_text: String::new(),
+            date_to_text: String::new(),
             path_filter: None,
             scroll_offset: 0.0,
             selected_commit: None,
@@ -714,6 +726,7 @@ pub struct AppState {
     pub drag: Option<DragState>,
     /// Performance HUD state
     pub hud: crate::perf::HudState,
+    pub log_filter_text_gen: usize,
 }
 
 /// In-progress network operation state for progress indicator
@@ -849,6 +862,7 @@ impl AppState {
             available_update: None,
             drag: None,
             hud: crate::perf::HudState::new(false),
+            log_filter_text_gen: 0,
         };
 
         state.sync_context_feedback(i18n);
@@ -2233,6 +2247,12 @@ impl AppState {
         self.tag_dialog = TagDialogState::default();
         self.stash_panel = StashPanelState::default();
         self.rebase_editor = RebaseEditorState::default();
+        for tab in &mut self.log_tabs {
+            tab.text_filter.clear();
+            tab.text_filter_pending.clear();
+            tab.date_from_text.clear();
+            tab.date_to_text.clear();
+        }
     }
 
     fn sync_selected_conflict_resolver(&mut self) {

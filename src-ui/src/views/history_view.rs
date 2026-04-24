@@ -66,6 +66,12 @@ pub enum HistoryMessage {
     SetBranchFilter(Option<String>),
     SetAuthorFilter(Option<String>),
     SetPathFilter(Option<String>),
+    LogFilterTextChanged(String),
+    LogFilterTextSubmit,
+    LogFilterTextApply(String, usize),
+    LogFilterDateFromChanged(String),
+    LogFilterDateToChanged(String),
+    LogFilterClear,
     // Branches dashboard messages
     ToggleBranchesDashboard,
     DashboardSelectBranch(String),
@@ -1769,6 +1775,7 @@ pub fn view_with_tabs<'a>(
     local_branches: &'a [git_core::branch::Branch],
     remote_branches: &'a [git_core::branch::Branch],
     dashboard_visible: bool,
+    history_commit_limit: u32,
     i18n: &'a I18n,
 ) -> Element<'a, HistoryMessage> {
     // Build inline tab bar to avoid lifetime issues with TabDescriptor references
@@ -1819,6 +1826,43 @@ pub fn view_with_tabs<'a>(
             .on_press(HistoryMessage::NewLogTab),
     );
 
+    let active_log_tab = log_tabs.get(active_tab);
+    let filter_shown = state.filtered_entries.len();
+    let filter_total = state.entries.len();
+    let filter_bar_element: Element<'a, HistoryMessage> = if let Some(tab) = active_log_tab {
+        let (_, validation) =
+            crate::log_filter::validate_dates(&tab.date_from_text, &tab.date_to_text);
+        crate::views::log_filter_bar::view(
+            &tab.text_filter_pending,
+            &tab.date_from_text,
+            &tab.date_to_text,
+            validation,
+            filter_shown,
+            filter_total,
+            history_commit_limit,
+            i18n,
+        )
+        .map(|msg| match msg {
+            crate::views::log_filter_bar::FilterBarMessage::TextChanged(s) => {
+                HistoryMessage::LogFilterTextChanged(s)
+            }
+            crate::views::log_filter_bar::FilterBarMessage::TextSubmit => {
+                HistoryMessage::LogFilterTextSubmit
+            }
+            crate::views::log_filter_bar::FilterBarMessage::DateFromChanged(s) => {
+                HistoryMessage::LogFilterDateFromChanged(s)
+            }
+            crate::views::log_filter_bar::FilterBarMessage::DateToChanged(s) => {
+                HistoryMessage::LogFilterDateToChanged(s)
+            }
+            crate::views::log_filter_bar::FilterBarMessage::ClearFilter => {
+                HistoryMessage::LogFilterClear
+            }
+        })
+    } else {
+        Space::new().height(Length::Shrink).into()
+    };
+
     let main_content = view(state, i18n);
 
     // Build branches dashboard sidebar
@@ -1862,6 +1906,9 @@ pub fn view_with_tabs<'a>(
     Column::new()
         .spacing(0)
         .push(Container::new(full_tab_row).padding([0, 4]))
+        .push(iced::widget::rule::horizontal(1))
+        .push(filter_bar_element)
+        .push(iced::widget::rule::horizontal(1))
         .push(content_area)
         .into()
 }

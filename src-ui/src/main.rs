@@ -6,6 +6,7 @@ mod file_watcher;
 mod i18n;
 mod i18n_smoke;
 mod keyboard;
+mod log_filter;
 mod logging;
 pub mod perf;
 mod state;
@@ -3357,6 +3358,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 HistoryMessage::SelectLogTab(index) => {
                     if index < state.log_tabs.len() {
                         state.active_log_tab = index;
+                        apply_log_filter_to_history(state);
                     }
                 }
                 HistoryMessage::CloseLogTab(index) => {
@@ -3376,8 +3378,11 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         is_closable: true,
                         branch_filter: None,
                         text_filter: String::new(),
+                        text_filter_pending: String::new(),
                         author_filter: None,
                         date_range: None,
+                        date_from_text: String::new(),
+                        date_to_text: String::new(),
                         path_filter: None,
                         scroll_offset: 0.0,
                         selected_commit: None,
@@ -3404,6 +3409,63 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
                         tab.path_filter = path;
                     }
+                }
+                HistoryMessage::LogFilterTextChanged(text) => {
+                    let debounce_gen = state.log_filter_text_gen.wrapping_add(1);
+                    state.log_filter_text_gen = debounce_gen;
+                    if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                        tab.text_filter_pending = text.clone();
+                    }
+                    return Task::perform(
+                        async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                            (text, debounce_gen)
+                        },
+                        |(text, fired_gen)| {
+                            Message::HistoryMessage(HistoryMessage::LogFilterTextApply(
+                                text, fired_gen,
+                            ))
+                        },
+                    );
+                }
+                HistoryMessage::LogFilterTextSubmit => {
+                    let debounce_gen = state.log_filter_text_gen.wrapping_add(1);
+                    state.log_filter_text_gen = debounce_gen;
+                    if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                        tab.text_filter = tab.text_filter_pending.clone();
+                    }
+                    apply_log_filter_to_history(state);
+                }
+                HistoryMessage::LogFilterTextApply(text, fired_gen) => {
+                    if fired_gen == state.log_filter_text_gen {
+                        if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                            tab.text_filter = text;
+                        }
+                        apply_log_filter_to_history(state);
+                    }
+                }
+                HistoryMessage::LogFilterDateFromChanged(text) => {
+                    if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                        tab.date_from_text = text;
+                    }
+                    apply_log_filter_to_history(state);
+                }
+                HistoryMessage::LogFilterDateToChanged(text) => {
+                    if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                        tab.date_to_text = text;
+                    }
+                    apply_log_filter_to_history(state);
+                }
+                HistoryMessage::LogFilterClear => {
+                    let debounce_gen = state.log_filter_text_gen.wrapping_add(1);
+                    state.log_filter_text_gen = debounce_gen;
+                    if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
+                        tab.text_filter.clear();
+                        tab.text_filter_pending.clear();
+                        tab.date_from_text.clear();
+                        tab.date_to_text.clear();
+                    }
+                    apply_log_filter_to_history(state);
                 }
                 HistoryMessage::ToggleBranchesDashboard => {
                     let will_show = !state.log_branches_dashboard_visible;
@@ -5876,6 +5938,21 @@ fn build_welcome_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<
     )
 }
 
+fn apply_log_filter_to_history(state: &mut AppState) {
+    let Some(tab) = state.log_tabs.get(state.active_log_tab) else {
+        return;
+    };
+    let text = tab.text_filter.clone();
+    let date_from = tab.date_from_text.clone();
+    let date_to = tab.date_to_text.clone();
+    let (date_filter, _) = log_filter::validate_dates(&date_from, &date_to);
+    state.history_view.filtered_entries =
+        log_filter::apply_filter(&state.history_view.entries, &text, &date_filter)
+            .into_iter()
+            .cloned()
+            .collect();
+}
+
 fn build_log_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Message> {
     history_view::view_with_tabs(
         &state.history_view,
@@ -5884,6 +5961,7 @@ fn build_log_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, 
         &state.branch_popup.local_branches,
         &state.branch_popup.remote_branches,
         state.log_branches_dashboard_visible,
+        state.git_settings.history_commit_limit,
         i18n,
     )
     .map(Message::HistoryMessage)
