@@ -49,6 +49,7 @@ pub mod index;
 pub mod llm;
 pub mod process;
 pub mod rebase;
+pub mod reflog;
 pub mod remote;
 pub mod repository;
 pub mod signature;
@@ -115,6 +116,7 @@ pub use blame::{BlameEntry, blame_file};
 pub use graph::{
     EdgeType, GraphEdge, GraphNode, RefLabel, RefType, compute_graph, compute_ref_labels,
 };
+pub use reflog::recent_checkout_branches;
 pub use signature::{SignatureCache, SignatureStatus, SignatureType, verify_commit_signature};
 pub use submodule::{SubmoduleChange, is_submodule, list_submodules, submodule_summary};
 pub use worktree::{WorkingTree, create_worktree, list_worktrees, remove_worktree};

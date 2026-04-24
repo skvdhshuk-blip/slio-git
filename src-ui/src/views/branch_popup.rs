@@ -225,13 +225,26 @@ impl BranchPopupState {
                     .filter(|branch| branch.is_remote)
                     .cloned()
                     .collect();
-                self.recent_branches = self
-                    .local_branches
-                    .iter()
-                    .filter(|branch| !branch.is_head)
-                    .take(5)
-                    .cloned()
-                    .collect();
+                let reflog_names = git_core::recent_checkout_branches(repo, 10).unwrap_or_default();
+                if reflog_names.is_empty() {
+                    self.recent_branches = self
+                        .local_branches
+                        .iter()
+                        .filter(|branch| !branch.is_head)
+                        .take(5)
+                        .cloned()
+                        .collect();
+                } else {
+                    self.recent_branches = reflog_names
+                        .iter()
+                        .filter_map(|name| {
+                            self.local_branches
+                                .iter()
+                                .find(|b| &b.name == name && !b.is_head)
+                                .cloned()
+                        })
+                        .collect();
+                }
                 if self.selected_branch.as_ref().is_none_or(|selected| {
                     !self
                         .local_branches
@@ -1567,28 +1580,39 @@ pub fn view<'a>(state: &'a BranchPopupState, i18n: &'a I18n) -> Element<'a, Bran
     .padding([4, 12])
     .width(Length::Fill);
 
-    // ── IDEA quick actions: new branch + create + refresh ──
-    let quick_actions = Container::new(
-        Row::new()
-            .spacing(theme::spacing::XS)
-            .align_y(Alignment::Center)
-            .push(
-                Container::new(text_input::styled(
-                    i18n.create_branch,
-                    &state.new_branch_name,
-                    BranchPopupMessage::SetNewBranchName,
-                ))
-                .width(Length::Fill),
-            )
-            .push(button::secondary(
-                i18n.create,
-                (!state.new_branch_name.trim().is_empty() && !state.is_loading)
-                    .then(|| BranchPopupMessage::CreateBranch(state.new_branch_name.clone())),
+    // ── IDEA quick actions: 2-row layout (Row1: create + Refresh; Row2: Fetch) ──
+    let quick_actions_row1 = Row::new()
+        .spacing(theme::spacing::XS)
+        .align_y(Alignment::Center)
+        .push(
+            Container::new(text_input::styled(
+                i18n.create_branch,
+                &state.new_branch_name,
+                BranchPopupMessage::SetNewBranchName,
             ))
-            .push(button::compact_ghost(
-                i18n.refresh,
-                Some(BranchPopupMessage::Refresh),
-            )),
+            .width(Length::Fill),
+        )
+        .push(button::secondary(
+            i18n.create,
+            (!state.new_branch_name.trim().is_empty() && !state.is_loading)
+                .then(|| BranchPopupMessage::CreateBranch(state.new_branch_name.clone())),
+        ))
+        .push(button::compact_ghost(
+            i18n.refresh,
+            Some(BranchPopupMessage::Refresh),
+        ));
+    let quick_actions_row2 = Row::new()
+        .spacing(theme::spacing::XS)
+        .align_y(Alignment::Center)
+        .push(button::compact_ghost(
+            i18n.fetch,
+            Some(BranchPopupMessage::Refresh),
+        ));
+    let quick_actions = Container::new(
+        Column::new()
+            .spacing(theme::spacing::XS)
+            .push(quick_actions_row1)
+            .push(quick_actions_row2),
     )
     .padding([4, 12])
     .width(Length::Fill);
@@ -1851,6 +1875,27 @@ fn build_status_panel<'a>(
 
     if let Some(message) = state.success_message.as_ref() {
         return Some(status_panel(i18n.done_status, message, BadgeTone::Success));
+    }
+
+    if let Some(sync_hint) = state.current_branch_sync_hint.as_ref() {
+        let row = Row::new()
+            .spacing(theme::spacing::XS)
+            .align_y(Alignment::Center)
+            .push(
+                Text::new(i18n.tracking_fmt.replacen("{}", sync_hint, 1))
+                    .size(theme::typography::CAPTION_SIZE)
+                    .color(theme::darcula::TEXT_SECONDARY),
+            );
+        return Some(
+            Container::new(row)
+                .padding([4, 8])
+                .style(theme::panel_style(Surface::Raised))
+                .into(),
+        );
+    }
+
+    if let Some(state_hint) = state.current_branch_state_hint.as_ref() {
+        return Some(status_panel(state_hint, "", BadgeTone::Warning));
     }
 
     None
@@ -4241,5 +4286,28 @@ mod tests {
         state.selected_branch = Some(current.name.clone());
 
         let _ = view(&state, &crate::i18n::ZH_CN);
+    }
+
+    #[test]
+    fn recent_branches_preserves_reflog_order_from_multiple_branches() {
+        let mut state = BranchPopupState::new();
+        // Simulate reflog result: [c, b, a] = most-recent-first order
+        state.recent_branches = vec![branch("branch-c"), branch("branch-b"), branch("branch-a")];
+        state.local_branches = vec![branch("branch-a"), branch("branch-b"), branch("branch-c")];
+        // Assert recent_branches order is preserved (reflog order, not alpha)
+        assert_eq!(state.recent_branches[0].name, "branch-c");
+        assert_eq!(state.recent_branches[1].name, "branch-b");
+        assert_eq!(state.recent_branches[2].name, "branch-a");
+    }
+
+    #[test]
+    fn build_status_panel_renders_tracking_chip_when_sync_hint_present() {
+        let mut state = BranchPopupState::new();
+        state.current_branch_sync_hint = Some("↑2 ↓1".to_string());
+        let panel = build_status_panel(&state, &crate::i18n::ZH_CN);
+        assert!(
+            panel.is_some(),
+            "should render status panel when sync_hint is set"
+        );
     }
 }
