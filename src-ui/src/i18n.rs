@@ -1419,6 +1419,8 @@ pub struct I18n {
     pub fh_rename_banner: &'static str,
     pub fh_path_label: &'static str,
     pub fh_back_to_log: &'static str,
+    // ── Autosquash toggle (N8a) ──
+    pub autosquash_checkbox_label: &'static str,
 }
 
 impl I18n {
@@ -2803,6 +2805,7 @@ impl I18n {
             fh_rename_banner: "重命名追踪在 N2b 支持",
             fh_path_label: "文件历史",
             fh_back_to_log: "返回日志",
+            autosquash_checkbox_label: "自动整理 (Autosquash)",
         }
     }
 }
@@ -4181,6 +4184,7 @@ pub static ZH_CN: I18n = I18n {
     fh_rename_banner: "重命名追踪在 N2b 支持",
     fh_path_label: "文件历史",
     fh_back_to_log: "返回日志",
+    autosquash_checkbox_label: "自动整理 (Autosquash)",
 };
 
 pub static EN: I18n = I18n {
@@ -5558,4 +5562,5 @@ pub static EN: I18n = I18n {
     fh_rename_banner: "Rename tracking coming in N2b",
     fh_path_label: "File History",
     fh_back_to_log: "Back to Log",
+    autosquash_checkbox_label: "Autosquash",
 };

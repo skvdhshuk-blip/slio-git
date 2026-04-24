@@ -4137,6 +4137,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             }
         },
         Message::RebaseEditorMessage(message) => match message {
+            RebaseEditorMessage::ToggleAutosquash(enabled) => {
+                state.rebase_editor.toggle_autosquash(enabled);
+            }
             RebaseEditorMessage::SetBaseBranch(value) => state.rebase_editor.onto_branch = value,
             RebaseEditorMessage::OpenAmendForCurrentStep => {
                 if let Err(error) = switch_commit_dialog_to_amend(state) {

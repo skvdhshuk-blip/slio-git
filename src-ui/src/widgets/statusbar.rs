@@ -120,6 +120,7 @@ impl<'a> StatusBar<'a> {
             BadgeTone::Success => theme::darcula::SUCCESS,
             BadgeTone::Warning => theme::darcula::WARNING,
             BadgeTone::Danger => theme::darcula::DANGER,
+            BadgeTone::Muted => theme::darcula::TEXT_DISABLED,
         }
     }
 }

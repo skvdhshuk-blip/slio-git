@@ -18,6 +18,7 @@ pub const ROW_HEIGHT: f32 = 28.0;
 /// Message types for rebase editor.
 #[derive(Debug, Clone)]
 pub enum RebaseEditorMessage {
+    ToggleAutosquash(bool),
     SetBaseBranch(String),
     StartRebase,
     ContinueRebase,
@@ -49,7 +50,7 @@ pub enum RebaseEditorMessage {
 }
 
 /// A single rebase todo item.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RebaseTodoItem {
     pub action: String,
     pub commit: String,
@@ -88,6 +89,11 @@ pub struct RebaseEditorState {
     pub drag_active: bool,
     /// Current hover target index during drag
     pub drag_target_index: Option<usize>,
+    /// Autosquash toggle state (non-persistent; reset on rebase open).
+    /// Ref: GitRebaseDialog.kt:81 — selectedOptions initially empty set.
+    pub autosquash_enabled: bool,
+    /// Snapshot of todo list at load time; used as base for autosquash re-computation.
+    pub original_todo_list: Vec<RebaseTodoItem>,
 }
 
 impl RebaseEditorState {
@@ -114,6 +120,8 @@ impl RebaseEditorState {
             drag_press_point: None,
             drag_active: false,
             drag_target_index: None,
+            autosquash_enabled: false,
+            original_todo_list: Vec::new(),
         }
     }
 
@@ -212,6 +220,9 @@ impl RebaseEditorState {
                         message: item.message,
                     })
                     .collect();
+                // Snapshot for autosquash re-computation; reset toggle (non-persistent).
+                self.original_todo_list = self.todo_list.clone();
+                self.autosquash_enabled = false;
                 self.todo_is_editable = true;
                 self.onto_branch.clear();
                 self.is_rebasing = false;
@@ -488,6 +499,18 @@ impl RebaseEditorState {
         self.drag_target_index = None;
     }
 
+    /// Toggle autosquash: re-compute from original snapshot each time.
+    /// Ref: GitRebaseDialog.kt:81 — declarative toggle, not incremental mutation.
+    pub fn toggle_autosquash(&mut self, enabled: bool) {
+        self.autosquash_enabled = enabled;
+        if enabled {
+            self.todo_list =
+                crate::widgets::autosquash::apply_autosquash(self.original_todo_list.clone());
+        } else {
+            self.todo_list = self.original_todo_list.clone();
+        }
+    }
+
     /// Select a todo item for Up/Down toolbar interaction.
     pub fn select_todo(&mut self, index: usize) {
         if index < self.todo_list.len() {
@@ -584,6 +607,12 @@ fn build_rebase_controls<'a>(
                 .push(button::primary(
                     i18n.re_start_interactive_btn,
                     (!state.is_loading).then_some(RebaseEditorMessage::StartRebase),
+                ))
+                .push(Text::new("│").size(12).color(theme::darcula::SEPARATOR))
+                .push(widgets::compact_checkbox(
+                    state.autosquash_enabled,
+                    i18n.autosquash_checkbox_label,
+                    RebaseEditorMessage::ToggleAutosquash,
                 )),
         )
         .width(Length::Fill)
@@ -701,6 +730,31 @@ fn build_todo_list<'a>(
             .into()
         };
 
+        // Badge: [fixup↑] / [squash↑] for autosquash-reordered commits.
+        // Ref: GitRebaseOption.kt:20 (canAutosquash); badge English literal per Spec R3.
+        let autosquash_badge: Option<Element<'_, RebaseEditorMessage>> = if state.autosquash_enabled
+        {
+            match item.action.as_str() {
+                "fixup" => Some(widgets::compact_chip("[fixup↑]", BadgeTone::Muted)),
+                "squash" => Some(widgets::compact_chip("[squash↑]", BadgeTone::Muted)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let message_with_badge: Element<'_, RebaseEditorMessage> =
+            if let Some(badge) = autosquash_badge {
+                Row::new()
+                    .spacing(theme::spacing::XS)
+                    .align_y(Alignment::Center)
+                    .push(badge)
+                    .push(message_cell)
+                    .into()
+            } else {
+                message_cell
+            };
+
         let row = Row::new()
             .spacing(0)
             .align_y(Alignment::Center)
@@ -715,7 +769,7 @@ fn build_todo_list<'a>(
                     .padding([3, 4]),
             )
             .push(
-                Container::new(message_cell)
+                Container::new(message_with_badge)
                     .width(Length::Fill)
                     .padding([3, 4]),
             );
@@ -1414,5 +1468,66 @@ mod tests {
         assert_eq!(state.todo_list[0].commit, "ccc");
         assert_eq!(state.todo_list[1].commit, "aaa");
         assert_eq!(state.todo_list[2].commit, "bbb");
+    }
+
+    // Smoke e2e: 3 commits containing fixup! → toggle autosquash on → correct merge order.
+    // Ref: GitSingleRepoRebaseTest:829 — autosquash reorders fixup commits.
+    // AC-test-3: fixup → autosquash on → pick count decreases (pick→fixup).
+    #[test]
+    fn smoke_autosquash_toggle_reorders_and_changes_action() {
+        let mut state = RebaseEditorState::new();
+        state.todo_is_editable = true;
+        // 3 commits: Subject1, Subject2, fixup! Subject1
+        // After autosquash: Subject1, fixup!Subject1(fixup), Subject2
+        let items = vec![
+            make_todo("pick", "aaa001", "Subject1"),
+            make_todo("pick", "bbb002", "Subject2"),
+            make_todo("pick", "ccc003", "fixup! Subject1"),
+        ];
+        state.original_todo_list = items.clone();
+        state.todo_list = items;
+
+        // Count picks before toggle
+        let picks_before = state
+            .todo_list
+            .iter()
+            .filter(|i| i.action == "pick")
+            .count();
+        assert_eq!(picks_before, 3);
+
+        // Toggle autosquash on
+        state.toggle_autosquash(true);
+        assert!(state.autosquash_enabled);
+
+        // fixup! Subject1 should now be action=fixup and appear right after Subject1
+        let fixup_idx = state
+            .todo_list
+            .iter()
+            .position(|i| i.message == "fixup! Subject1")
+            .expect("fixup commit must be present");
+        let subject1_idx = state
+            .todo_list
+            .iter()
+            .position(|i| i.message == "Subject1")
+            .expect("Subject1 must be present");
+        assert_eq!(
+            fixup_idx,
+            subject1_idx + 1,
+            "fixup must be right after target"
+        );
+        assert_eq!(state.todo_list[fixup_idx].action, "fixup");
+
+        // Pick count decreased: 2 picks + 1 fixup
+        let picks_after = state
+            .todo_list
+            .iter()
+            .filter(|i| i.action == "pick")
+            .count();
+        assert_eq!(picks_after, 2, "autosquash reduces pick count");
+
+        // Toggle off → restore original
+        state.toggle_autosquash(false);
+        assert_eq!(state.todo_list.len(), 3);
+        assert!(state.todo_list.iter().all(|i| i.action == "pick"));
     }
 }

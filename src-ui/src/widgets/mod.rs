@@ -1,5 +1,6 @@
 //! UI widgets module and shared shell primitives.
 
+pub mod autosquash;
 pub mod blame_cache;
 pub mod blame_worker;
 pub mod button;
@@ -253,6 +254,7 @@ pub fn status_banner<'a, Message: 'a>(
         BadgeTone::Success => Surface::Success,
         BadgeTone::Warning => Surface::Warning,
         BadgeTone::Danger => Surface::Danger,
+        BadgeTone::Muted => Surface::Raised,
     };
 
     Container::new(

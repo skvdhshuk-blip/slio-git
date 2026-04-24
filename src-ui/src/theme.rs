@@ -238,6 +238,7 @@ pub enum BadgeTone {
     Success,
     Warning,
     Danger,
+    Muted,
 }
 
 fn mix(base: Color, overlay: Color, amount: f32) -> Color {
@@ -461,6 +462,10 @@ pub fn badge_style(tone: BadgeTone) -> impl Fn(&Theme) -> container::Style {
             BadgeTone::Danger => (
                 mix(darcula::BG_CARD, darcula::DANGER, 0.08),
                 darcula::DANGER.scale_alpha(0.25),
+            ),
+            BadgeTone::Muted => (
+                mix(darcula::BG_MAIN, darcula::BG_CARD, 0.40),
+                darcula::BORDER.scale_alpha(0.5),
             ),
         };
 

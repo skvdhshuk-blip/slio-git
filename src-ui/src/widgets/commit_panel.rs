@@ -121,6 +121,7 @@ fn build_compact_status<'a, Message: 'a>(
         BadgeTone::Success => Surface::Success,
         BadgeTone::Warning => Surface::Warning,
         BadgeTone::Danger => Surface::Danger,
+        BadgeTone::Muted => Surface::Raised,
     };
     Container::new(
         Row::new()
