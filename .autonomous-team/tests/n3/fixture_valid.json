@@ -33,17 +33,5 @@
     "security_passed": "security-passed",
     "security_issue": "security-issue",
     "team_tracked": "team-tracked"
-  },
-  "mission_checkpoint_interval": 5,
-  "reference_repos": [
-    {
-      "name": "JetBrains IntelliJ Community (git4idea)",
-      "path": "/Users/wanghao/git/idea",
-      "focus_paths": [
-        "plugins/git4idea/src",
-        "plugins/git4idea/resources"
-      ],
-      "purpose": "slio-git 对标的 IDEA Git 插件真实实现。Mission Analyst / Technical Architect 做 gap 分析时应先 grep 该路径里 IDEA 实际怎么做，再对比 slio-git。"
-    }
-  ]
+  }
 }

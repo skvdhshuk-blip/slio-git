@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "code_backend": "gitee",
+  "boss": {
+    "yunxiao_user_id": "abc123"
+  },
+  "gitee": {
+    "owner": "sk-wang-sh",
+    "repo": "slio-git"
+  },
+  "review_labels": {
+    "code_review_passed": "code-review-passed"
+  }
+}

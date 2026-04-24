@@ -1,0 +1,15 @@
+name: config-guard
+on:
+  pull_request:
+    paths:
+      - '.autonomous-team/config.json'
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: TODO — enforce Boss committer whitelist
+        run: |
+          echo "config.json changed in PR; manual review required."
+          # TODO: enforce Boss whitelist in follow-up topic
+          exit 0   # 本 PR 占位不阻塞
