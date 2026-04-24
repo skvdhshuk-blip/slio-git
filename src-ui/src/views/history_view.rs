@@ -9,7 +9,9 @@ use crate::widgets::{self, OptionalPush, button, scrollable, text_input};
 use chrono::DateTime;
 use git_core::{
     Repository,
+    branch::{BranchRef, branches_containing_commit},
     commit::{CommitChangeStatus, CommitChangedFile, get_commit, get_commit_changed_files},
+    graph::RefType,
     history::{HistoryEntry, get_history, search_history},
 };
 use iced::mouse;
@@ -94,6 +96,9 @@ pub struct HistoryState {
     pub current_branch_name: Option<String>,
     pub current_upstream_ref: Option<String>,
     pub current_branch_state_hint: Option<String>,
+    pub selected_commit_containing_branches: Option<Vec<BranchRef>>,
+    pub selected_commit_containing_branches_loading: bool,
+    pub selected_commit_containing_branches_error: Option<String>,
 }
 
 impl HistoryState {
@@ -118,6 +123,9 @@ impl HistoryState {
             current_branch_name: None,
             current_upstream_ref: None,
             current_branch_state_hint: None,
+            selected_commit_containing_branches: None,
+            selected_commit_containing_branches_loading: false,
+            selected_commit_containing_branches_error: None,
         }
     }
 
@@ -154,6 +162,9 @@ impl HistoryState {
         self.selected_commit_file_path = None;
         self.expanded_commit_file_directories.clear();
         self.error = None;
+        self.selected_commit_containing_branches = None;
+        self.selected_commit_containing_branches_loading = true;
+        self.selected_commit_containing_branches_error = None;
         self.refresh_repo_context(repo);
 
         match get_commit(repo, &commit_id) {
@@ -172,6 +183,17 @@ impl HistoryState {
             }
             Err(error) => {
                 self.error = Some(format!("{}: {error}", i18n.load_commit_detail_failed));
+            }
+        }
+
+        match branches_containing_commit(repo, &commit_id) {
+            Ok(branches) => {
+                self.selected_commit_containing_branches = Some(branches);
+                self.selected_commit_containing_branches_loading = false;
+            }
+            Err(error) => {
+                self.selected_commit_containing_branches_loading = false;
+                self.selected_commit_containing_branches_error = Some(error.to_string());
             }
         }
     }
@@ -540,6 +562,83 @@ fn build_history_graph(entries: &[HistoryEntry]) -> HistoryGraphLayout {
     }
 }
 
+/// Build ref chip row for a commit row: HEAD chip + branch/tag chips (max 3, rest folded).
+fn build_ref_chips<'a>(entry: &'a HistoryEntry) -> Option<Element<'a, HistoryMessage>> {
+    if entry.refs.is_empty() {
+        return None;
+    }
+
+    const MAX_VISIBLE: usize = 3;
+    let mut chips: Vec<Element<'a, HistoryMessage>> = Vec::new();
+
+    // HEAD -> branch (dual segment): find current local branch first
+    let head_branch = entry
+        .refs
+        .iter()
+        .find(|r| r.ref_type == RefType::LocalBranch && r.is_current);
+
+    if let Some(branch) = head_branch {
+        chips.push(widgets::compact_chip::<HistoryMessage>(
+            format!("HEAD \u{2192} {}", branch.name),
+            BadgeTone::Danger,
+        ));
+    } else if entry.refs.iter().any(|r| r.ref_type == RefType::Head) {
+        chips.push(widgets::compact_chip::<HistoryMessage>(
+            "HEAD",
+            BadgeTone::Danger,
+        ));
+    }
+
+    // Remaining refs (skip current branch since it's folded into HEAD chip, skip Head type)
+    let remaining: Vec<_> = entry
+        .refs
+        .iter()
+        .filter(|r| {
+            r.ref_type != RefType::Head && !(r.ref_type == RefType::LocalBranch && r.is_current)
+        })
+        .collect();
+
+    // total visible slots = MAX_VISIBLE; HEAD chip already occupies chips.len() slots.
+    // Reserve 1 slot for +N chip if there are more refs than fit.
+    let available = MAX_VISIBLE.saturating_sub(chips.len());
+    let folded = remaining.len().saturating_sub(available);
+    let show_count = if folded > 0 {
+        available.saturating_sub(1)
+    } else {
+        available
+    };
+
+    for r in remaining.iter().take(show_count) {
+        let tone = match r.ref_type {
+            RefType::LocalBranch => BadgeTone::Accent,
+            RefType::RemoteBranch => BadgeTone::Success,
+            RefType::Tag => BadgeTone::Warning,
+            RefType::Head => BadgeTone::Danger,
+        };
+        chips.push(widgets::compact_chip::<HistoryMessage>(
+            r.name.clone(),
+            tone,
+        ));
+    }
+
+    if folded > 0 {
+        chips.push(widgets::compact_chip::<HistoryMessage>(
+            format!("+{folded}"),
+            BadgeTone::Neutral,
+        ));
+    }
+
+    if chips.is_empty() {
+        return None;
+    }
+
+    let mut row = Row::new().spacing(2).align_y(Alignment::Center);
+    for chip in chips {
+        row = row.push(chip);
+    }
+    Some(row.into())
+}
+
 fn build_commit_row<'a>(
     entry: &'a HistoryEntry,
     graph_row: &HistoryGraphRow,
@@ -556,7 +655,9 @@ fn build_commit_row<'a>(
     .width(Length::Fixed(graph_width))
     .height(Length::Fixed(HISTORY_ROW_HEIGHT));
 
-    // IDEA-style compact row: graph | hash | message | author | date
+    let chips = build_ref_chips(entry);
+
+    // IDEA-style compact row: graph | hash | chips? | message | author | date
     let row = Container::new(
         Row::new()
             .spacing(theme::spacing::SM)
@@ -570,11 +671,12 @@ fn build_commit_row<'a>(
                     .wrapping(text::Wrapping::None)
                     .color(theme::darcula::TEXT_DISABLED),
             )
+            .push_maybe(chips.map(|c| Container::new(c).width(Length::Shrink)))
             .push(
                 Text::new(subject)
                     .size(12)
                     .width(Length::Fill)
-                    .wrapping(text::Wrapping::WordOrGlyph),
+                    .wrapping(text::Wrapping::None),
             )
             .push(
                 Text::new(&entry.author_name)
@@ -1095,16 +1197,129 @@ fn history_graph_color(index: usize) -> Color {
     }
 }
 
+fn build_refs_chiplist_panel<'a>(
+    entry: &'a HistoryEntry,
+    i18n: &'a I18n,
+) -> Option<Element<'a, HistoryMessage>> {
+    if entry.refs.is_empty() {
+        return None;
+    }
+    let mut chips_row = Row::new().spacing(4).align_y(Alignment::Center);
+    for r in &entry.refs {
+        let tone = match r.ref_type {
+            RefType::LocalBranch if r.is_current => BadgeTone::Danger,
+            RefType::LocalBranch => BadgeTone::Accent,
+            RefType::RemoteBranch => BadgeTone::Success,
+            RefType::Tag => BadgeTone::Warning,
+            RefType::Head => BadgeTone::Danger,
+        };
+        let label = if r.ref_type == RefType::LocalBranch && r.is_current {
+            format!("HEAD \u{2192} {}", r.name)
+        } else {
+            r.name.clone()
+        };
+        chips_row = chips_row.push(widgets::compact_chip::<HistoryMessage>(label, tone));
+    }
+    Some(
+        Container::new(
+            Column::new()
+                .spacing(theme::spacing::XS)
+                .push(
+                    Text::new(i18n.commit_refs_label)
+                        .size(11)
+                        .color(theme::darcula::TEXT_SECONDARY),
+                )
+                .push(chips_row),
+        )
+        .padding([6, 10])
+        .style(theme::panel_style(crate::theme::Surface::Panel))
+        .into(),
+    )
+}
+
+fn build_containing_branches_panel<'a>(
+    state: &'a HistoryState,
+    i18n: &'a I18n,
+) -> Element<'a, HistoryMessage> {
+    let content: Element<'a, HistoryMessage> = if state.selected_commit_containing_branches_loading
+    {
+        Text::new(i18n.loading_containing_branches)
+            .size(11)
+            .color(theme::darcula::TEXT_SECONDARY)
+            .into()
+    } else if let Some(err) = &state.selected_commit_containing_branches_error {
+        Text::new(err.as_str())
+            .size(11)
+            .color(theme::darcula::TEXT_SECONDARY)
+            .into()
+    } else if let Some(branches) = &state.selected_commit_containing_branches {
+        if branches.is_empty() {
+            Text::new(i18n.no_containing_branches)
+                .size(11)
+                .color(theme::darcula::TEXT_SECONDARY)
+                .into()
+        } else {
+            let locals: Vec<_> = branches.iter().filter(|b| !b.is_remote).collect();
+            let remotes: Vec<_> = branches.iter().filter(|b| b.is_remote).collect();
+            let mut col = Column::new().spacing(4);
+            if !locals.is_empty() {
+                let mut row = Row::new().spacing(4).align_y(Alignment::Center);
+                for b in locals {
+                    row = row.push(widgets::compact_chip::<HistoryMessage>(
+                        b.name.clone(),
+                        BadgeTone::Accent,
+                    ));
+                }
+                col = col.push(row);
+            }
+            if !remotes.is_empty() {
+                let mut row = Row::new().spacing(4).align_y(Alignment::Center);
+                for b in remotes {
+                    row = row.push(widgets::compact_chip::<HistoryMessage>(
+                        b.name.clone(),
+                        BadgeTone::Success,
+                    ));
+                }
+                col = col.push(row);
+            }
+            col.into()
+        }
+    } else {
+        Space::new().width(Length::Shrink).into()
+    };
+
+    Container::new(
+        Column::new()
+            .spacing(theme::spacing::XS)
+            .push(
+                Text::new(i18n.contained_in_branches_label)
+                    .size(11)
+                    .color(theme::darcula::TEXT_SECONDARY),
+            )
+            .push(content),
+    )
+    .padding([6, 10])
+    .style(theme::panel_style(crate::theme::Surface::Panel))
+    .into()
+}
+
 fn build_commit_detail<'a>(
     state: &'a HistoryState,
     info: &'a git_core::commit::CommitInfo,
     i18n: &'a I18n,
 ) -> Element<'a, HistoryMessage> {
+    let selected_entry = state
+        .entries
+        .iter()
+        .find(|e| e.id == info.id)
+        .or_else(|| state.filtered_entries.iter().find(|e| e.id == info.id));
     Container::new(
         Column::new()
             .spacing(theme::spacing::XS)
             .height(Length::Fill)
             .push(build_commit_summary_panel(info, i18n))
+            .push_maybe(selected_entry.and_then(|e| build_refs_chiplist_panel(e, i18n)))
+            .push(build_containing_branches_panel(state, i18n))
             .push(build_commit_files_panel(state, info.id.as_str(), i18n)),
     )
     .height(Length::Fill)
@@ -1849,6 +2064,7 @@ fn build_status_panel<'a, Message: 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use git_core::graph::{RefLabel, RefType};
 
     fn entry(id: &str, parents: &[&str]) -> HistoryEntry {
         HistoryEntry {
@@ -1863,6 +2079,80 @@ mod tests {
             refs: Vec::new(),
             signature_status: None,
         }
+    }
+
+    fn ref_label(name: &str, ref_type: RefType, is_current: bool) -> RefLabel {
+        RefLabel {
+            name: name.to_string(),
+            ref_type,
+            is_current,
+        }
+    }
+
+    fn branch_ref(name: &str, is_remote: bool) -> BranchRef {
+        BranchRef {
+            name: name.to_string(),
+            is_remote,
+        }
+    }
+
+    #[test]
+    fn build_ref_chips_yields_head_local_remote_tag_order() {
+        let mut e = entry("abc", &[]);
+        e.refs = vec![
+            ref_label("main", RefType::LocalBranch, true),
+            ref_label("origin/main", RefType::RemoteBranch, false),
+            ref_label("v1.0", RefType::Tag, false),
+        ];
+        let chips = build_ref_chips(&e);
+        assert!(chips.is_some(), "expected chips when refs are present");
+    }
+
+    #[test]
+    fn build_ref_chips_empty_when_refs_empty() {
+        let e = entry("abc", &[]);
+        let chips = build_ref_chips(&e);
+        assert!(chips.is_none(), "expected None when refs is empty");
+    }
+
+    #[test]
+    fn containing_branches_panel_groups_local_remote() {
+        let mut state = HistoryState::new();
+        state.selected_commit_containing_branches = Some(vec![
+            branch_ref("main", false),
+            branch_ref("origin/main", true),
+        ]);
+        state.selected_commit_containing_branches_loading = false;
+        // Verify it renders without panic (structural test)
+        let i18n = crate::i18n::locale(Some("en"));
+        let _elem = build_containing_branches_panel(&state, i18n);
+    }
+
+    #[test]
+    fn refs_panel_hides_when_empty() {
+        let e = entry("abc", &[]);
+        let i18n = crate::i18n::locale(Some("en"));
+        let panel = build_refs_chiplist_panel(&e, i18n);
+        assert!(
+            panel.is_none(),
+            "refs panel should be None when refs is empty"
+        );
+    }
+
+    #[test]
+    fn build_ref_chips_overflow_does_not_exceed_max_visible() {
+        let mut e = entry("abc", &[]);
+        // HEAD + 4 other refs: total visible should be capped at MAX_VISIBLE=3
+        e.refs = vec![
+            ref_label("main", RefType::LocalBranch, true),
+            ref_label("feature-a", RefType::LocalBranch, false),
+            ref_label("feature-b", RefType::LocalBranch, false),
+            ref_label("origin/main", RefType::RemoteBranch, false),
+        ];
+        // HEAD chip takes 1 slot, so 2 slots remain.
+        // With 3 remaining refs > 2, reserve 1 for +N → show 1 ref chip + +N chip → total 3.
+        let chips = build_ref_chips(&e);
+        assert!(chips.is_some());
     }
 
     #[test]

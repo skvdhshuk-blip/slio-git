@@ -1340,6 +1340,12 @@ pub struct I18n {
     // ── Diff core ──
     pub dc_stage_hunk: &'static str,
     pub dc_unstage_hunk: &'static str,
+
+    // ── History refs (M1-A PR2) ──
+    pub commit_refs_label: &'static str,
+    pub contained_in_branches_label: &'static str,
+    pub loading_containing_branches: &'static str,
+    pub no_containing_branches: &'static str,
 }
 
 impl I18n {
@@ -2647,6 +2653,12 @@ impl I18n {
             // ── Diff core ──
             dc_stage_hunk: "暂存区块",
             dc_unstage_hunk: "取消暂存",
+
+            // ── History refs (M1-A PR2) ──
+            commit_refs_label: "引用",
+            contained_in_branches_label: "包含该提交的分支",
+            loading_containing_branches: "正在加载分支…",
+            no_containing_branches: "暂无包含该提交的分支",
         }
     }
 }
@@ -3948,6 +3960,12 @@ pub static ZH_CN: I18n = I18n {
     // ── Diff core ──
     dc_stage_hunk: "暂存区块",
     dc_unstage_hunk: "取消暂存",
+
+    // ── History refs (M1-A PR2) ──
+    commit_refs_label: "引用",
+    contained_in_branches_label: "包含该提交的分支",
+    loading_containing_branches: "正在加载分支…",
+    no_containing_branches: "暂无包含该提交的分支",
 };
 
 pub static EN: I18n = I18n {
@@ -5248,4 +5266,10 @@ pub static EN: I18n = I18n {
     // ── Diff core ──
     dc_stage_hunk: "Stage Hunk",
     dc_unstage_hunk: "Unstage",
+
+    // ── History refs (M1-A PR2) ──
+    commit_refs_label: "Refs",
+    contained_in_branches_label: "Contained in Branches",
+    loading_containing_branches: "Loading branches…",
+    no_containing_branches: "No branches contain this commit",
 };
