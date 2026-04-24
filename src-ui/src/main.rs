@@ -157,6 +157,27 @@ fn app_subscription(state: &AppState) -> Subscription<Message> {
         subscriptions.push(time::every(TOAST_TICK_INTERVAL).map(Message::ToastTick));
     }
 
+    // n/N diff-hunk navigation — only active when a diff is visible in the Changes tab
+    let diff_viewer_active = state.shell.git_tool_window_tab == state::GitToolWindowTab::Changes
+        && state.current_diff.is_some();
+    let popup_diff_active = state.history_commit_diff_popup.is_some();
+    if diff_viewer_active || popup_diff_active {
+        subscriptions.push(keyboard::listen().filter_map(|event| match event {
+            keyboard::Event::KeyPressed { key, modifiers, .. }
+                if key == keyboard::Key::Character("n".into()) && modifiers.is_empty() =>
+            {
+                Some(Message::NextHunk)
+            }
+            keyboard::Event::KeyPressed { key, modifiers, .. }
+                if key == keyboard::Key::Character("n".into())
+                    && modifiers == keyboard::Modifiers::SHIFT =>
+            {
+                Some(Message::PrevHunk)
+            }
+            _ => None,
+        }));
+    }
+
     Subscription::batch(subscriptions)
 }
 
@@ -874,11 +895,19 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             if state.history_commit_diff_popup.is_some() {
                 return navigate_history_commit_diff_popup_hunk(state, -1);
             }
+            if hunk_at_boundary(state, -1) {
+                state.show_toast(crate::state::FeedbackLevel::Info, i18n.nav_start, None);
+                return Task::none();
+            }
             return navigate_hunk(state, -1);
         }
         Message::NextHunk => {
             if state.history_commit_diff_popup.is_some() {
                 return navigate_history_commit_diff_popup_hunk(state, 1);
+            }
+            if hunk_at_boundary(state, 1) {
+                state.show_toast(crate::state::FeedbackLevel::Info, i18n.nav_end, None);
+                return Task::none();
             }
             return navigate_hunk(state, 1);
         }
@@ -5032,6 +5061,22 @@ fn select_relative_file(state: &mut AppState, delta: isize) {
             );
         }
     }
+}
+
+fn hunk_at_boundary(state: &AppState, delta: isize) -> bool {
+    let total_hunks = if state.diff_presentation == DiffPresentation::Split {
+        state.editor_diff.as_ref().map_or(0, |m| m.hunks.len())
+    } else {
+        state
+            .current_diff
+            .as_ref()
+            .map_or(0, |d| d.files.iter().map(|f| f.hunks.len()).sum())
+    };
+    if total_hunks == 0 {
+        return false;
+    }
+    let current = state.selected_hunk_index.unwrap_or(0) as isize;
+    (delta < 0 && current <= 0) || (delta > 0 && current >= (total_hunks - 1) as isize)
 }
 
 fn navigate_hunk(state: &mut AppState, delta: isize) -> Task<Message> {

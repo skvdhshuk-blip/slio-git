@@ -1388,6 +1388,10 @@ pub struct I18n {
     // ── Language change (T7 R3) ──
     pub lang_change_prompt: &'static str,
     pub lang_change_restart_hint: &'static str,
+
+    // ── Diff hunk navigation boundary (N6b) ──
+    pub nav_end: &'static str,
+    pub nav_start: &'static str,
 }
 
 impl I18n {
@@ -2741,6 +2745,10 @@ impl I18n {
             // ── Language change (T7 R3) ──
             lang_change_prompt: "语言已更改",
             lang_change_restart_hint: "重启应用后生效",
+
+            // ── Diff hunk navigation boundary (N6b) ──
+            nav_end: "已到末尾",
+            nav_start: "已到开头",
         }
     }
 }
@@ -4088,6 +4096,10 @@ pub static ZH_CN: I18n = I18n {
     // ── Language change (T7 R3) ──
     lang_change_prompt: "语言已更改",
     lang_change_restart_hint: "重启应用后生效",
+
+    // ── Diff hunk navigation boundary (N6b) ──
+    nav_end: "已到末尾",
+    nav_start: "已到开头",
 };
 
 pub static EN: I18n = I18n {
@@ -5434,4 +5446,8 @@ pub static EN: I18n = I18n {
     // ── Language change (T7 R3) ──
     lang_change_prompt: "Language changed",
     lang_change_restart_hint: "Restart the app to apply",
+
+    // ── Diff hunk navigation boundary (N6b) ──
+    nav_end: "Already at last change",
+    nav_start: "Already at first change",
 };
