@@ -800,12 +800,17 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             }
         }
         Message::ShowFileHistory(path) => {
-            // Switch to Log tab with path filter set
-            if let Some(tab) = state.log_tabs.get_mut(state.active_log_tab) {
-                tab.path_filter = Some(path);
-            }
-            state.switch_git_tool_window_tab(state::GitToolWindowTab::Log, i18n);
+            // IDEA: FileHistoryUi — open new LogTab for this file, never mutate existing tab (AC-tab-1).
+            // author/date filter default empty, not inherited from current tab (AC-tab-2).
+            let id = state.next_log_tab_id;
+            state.next_log_tab_id += 1;
+            let new_tab = state::LogTab::for_file_history(id, path, i18n);
+            state.log_tabs.push(new_tab);
+            state.active_log_tab = state.log_tabs.len() - 1;
             state.change_context_menu_path = None;
+            // switch_git_tool_window_tab calls refresh_log_tool_window_data, which now
+            // reads path_filter from the active tab and uses get_history_for_path (AC-data-1).
+            state.switch_git_tool_window_tab(state::GitToolWindowTab::Log, i18n);
         }
         Message::ToggleBlameAnnotation => {
             state.blame_active = !state.blame_active;
@@ -3358,6 +3363,8 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 HistoryMessage::SelectLogTab(index) => {
                     if index < state.log_tabs.len() {
                         state.active_log_tab = index;
+                        // Reload with path-aware data source (IDEA: GitHistoryProvider).
+                        state.load_history_for_active_tab(i18n);
                         apply_log_filter_to_history(state);
                     }
                 }
@@ -3528,6 +3535,22 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     {
                         entry.signature_status = Some(status.clone());
                     }
+                }
+                HistoryMessage::CloseFileHistoryTab => {
+                    // "Back to Log" button — close active file history tab (AC-clear-3).
+                    let idx = state.active_log_tab;
+                    if idx < state.log_tabs.len() && state.log_tabs[idx].is_closable {
+                        state.log_tabs.remove(idx);
+                        if state.active_log_tab >= state.log_tabs.len() {
+                            state.active_log_tab = state.log_tabs.len().saturating_sub(1);
+                        }
+                        state.load_history_for_active_tab(i18n);
+                        apply_log_filter_to_history(state);
+                    }
+                }
+                HistoryMessage::ShowHistoryForCommitFile(path) => {
+                    // P0-2 Log commit detail file right-click → Show History (AC-entry-2).
+                    return update(state, Message::ShowFileHistory(path));
                 }
             }
         }

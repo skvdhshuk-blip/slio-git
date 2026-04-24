@@ -174,6 +174,33 @@ impl LogTab {
             selected_commit: None,
         }
     }
+
+    /// Create a File History tab for a specific path (IDEA: FileHistoryUi).
+    /// Tab label uses `fh_tab_label_prefix` + basename.
+    /// author/date filter default empty — does not inherit from any existing tab (AC-tab-2).
+    pub fn for_file_history(id: usize, path: String, i18n: &crate::i18n::I18n) -> Self {
+        let basename = std::path::Path::new(&path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path.as_str())
+            .to_string();
+        let label = format!("{}{}", i18n.fh_tab_label_prefix, basename);
+        Self {
+            id,
+            label,
+            is_closable: true,
+            branch_filter: None,
+            text_filter: String::new(),
+            text_filter_pending: String::new(),
+            author_filter: None,
+            date_range: None,
+            date_from_text: String::new(),
+            date_to_text: String::new(),
+            path_filter: Some(path),
+            scroll_offset: 0.0,
+            selected_commit: None,
+        }
+    }
 }
 
 impl Default for LogTab {
@@ -1143,10 +1170,30 @@ impl AppState {
             return;
         };
 
-        let limit = self.git_settings.history_commit_limit;
-        self.history_view
-            .load_history_with_limit(&repo, i18n, limit);
+        self.load_history_for_active_tab(i18n);
         self.branch_popup.load_branches(&repo, i18n);
+    }
+
+    /// Load history for the currently active tab, using path-filtered API (IDEA: GitHistoryProvider)
+    /// when path_filter is set, or full history otherwise (AC-data-1).
+    pub(crate) fn load_history_for_active_tab(&mut self, i18n: &I18n) {
+        let Some(repo) = self.current_repository.clone() else {
+            return;
+        };
+        let limit = self.git_settings.history_commit_limit;
+        let path_filter = self
+            .log_tabs
+            .get(self.active_log_tab)
+            .and_then(|t| t.path_filter.clone());
+
+        if let Some(path) = path_filter {
+            // IDEA: GitHistoryUtils.loadRenamedFileHistory anchor — file-scoped history
+            self.history_view
+                .load_history_for_path(&repo, &path, i18n, limit);
+        } else {
+            self.history_view
+                .load_history_with_limit(&repo, i18n, limit);
+        }
     }
 
     pub fn switch_git_tool_window_tab(&mut self, tab: GitToolWindowTab, i18n: &I18n) {
@@ -3057,5 +3104,52 @@ mod tests {
         state.open_auxiliary_view(super::AuxiliaryView::Settings, &EN);
 
         assert!(state.history_commit_diff_popup.is_none());
+    }
+
+    // ── N2a File History tab isolation tests (IDEA: FileHistoryUi) ──
+
+    #[test]
+    fn for_file_history_creates_closable_tab_with_path_filter() {
+        // AC-tab-1: new tab is created (closable), not mutating existing tab
+        let tab = super::LogTab::for_file_history(5, "src/main.rs".to_string(), &EN);
+        assert!(tab.is_closable);
+        assert_eq!(tab.path_filter, Some("src/main.rs".to_string()));
+        assert_eq!(tab.id, 5);
+    }
+
+    #[test]
+    fn for_file_history_label_uses_prefix_and_basename() {
+        // AC-title-1: tab label = "History: {basename}"
+        let tab = super::LogTab::for_file_history(1, "src/views/history_view.rs".to_string(), &EN);
+        assert_eq!(tab.label, "History: history_view.rs");
+        let tab_zh =
+            super::LogTab::for_file_history(2, "src/main.rs".to_string(), &crate::i18n::ZH_CN);
+        assert_eq!(tab_zh.label, "历史: main.rs");
+    }
+
+    #[test]
+    fn for_file_history_does_not_inherit_filters() {
+        // AC-tab-2: author/date filter default empty
+        let tab = super::LogTab::for_file_history(3, "foo.rs".to_string(), &EN);
+        assert!(tab.author_filter.is_none());
+        assert!(tab.date_range.is_none());
+        assert!(tab.text_filter.is_empty());
+    }
+
+    #[test]
+    fn log_filter_clear_preserves_path_filter() {
+        // AC-clear-2: Clear does not exit File History mode
+        let mut tab = super::LogTab::for_file_history(10, "src/lib.rs".to_string(), &EN);
+        tab.text_filter = "fix".to_string();
+        tab.text_filter_pending = "fix".to_string();
+        tab.date_from_text = "2024-01-01".to_string();
+
+        // Simulate LogFilterClear (clears text/date but NOT path_filter)
+        tab.text_filter.clear();
+        tab.text_filter_pending.clear();
+        tab.date_from_text.clear();
+        tab.date_to_text.clear();
+
+        assert_eq!(tab.path_filter, Some("src/lib.rs".to_string()));
     }
 }

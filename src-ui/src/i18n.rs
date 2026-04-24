@@ -1413,6 +1413,12 @@ pub struct I18n {
     pub lf_no_match: &'static str,
     pub lf_limit_outside_range: &'static str,
     pub lf_limit_hint_fmt: &'static str,
+
+    // ── N2a File History (IDEA: FileHistoryUi / FileHistoryFilterUi) ──
+    pub fh_tab_label_prefix: &'static str,
+    pub fh_rename_banner: &'static str,
+    pub fh_path_label: &'static str,
+    pub fh_back_to_log: &'static str,
 }
 
 impl I18n {
@@ -2791,6 +2797,12 @@ impl I18n {
             lf_no_match: "无匹配的 commit",
             lf_limit_outside_range: "可能在加载范围外",
             lf_limit_hint_fmt: "已达加载上限 {n} 条，提高 Settings 中的 history limit 可搜索更多",
+
+            // ── N2a File History ──
+            fh_tab_label_prefix: "历史: ",
+            fh_rename_banner: "重命名追踪在 N2b 支持",
+            fh_path_label: "文件历史",
+            fh_back_to_log: "返回日志",
         }
     }
 }
@@ -4163,6 +4175,12 @@ pub static ZH_CN: I18n = I18n {
     lf_no_match: "无匹配的 commit",
     lf_limit_outside_range: "可能在加载范围外",
     lf_limit_hint_fmt: "已达加载上限 {n} 条，提高 Settings 中的 history limit 可搜索更多",
+
+    // ── N2a File History ──
+    fh_tab_label_prefix: "历史: ",
+    fh_rename_banner: "重命名追踪在 N2b 支持",
+    fh_path_label: "文件历史",
+    fh_back_to_log: "返回日志",
 };
 
 pub static EN: I18n = I18n {
@@ -5534,4 +5552,10 @@ pub static EN: I18n = I18n {
     lf_no_match: "No matching commits",
     lf_limit_outside_range: "may be outside loaded range",
     lf_limit_hint_fmt: "Loaded limit {n} reached — raise history limit in Settings to search more",
+
+    // ── N2a File History (IDEA: FileHistoryUi / FileHistoryFilterUi) ──
+    fh_tab_label_prefix: "History: ",
+    fh_rename_banner: "Rename tracking coming in N2b",
+    fh_path_label: "File History",
+    fh_back_to_log: "Back to Log",
 };

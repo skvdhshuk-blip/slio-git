@@ -12,7 +12,7 @@ use git_core::{
     branch::{BranchRef, branches_containing_commit},
     commit::{CommitChangeStatus, CommitChangedFile, get_commit, get_commit_changed_files},
     graph::RefType,
-    history::{HistoryEntry, get_history, search_history},
+    history::{HistoryEntry, get_history, get_history_for_path, search_history},
     signature::{SignatureStatus, VerificationFailureReason},
 };
 use iced::mouse;
@@ -81,6 +81,10 @@ pub enum HistoryMessage {
     DashboardDeleteBranch(String),
     // Signature async backfill (T1-B-B)
     SignatureStatusReady(String, SignatureStatus),
+    // N2a File History — close current file history tab and return to Log (AC-clear-3)
+    CloseFileHistoryTab,
+    // N2a P0-2: right-click "Show History" on file in Log commit detail panel (AC-entry-2)
+    ShowHistoryForCommitFile(String),
 }
 
 /// State for the history view.
@@ -154,6 +158,34 @@ impl HistoryState {
         self.refresh_repo_context(repo);
 
         match get_history(repo, Some(limit as usize)) {
+            Ok(entries) => {
+                self.entries = entries.clone();
+                self.filtered_entries = entries;
+                self.is_loading = false;
+                self.context_menu_commit = None;
+                self.context_menu_anchor = None;
+            }
+            Err(error) => {
+                self.error = Some(format!("{}: {error}", i18n.load_history_failed));
+                self.is_loading = false;
+            }
+        }
+    }
+
+    /// Load history for a single file path (IDEA: GitHistoryProvider / GitHistoryUtils.loadRenamedFileHistory).
+    /// Rename follow not yet supported — that is N2b scope.
+    pub fn load_history_for_path(
+        &mut self,
+        repo: &Repository,
+        path: &str,
+        i18n: &I18n,
+        limit: u32,
+    ) {
+        self.is_loading = true;
+        self.error = None;
+        self.refresh_repo_context(repo);
+
+        match get_history_for_path(repo, path, Some(limit as usize)) {
             Ok(entries) => {
                 self.entries = entries.clone();
                 self.filtered_entries = entries;
@@ -1684,32 +1716,37 @@ fn build_commit_file_row<'a>(
                 .color(theme::darcula::TEXT_SECONDARY)
         }));
 
-    Button::new(
-        Container::new(
-            Row::new()
-                .spacing(theme::spacing::XS)
-                .align_y(Alignment::Center)
-                .push(
-                    Text::new(commit_change_status_symbol(file.status))
-                        .size(12)
-                        .color(commit_change_status_color(file.status)),
-                )
-                .push(path_row),
+    let file_path_owned = file.path.clone();
+    // N2a P0-2: right-click → Show History for this file (AC-entry-2, IDEA: FileHistoryUi)
+    mouse_area(
+        Button::new(
+            Container::new(
+                Row::new()
+                    .spacing(theme::spacing::XS)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(commit_change_status_symbol(file.status))
+                            .size(12)
+                            .color(commit_change_status_color(file.status)),
+                    )
+                    .push(path_row),
+            )
+            .padding([4, 6])
+            .width(Length::Fill)
+            .style(theme::panel_style(if is_selected {
+                Surface::ListSelection
+            } else {
+                Surface::ListRow
+            })),
         )
-        .padding([4, 6])
         .width(Length::Fill)
-        .style(theme::panel_style(if is_selected {
-            Surface::ListSelection
-        } else {
-            Surface::ListRow
-        })),
+        .style(theme::button_style(theme::ButtonTone::Ghost))
+        .on_press(HistoryMessage::ViewCommitFileDiff(
+            commit_id.to_string(),
+            file.path.clone(),
+        )),
     )
-    .width(Length::Fill)
-    .style(theme::button_style(theme::ButtonTone::Ghost))
-    .on_press(HistoryMessage::ViewCommitFileDiff(
-        commit_id.to_string(),
-        file.path.clone(),
-    ))
+    .on_right_press(HistoryMessage::ShowHistoryForCommitFile(file_path_owned))
     .into()
 }
 
@@ -1863,6 +1900,55 @@ pub fn view_with_tabs<'a>(
         Space::new().height(Length::Shrink).into()
     };
 
+    // N2a: path indicator bar and rename banner for File History mode (IDEA: FileHistoryFilterUi)
+    let active_path_filter = active_log_tab.and_then(|t| t.path_filter.as_deref());
+    let file_history_header: Option<Element<'a, HistoryMessage>> = active_path_filter.map(|path| {
+        let path_label = Row::new()
+            .spacing(theme::spacing::XS)
+            .align_y(Alignment::Center)
+            .padding([4, 8])
+            .push(
+                Text::new(i18n.fh_path_label)
+                    .size(11)
+                    .color(theme::darcula::TEXT_SECONDARY),
+            )
+            .push(
+                Text::new(path)
+                    .size(11)
+                    .color(theme::darcula::TEXT_PRIMARY)
+                    .width(Length::Fill),
+            )
+            .push(
+                Button::new(
+                    Text::new(i18n.fh_back_to_log)
+                        .size(11)
+                        .color(theme::darcula::TEXT_SECONDARY),
+                )
+                .style(theme::button_style(theme::ButtonTone::Ghost))
+                .padding([2, 6])
+                .on_press(HistoryMessage::CloseFileHistoryTab),
+            );
+
+        // Rename banner: always visible when path_filter is active (AC-banner-1..3).
+        // N2b must remove this banner + i18n key when rename tracking is implemented (AC-banner-4).
+        let rename_banner = Container::new(
+            Text::new(i18n.fh_rename_banner)
+                .size(11)
+                .color(theme::darcula::TEXT_SECONDARY),
+        )
+        .padding([3, 8])
+        .width(Length::Fill)
+        .style(theme::panel_style(Surface::Panel));
+
+        Column::new()
+            .spacing(0)
+            .push(path_label)
+            .push(iced::widget::rule::horizontal(1))
+            .push(rename_banner)
+            .push(iced::widget::rule::horizontal(1))
+            .into()
+    });
+
     let main_content = view(state, i18n);
 
     // Build branches dashboard sidebar
@@ -1903,14 +1989,18 @@ pub fn view_with_tabs<'a>(
         .push(dashboard_toggle)
         .push(tab_row);
 
-    Column::new()
+    let mut col = Column::new()
         .spacing(0)
         .push(Container::new(full_tab_row).padding([0, 4]))
         .push(iced::widget::rule::horizontal(1))
         .push(filter_bar_element)
-        .push(iced::widget::rule::horizontal(1))
-        .push(content_area)
-        .into()
+        .push(iced::widget::rule::horizontal(1));
+
+    if let Some(header) = file_history_header {
+        col = col.push(header);
+    }
+
+    col.push(content_area).into()
 }
 
 /// Build the branches dashboard sidebar for the Log tab
