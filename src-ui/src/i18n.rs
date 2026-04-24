@@ -1353,6 +1353,14 @@ pub struct I18n {
     pub checkout_ref_invalid: &'static str,
     pub checkout_ref_done_fmt: &'static str,
     pub checkout_ref_failed_fmt: &'static str,
+
+    // ── Signature (T1-B-B) ──
+    pub signature_label: &'static str,
+    pub signed_by: &'static str,
+    pub fingerprint: &'static str,
+    pub sig_missing_key: &'static str,
+    pub sig_bad: &'static str,
+    pub sig_unverified: &'static str,
 }
 
 impl I18n {
@@ -2673,6 +2681,12 @@ impl I18n {
             checkout_ref_invalid: "无效的 ref",
             checkout_ref_done_fmt: "已切换到 {}",
             checkout_ref_failed_fmt: "切换失败：{}",
+            signature_label: "签名",
+            signed_by: "签名者",
+            fingerprint: "指纹",
+            sig_missing_key: "缺失公钥",
+            sig_bad: "签名无效",
+            sig_unverified: "未验证",
         }
     }
 }
@@ -3987,6 +4001,12 @@ pub static ZH_CN: I18n = I18n {
     checkout_ref_invalid: "无效的 ref",
     checkout_ref_done_fmt: "已切换到 {}",
     checkout_ref_failed_fmt: "切换失败：{}",
+    signature_label: "签名",
+    signed_by: "签名者",
+    fingerprint: "指纹",
+    sig_missing_key: "缺失公钥",
+    sig_bad: "签名无效",
+    sig_unverified: "未验证",
 };
 
 pub static EN: I18n = I18n {
@@ -5300,4 +5320,10 @@ pub static EN: I18n = I18n {
     checkout_ref_invalid: "Invalid ref",
     checkout_ref_done_fmt: "Checked out {}",
     checkout_ref_failed_fmt: "Checkout failed: {}",
+    signature_label: "Signature",
+    signed_by: "Signed by",
+    fingerprint: "Fingerprint",
+    sig_missing_key: "Missing public key",
+    sig_bad: "Bad signature",
+    sig_unverified: "Unverified",
 };

@@ -13,6 +13,7 @@ use git_core::{
     commit::{CommitChangeStatus, CommitChangedFile, get_commit, get_commit_changed_files},
     graph::RefType,
     history::{HistoryEntry, get_history, search_history},
+    signature::{SignatureStatus, VerificationFailureReason},
 };
 use iced::mouse;
 use iced::widget::canvas::{self, Canvas};
@@ -72,6 +73,8 @@ pub enum HistoryMessage {
     DashboardMergeBranch(String),
     DashboardRebaseOnto(String),
     DashboardDeleteBranch(String),
+    // Signature async backfill (T1-B-B)
+    SignatureStatusReady(String, SignatureStatus),
 }
 
 /// State for the history view.
@@ -562,9 +565,12 @@ fn build_history_graph(entries: &[HistoryEntry]) -> HistoryGraphLayout {
     }
 }
 
-/// Build ref chip row for a commit row: HEAD chip + branch/tag chips (max 3, rest folded).
-fn build_ref_chips<'a>(entry: &'a HistoryEntry) -> Option<Element<'a, HistoryMessage>> {
-    if entry.refs.is_empty() {
+/// Build ref chip row for a commit row: HEAD chip + branch/tag chips (max 3, rest folded), plus optional signature chip.
+fn build_ref_chips<'a>(
+    entry: &'a HistoryEntry,
+    i18n: &'a I18n,
+) -> Option<Element<'a, HistoryMessage>> {
+    if entry.refs.is_empty() && entry.signature_status.is_none() {
         return None;
     }
 
@@ -628,6 +634,22 @@ fn build_ref_chips<'a>(entry: &'a HistoryEntry) -> Option<Element<'a, HistoryMes
         ));
     }
 
+    // Signature chip — always rightmost; hidden for NoSignature/None
+    if let Some(sig) = &entry.signature_status {
+        let (label, tone) = match sig {
+            SignatureStatus::Verified { .. } => (i18n.signature_label, BadgeTone::Success),
+            SignatureStatus::NotVerified {
+                reason: VerificationFailureReason::CannotVerify,
+            } => (i18n.sig_missing_key, BadgeTone::Warning),
+            SignatureStatus::NotVerified { .. } => (i18n.sig_unverified, BadgeTone::Warning),
+            SignatureStatus::Bad => (i18n.sig_bad, BadgeTone::Danger),
+            SignatureStatus::NoSignature => ("", BadgeTone::Neutral),
+        };
+        if !label.is_empty() {
+            chips.push(widgets::compact_chip::<HistoryMessage>(label, tone));
+        }
+    }
+
     if chips.is_empty() {
         return None;
     }
@@ -645,6 +667,7 @@ fn build_commit_row<'a>(
     graph_width: f32,
     is_selected: bool,
     is_menu_open: bool,
+    i18n: &'a I18n,
 ) -> Element<'a, HistoryMessage> {
     let subject = commit_subject(&entry.message);
 
@@ -655,7 +678,7 @@ fn build_commit_row<'a>(
     .width(Length::Fixed(graph_width))
     .height(Length::Fixed(HISTORY_ROW_HEIGHT));
 
-    let chips = build_ref_chips(entry);
+    let chips = build_ref_chips(entry, i18n);
 
     // IDEA-style compact row: graph | hash | chips? | message | author | date
     let row = Container::new(
@@ -751,6 +774,7 @@ fn build_history_list<'a>(state: &'a HistoryState, i18n: &'a I18n) -> Element<'a
                     graph_width,
                     is_selected,
                     is_menu_open,
+                    i18n,
                 ))
             },
         )
@@ -1237,6 +1261,50 @@ fn build_refs_chiplist_panel<'a>(
     )
 }
 
+fn build_signature_panel<'a>(
+    entry: &'a HistoryEntry,
+    i18n: &'a I18n,
+) -> Option<Element<'a, HistoryMessage>> {
+    let content_text = match &entry.signature_status {
+        Some(SignatureStatus::Verified { user, fingerprint }) => {
+            let fp_short = if fingerprint.len() >= 16 {
+                &fingerprint[..16]
+            } else {
+                fingerprint.as_str()
+            };
+            format!(
+                "{}: {} / {}: {}",
+                i18n.signed_by, user, i18n.fingerprint, fp_short
+            )
+        }
+        Some(SignatureStatus::NotVerified { reason }) => {
+            let reason_str = match reason {
+                VerificationFailureReason::CannotVerify => i18n.sig_missing_key,
+                _ => i18n.sig_unverified,
+            };
+            format!("{}: {}", i18n.sig_unverified, reason_str)
+        }
+        Some(SignatureStatus::Bad) => i18n.sig_bad.to_string(),
+        Some(SignatureStatus::NoSignature) | None => return None,
+    };
+
+    Some(
+        Container::new(
+            Column::new()
+                .spacing(theme::spacing::XS)
+                .push(
+                    Text::new(i18n.signature_label)
+                        .size(11)
+                        .color(theme::darcula::TEXT_SECONDARY),
+                )
+                .push(Text::new(content_text).size(12)),
+        )
+        .padding([6, 10])
+        .style(theme::panel_style(crate::theme::Surface::Panel))
+        .into(),
+    )
+}
+
 fn build_containing_branches_panel<'a>(
     state: &'a HistoryState,
     i18n: &'a I18n,
@@ -1319,6 +1387,7 @@ fn build_commit_detail<'a>(
             .height(Length::Fill)
             .push(build_commit_summary_panel(info, i18n))
             .push_maybe(selected_entry.and_then(|e| build_refs_chiplist_panel(e, i18n)))
+            .push_maybe(selected_entry.and_then(|e| build_signature_panel(e, i18n)))
             .push(build_containing_branches_panel(state, i18n))
             .push(build_commit_files_panel(state, info.id.as_str(), i18n)),
     )
@@ -2104,14 +2173,16 @@ mod tests {
             ref_label("origin/main", RefType::RemoteBranch, false),
             ref_label("v1.0", RefType::Tag, false),
         ];
-        let chips = build_ref_chips(&e);
+        let i18n = crate::i18n::locale(Some("en"));
+        let chips = build_ref_chips(&e, i18n);
         assert!(chips.is_some(), "expected chips when refs are present");
     }
 
     #[test]
     fn build_ref_chips_empty_when_refs_empty() {
         let e = entry("abc", &[]);
-        let chips = build_ref_chips(&e);
+        let i18n = crate::i18n::locale(Some("en"));
+        let chips = build_ref_chips(&e, i18n);
         assert!(chips.is_none(), "expected None when refs is empty");
     }
 
@@ -2151,8 +2222,48 @@ mod tests {
         ];
         // HEAD chip takes 1 slot, so 2 slots remain.
         // With 3 remaining refs > 2, reserve 1 for +N → show 1 ref chip + +N chip → total 3.
-        let chips = build_ref_chips(&e);
+        let i18n = crate::i18n::locale(Some("en"));
+        let chips = build_ref_chips(&e, i18n);
         assert!(chips.is_some());
+    }
+
+    #[test]
+    fn build_ref_chips_shows_signature_chip_for_verified() {
+        let mut e = entry("abc", &[]);
+        e.signature_status = Some(SignatureStatus::Verified {
+            user: "Alice".to_string(),
+            fingerprint: "ABCDEF1234567890".to_string(),
+        });
+        let i18n = crate::i18n::locale(Some("en"));
+        let chips = build_ref_chips(&e, i18n);
+        assert!(chips.is_some(), "expected signature chip for Verified");
+    }
+
+    #[test]
+    fn build_ref_chips_hides_signature_chip_for_no_signature() {
+        let mut e = entry("abc", &[]);
+        e.signature_status = Some(SignatureStatus::NoSignature);
+        let i18n = crate::i18n::locale(Some("en"));
+        let chips = build_ref_chips(&e, i18n);
+        assert!(chips.is_none(), "NoSignature should produce no chip");
+    }
+
+    #[test]
+    fn build_signature_panel_hides_for_no_signature() {
+        let e = entry("abc", &[]);
+        let i18n = crate::i18n::locale(Some("en"));
+        assert!(build_signature_panel(&e, i18n).is_none());
+    }
+
+    #[test]
+    fn build_signature_panel_shows_for_verified() {
+        let mut e = entry("abc", &[]);
+        e.signature_status = Some(SignatureStatus::Verified {
+            user: "Alice".to_string(),
+            fingerprint: "ABCDEF1234567890XXXX".to_string(),
+        });
+        let i18n = crate::i18n::locale(Some("en"));
+        assert!(build_signature_panel(&e, i18n).is_some());
     }
 
     #[test]

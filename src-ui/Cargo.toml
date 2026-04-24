@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 git-core = { path = "../src/git-core" }
+git2 = { workspace = true }
 iced = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }

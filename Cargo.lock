@@ -4599,6 +4599,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "git-core",
+ "git2",
  "iced",
  "iced-code-editor",
  "log",

@@ -2550,7 +2550,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             let i18n = i18n::locale(state.git_settings.language.as_deref());
             match message {
                 HistoryMessage::Refresh => {
-                    if require_repository(state).is_ok() {
+                    if let Ok(repo) = require_repository(state) {
                         state.refresh_log_tool_window_data(i18n);
                         state.history_view.context_menu_commit = None;
                         if let Some(error) = state.history_view.error.clone() {
@@ -2561,6 +2561,11 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                                 "workspace.history",
                                 "workspace.history.refresh",
                                 i18n,
+                            );
+                        } else {
+                            return spawn_signature_backfill(
+                                &repo,
+                                &state.history_view.filtered_entries,
                             );
                         }
                     }
@@ -3359,6 +3364,21 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             ),
                         ),
                     );
+                }
+                HistoryMessage::SignatureStatusReady(commit_id, status) => {
+                    let oid_opt = git2::Oid::from_str(&commit_id).ok();
+                    if let (Some(oid), Ok(repo)) = (oid_opt, require_repository(state)) {
+                        repo.signature_cache().insert(oid, status.clone());
+                    }
+                    for entry in state
+                        .history_view
+                        .entries
+                        .iter_mut()
+                        .chain(state.history_view.filtered_entries.iter_mut())
+                        .filter(|e| e.id == commit_id)
+                    {
+                        entry.signature_status = Some(status.clone());
+                    }
                 }
             }
         }
@@ -4260,6 +4280,48 @@ fn update_editor_diff_model(state: &mut AppState) {
         Err(error) => {
             warn!("Failed to build editor diff model for {}: {}", path, error);
         }
+    }
+}
+
+/// Spawn background Tasks to verify signatures for cache-miss entries (viewport-scoped: first 30).
+fn spawn_signature_backfill(
+    repo: &Repository,
+    entries: &[git_core::history::HistoryEntry],
+) -> Task<Message> {
+    const VIEWPORT_CAP: usize = 30;
+    let cache = repo.signature_cache();
+    let repo_path = repo.path().to_path_buf();
+    let tasks: Vec<Task<Message>> = entries
+        .iter()
+        .take(VIEWPORT_CAP)
+        .filter(|e| {
+            git2::Oid::from_str(&e.id)
+                .map(|oid| cache.get(oid).is_none() && e.signature_status.is_none())
+                .unwrap_or(false)
+        })
+        .map(|e| {
+            let commit_id = e.id.clone();
+            let repo_path = repo_path.clone();
+            Task::perform(
+                async move {
+                    let repo = git_core::Repository::discover(&repo_path).ok()?;
+                    let oid = git2::Oid::from_str(&commit_id).ok()?;
+                    let status = git_core::verify_commit_signature(&repo, oid).ok()?;
+                    Some((commit_id, status))
+                },
+                |result| match result {
+                    Some((id, status)) => {
+                        Message::HistoryMessage(HistoryMessage::SignatureStatusReady(id, status))
+                    }
+                    None => Message::HistoryMessage(HistoryMessage::Refresh),
+                },
+            )
+        })
+        .collect();
+    if tasks.is_empty() {
+        Task::none()
+    } else {
+        Task::batch(tasks)
     }
 }
 

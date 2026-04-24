@@ -124,3 +124,32 @@ pub fn verify_commit_signature(
     info!("Signature verification for {}: {:?}", commit_id, result);
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn signature_cache_get_hit_under_100us() {
+        let cache = SignatureCache::new();
+        let oid = git2::Oid::from_str("a94a8fe5ccb19ba61c4c0873d391e987982fbbd3").unwrap();
+        cache.insert(oid, SignatureStatus::NoSignature);
+
+        // Warm up: ensure the entry is resident
+        let _ = cache.get(oid);
+
+        // Measure 500 consecutive hits; each must average well under 100 µs
+        let start = Instant::now();
+        for _ in 0..500 {
+            let _ = cache.get(oid);
+        }
+        let elapsed = start.elapsed();
+        let per_call = elapsed / 500;
+        assert!(
+            per_call < Duration::from_micros(100),
+            "cache hit took {:?} per call, expected < 100 µs",
+            per_call
+        );
+    }
+}
