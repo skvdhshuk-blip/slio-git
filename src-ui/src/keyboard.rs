@@ -38,6 +38,8 @@ pub enum ShortcutAction {
     // Tab switching
     SwitchToLogTab,
     SwitchToChangesTab,
+    // Open folder (Welcome + global, N9)
+    OpenFolder,
 }
 
 /// Keyboard shortcut definition
@@ -159,6 +161,13 @@ pub fn get_shortcuts() -> Vec<KeyboardShortcut> {
             key: Key::Character("z".into()),
             action: ShortcutAction::StashDrop,
         },
+        // Ctrl+O: Open Folder (global; ref: FlatWelcomeFrame.kt:111)
+        // Mac Cmd mapping deferred to N9-followup (primary_modifier() refactor)
+        KeyboardShortcut {
+            modifiers: Modifiers::CTRL,
+            key: Key::Character("o".into()),
+            action: ShortcutAction::OpenFolder,
+        },
         // Ctrl+L: Switch to Log tab
         KeyboardShortcut {
             modifiers: Modifiers::CTRL,
@@ -243,6 +252,7 @@ pub fn action_description(action: ShortcutAction, i18n: &crate::i18n::I18n) -> &
         ShortcutAction::StashList => i18n.kbd_stash_list,
         ShortcutAction::SwitchToLogTab => i18n.kbd_switch_to_log_tab,
         ShortcutAction::SwitchToChangesTab => i18n.kbd_switch_to_changes_tab,
+        ShortcutAction::OpenFolder => i18n.welcome_open_folder_btn,
     }
 }
 

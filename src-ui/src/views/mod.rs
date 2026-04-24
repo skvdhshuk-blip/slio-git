@@ -9,6 +9,7 @@ pub mod remote_dialog;
 pub mod settings_view;
 pub mod stash_panel;
 pub mod tag_dialog;
+pub mod welcome_view;
 pub mod worktree_view;
 
 use crate::state::{FeedbackLevel, FeedbackState, ToastNotificationState};

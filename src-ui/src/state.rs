@@ -21,7 +21,7 @@ use iced::Point;
 use log::warn;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// View modes for the main application body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,16 +233,19 @@ impl HistoryCommitDiffPopupState {
     }
 }
 
-const MAX_PROJECT_HISTORY: usize = 8;
+const MAX_PROJECT_HISTORY: usize = 20;
 const WORKSPACE_MEMORY_FILE: &str = "workspace-memory-v1.txt";
 const AUTO_REMOTE_CHECK_INTERVAL: Duration = Duration::from_secs(90);
 const TOAST_NOTIFICATION_DURATION: Duration = Duration::from_secs(4);
 
 /// Session-scoped project entries rendered in the left rail for quick switching.
+/// Ref: RecentProjectsManagerBase.kt:551 / RecentProjectListActionProvider.kt
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectEntry {
     pub name: String,
     pub path: PathBuf,
+    /// Unix seconds when the project was last opened; None for legacy entries (AC-15)
+    pub last_opened: Option<u64>,
 }
 
 impl ProjectEntry {
@@ -250,6 +253,7 @@ impl ProjectEntry {
         Self {
             name: repo.name(),
             path: repo.path().to_path_buf(),
+            last_opened: Some(now_unix_secs()),
         }
     }
 
@@ -261,14 +265,32 @@ impl ProjectEntry {
             .map(str::to_string)
             .unwrap_or_else(|| path.display().to_string());
 
-        Self { name, path }
+        Self {
+            name,
+            path,
+            last_opened: None,
+        }
     }
+
+    fn from_path_with_ts(path: PathBuf, last_opened: Option<u64>) -> Self {
+        let mut entry = Self::from_path(path);
+        entry.last_opened = last_opened;
+        entry
+    }
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct PersistedWorkspaceMemory {
     last_open_repository: Option<PathBuf>,
-    recent_paths: Vec<PathBuf>,
+    /// Paths with optional last-opened unix seconds (None = legacy 2-seg row, AC-15)
+    recent_entries: Vec<(PathBuf, Option<u64>)>,
 }
 
 impl PersistedWorkspaceMemory {
@@ -288,19 +310,27 @@ impl PersistedWorkspaceMemory {
         let mut memory = Self::default();
 
         for line in contents.lines() {
-            if let Some(path) = line.strip_prefix("last\t") {
-                let path = path.trim();
+            if let Some(rest) = line.strip_prefix("last\t") {
+                let path = rest.trim();
                 if !path.is_empty() {
                     memory.last_open_repository = Some(PathBuf::from(path));
                 }
                 continue;
             }
 
-            if let Some(path) = line.strip_prefix("recent\t") {
-                let path = path.trim();
-                if !path.is_empty() {
-                    memory.recent_paths.push(PathBuf::from(path));
+            if let Some(rest) = line.strip_prefix("recent\t") {
+                // 3-segment: path\tdisplay_name\tlast_opened_rfc3339
+                // 2-segment (legacy): path  — last_opened = None (AC-15)
+                let mut parts = rest.splitn(3, '\t');
+                let path_str = parts.next().unwrap_or("").trim();
+                if path_str.is_empty() {
+                    continue;
                 }
+                let _display_name = parts.next(); // reserved
+                let last_opened = parts.next().and_then(|ts| ts.trim().parse::<u64>().ok());
+                memory
+                    .recent_entries
+                    .push((PathBuf::from(path_str), last_opened));
             }
         }
 
@@ -327,8 +357,12 @@ impl PersistedWorkspaceMemory {
             lines.push(format!("last\t{}", path.display()));
         }
 
-        for path in &self.recent_paths {
-            lines.push(format!("recent\t{}", path.display()));
+        for (path, last_opened) in &self.recent_entries {
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            match last_opened {
+                Some(ts) => lines.push(format!("recent\t{}\t{}\t{}", path.display(), name, ts)),
+                None => lines.push(format!("recent\t{}", path.display())),
+            }
         }
 
         if lines.is_empty() {
@@ -339,24 +373,35 @@ impl PersistedWorkspaceMemory {
     }
 
     fn normalize(&mut self) {
-        let mut normalized = Vec::new();
-
-        if let Some(path) = self.last_open_repository.clone() {
-            normalized.push(path);
+        // Move/insert last_open_repository to the front of recent_entries
+        if let Some(last) = self.last_open_repository.clone() {
+            // Remove any existing occurrence so we can re-insert at front with its timestamp
+            let existing_ts = self
+                .recent_entries
+                .iter()
+                .position(|(p, _)| p == &last)
+                .map(|i| self.recent_entries.remove(i).1)
+                .flatten();
+            self.recent_entries.insert(0, (last, existing_ts));
         }
 
-        for path in self.recent_paths.drain(..) {
-            if normalized.iter().any(|existing| existing == &path) {
+        // Deduplicate while preserving order
+        let mut seen: Vec<PathBuf> = Vec::new();
+        let mut deduped: Vec<(PathBuf, Option<u64>)> = Vec::new();
+        for (path, ts) in self.recent_entries.drain(..) {
+            if seen.iter().any(|existing| existing == &path) {
                 continue;
             }
-            normalized.push(path);
+            seen.push(path.clone());
+            deduped.push((path, ts));
         }
 
-        normalized.truncate(MAX_PROJECT_HISTORY);
-        self.recent_paths = normalized;
+        deduped.truncate(MAX_PROJECT_HISTORY);
+        self.recent_entries = deduped;
 
+        // Verify last_open_repository still present after truncation
         if let Some(last) = self.last_open_repository.as_ref() {
-            if !self.recent_paths.iter().any(|path| path == last) {
+            if !self.recent_entries.iter().any(|(p, _)| p == last) {
                 self.last_open_repository = None;
             }
         }
@@ -814,10 +859,10 @@ impl AppState {
         let persisted = PersistedWorkspaceMemory::load();
         let mut state = Self::new_with_i18n(i18n);
         state.project_history = persisted
-            .recent_paths
+            .recent_entries
             .iter()
             .cloned()
-            .map(ProjectEntry::from_path)
+            .map(|(path, ts)| ProjectEntry::from_path_with_ts(path, ts))
             .collect();
 
         if let Some(last_path) = persisted.last_open_repository {
@@ -2312,10 +2357,10 @@ impl AppState {
     fn persist_workspace_memory(&self, last_open_repository: Option<&Path>) {
         let mut memory = PersistedWorkspaceMemory {
             last_open_repository: last_open_repository.map(Path::to_path_buf),
-            recent_paths: self
+            recent_entries: self
                 .project_history
                 .iter()
-                .map(|entry| entry.path.clone())
+                .map(|entry| (entry.path.clone(), entry.last_opened))
                 .collect(),
         };
         memory.normalize();
@@ -2522,14 +2567,17 @@ mod tests {
         state.remember_project(ProjectEntry {
             name: "alpha".to_string(),
             path: PathBuf::from("/tmp/alpha"),
+            last_opened: None,
         });
         state.remember_project(ProjectEntry {
             name: "beta".to_string(),
             path: PathBuf::from("/tmp/beta"),
+            last_opened: None,
         });
         state.remember_project(ProjectEntry {
             name: "alpha".to_string(),
             path: PathBuf::from("/tmp/alpha"),
+            last_opened: None,
         });
 
         assert_eq!(state.project_history.len(), 2);
@@ -2544,13 +2592,42 @@ mod tests {
 
         let original = PersistedWorkspaceMemory {
             last_open_repository: Some(PathBuf::from("/tmp/current")),
-            recent_paths: vec![PathBuf::from("/tmp/current"), PathBuf::from("/tmp/other")],
+            recent_entries: vec![
+                (PathBuf::from("/tmp/current"), Some(1700000000)),
+                (PathBuf::from("/tmp/other"), None),
+            ],
         };
 
         original.save_to_path(&state_path).expect("save memory");
         let loaded = PersistedWorkspaceMemory::load_from_path(&state_path);
 
         assert_eq!(loaded, original);
+    }
+
+    #[test]
+    fn persisted_workspace_memory_legacy_two_segment_rows_parse_as_none_last_opened() {
+        // AC-15: old 2-segment rows must parse with last_opened=None, never crash
+        let loaded = PersistedWorkspaceMemory::parse(
+            "last\t/tmp/current\nrecent\t/tmp/other\nrecent\t/tmp/current\nrecent\t/tmp/other\n",
+        );
+
+        assert_eq!(
+            loaded.last_open_repository,
+            Some(PathBuf::from("/tmp/current"))
+        );
+        // AC-15: all legacy rows have last_opened=None
+        for (_, ts) in &loaded.recent_entries {
+            assert_eq!(*ts, None, "legacy 2-seg row must yield last_opened=None");
+        }
+        let paths: Vec<_> = loaded
+            .recent_entries
+            .iter()
+            .map(|(p, _)| p.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("/tmp/current"), PathBuf::from("/tmp/other")]
+        );
     }
 
     #[test]
@@ -2563,10 +2640,33 @@ mod tests {
             loaded.last_open_repository,
             Some(PathBuf::from("/tmp/current"))
         );
+        let paths: Vec<_> = loaded
+            .recent_entries
+            .iter()
+            .map(|(p, _)| p.clone())
+            .collect();
         assert_eq!(
-            loaded.recent_paths,
+            paths,
             vec![PathBuf::from("/tmp/current"), PathBuf::from("/tmp/other")]
         );
+    }
+
+    #[test]
+    fn persisted_workspace_memory_three_segment_roundtrips() {
+        let temp_dir = tempdir().expect("temp dir");
+        let state_path = temp_dir.path().join("workspace-memory-v1.txt");
+
+        let original = PersistedWorkspaceMemory {
+            last_open_repository: Some(PathBuf::from("/tmp/repo")),
+            recent_entries: vec![
+                (PathBuf::from("/tmp/repo"), Some(1700000100)),
+                (PathBuf::from("/tmp/other"), Some(1700000000)),
+                (PathBuf::from("/tmp/legacy"), None),
+            ],
+        };
+        original.save_to_path(&state_path).expect("save");
+        let loaded = PersistedWorkspaceMemory::load_from_path(&state_path);
+        assert_eq!(loaded, original);
     }
 
     #[test]

@@ -66,14 +66,18 @@ pub fn main() -> iced::Result {
     }
     info!("Starting slio-git UI");
 
-    let perf_hud_on_start = std::env::args().any(|a| a == "--perf-hud");
-    let history_limit_override: Option<u32> = {
-        let args: Vec<String> = std::env::args().collect();
-        args.windows(2)
-            .find(|w| w[0] == "--history-limit")
-            .and_then(|w| w[1].parse::<u32>().ok())
-            .map(|n| n.max(1).min(50_000))
-    };
+    let cli_args: Vec<String> = std::env::args().collect();
+    let perf_hud_on_start = cli_args.iter().any(|a| a == "--perf-hud");
+    let history_limit_override: Option<u32> = cli_args
+        .windows(2)
+        .find(|w| w[0] == "--history-limit")
+        .and_then(|w| w[1].parse::<u32>().ok())
+        .map(|n| n.max(1).min(50_000));
+    // R3: if args[1] is a path, open it directly (skipping Welcome)
+    let cli_repo_path: Option<std::path::PathBuf> = cli_args
+        .get(1)
+        .filter(|a| !a.starts_with('-'))
+        .map(std::path::PathBuf::from);
 
     // Load embedded window icon (64x64 RGBA)
     let icon_data = include_bytes!("../assets/icon_64.rgba");
@@ -108,7 +112,12 @@ pub fn main() -> iced::Result {
             if let Some(limit) = history_limit_override {
                 app_state.git_settings.history_commit_limit = limit;
             }
-            (app_state, startup_task)
+            // R3: CLI path arg — open repo or toast error, never auto-open recent[0] (AC-1)
+            let mut cli_task = Task::none();
+            if let Some(path) = cli_repo_path.clone() {
+                cli_task = Task::done(Message::WelcomeOpenProject(path));
+            }
+            (app_state, Task::batch([startup_task, cli_task]))
         },
         update,
         view,
@@ -466,12 +475,14 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::DismissToast => state.dismiss_toast(),
         Message::CloseRepository => {
+            // R4: route back to Welcome after close (AC-6)
             state.clear_repository(i18n);
-            state.set_empty(
-                i18n.repo_closed,
-                Some(i18n.repo_closed_detail.to_string()),
-                "repository.close",
-            );
+        }
+        Message::WelcomeOpenProject(path) => {
+            // AC-7: open project from recent list; switch_to_project handles remove on missing
+            if let Err(error) = state.switch_to_project(&path, i18n) {
+                state.show_toast(crate::state::FeedbackLevel::Error, &error, None);
+            }
         }
         Message::ShowChanges => {
             let previous_section = state.shell.active_section;
@@ -1139,6 +1150,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     state,
                     Message::SwitchGitToolWindowTab(GitToolWindowTab::Changes),
                 );
+            }
+            // Ctrl+O: Open Folder — global guard: skip if modal is active (AC-5)
+            ShortcutAction::OpenFolder => {
+                if state.auxiliary_view.is_none() && !state.show_branch_dropdown {
+                    return update(state, Message::OpenRepository);
+                }
             }
             _ => {}
         },
@@ -5803,7 +5820,7 @@ fn wrap_with_history_commit_diff_popup<'a>(
 
 fn build_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Message> {
     if state.current_repository.is_none() {
-        return build_welcome_body(i18n);
+        return build_welcome_body(state, i18n);
     }
 
     if let Some(auxiliary) = state
@@ -5840,7 +5857,7 @@ fn build_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Mess
             GitToolWindowTab::Log => build_log_body(state, i18n),
         },
         ShellSection::Conflicts => build_conflict_body(state, i18n),
-        ShellSection::Welcome => build_welcome_body(i18n),
+        ShellSection::Welcome => build_welcome_body(state, i18n),
     }
 }
 
@@ -5848,23 +5865,14 @@ fn build_docked_tool_window<'a>(_state: &'a AppState) -> Option<Element<'a, Mess
     None
 }
 
-fn build_welcome_body<'a>(i18n: &'a i18n::I18n) -> Element<'a, Message> {
-    let action_row = Row::new()
-        .spacing(theme::spacing::SM)
-        .push(button::primary(
-            i18n.open_repository,
-            Some(Message::OpenRepository),
-        ))
-        .push(button::secondary(
-            i18n.init_repository,
-            Some(Message::InitRepository),
-        ));
-
-    views::render_empty_state(
-        i18n.app_tagline,
-        i18n.welcome,
-        i18n.open_repo_hint,
-        Some(action_row.into()),
+fn build_welcome_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Message> {
+    // Ref: FlatWelcomeFrame.kt:111 / RecentProjectsManagerBase.kt:551
+    views::welcome_view::view(
+        &state.project_history,
+        None,
+        i18n,
+        Message::WelcomeOpenProject,
+        Message::OpenRepository,
     )
 }
 
@@ -7115,6 +7123,8 @@ pub enum Message {
     CancelDrag,
     FrameTick(Instant),
     ToggleHud,
+    /// Welcome screen: open a project from recent list (AC-7)
+    WelcomeOpenProject(std::path::PathBuf),
 }
 
 #[cfg(test)]

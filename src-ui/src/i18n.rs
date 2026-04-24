@@ -1392,6 +1392,18 @@ pub struct I18n {
     // ── Diff hunk navigation boundary (N6b) ──
     pub nav_end: &'static str,
     pub nav_start: &'static str,
+
+    // ── Welcome screen (N9) ──
+    pub welcome_recent_list_title: &'static str,
+    pub welcome_open_folder_btn: &'static str,
+    pub welcome_clone_btn: &'static str,
+    pub welcome_clone_tooltip: &'static str,
+    pub welcome_recent_path_missing_tooltip: &'static str,
+    pub welcome_no_recent: &'static str,
+    pub welcome_just_now: &'static str,
+    pub welcome_minutes_ago_fmt: &'static str,
+    pub welcome_hours_ago_fmt: &'static str,
+    pub welcome_days_ago_fmt: &'static str,
 }
 
 impl I18n {
@@ -2749,6 +2761,18 @@ impl I18n {
             // ── Diff hunk navigation boundary (N6b) ──
             nav_end: "已到末尾",
             nav_start: "已到开头",
+
+            // ── Welcome screen (N9) ──
+            welcome_recent_list_title: "最近打开",
+            welcome_open_folder_btn: "打开文件夹...",
+            welcome_clone_btn: "从 URL 克隆...",
+            welcome_clone_tooltip: "M2 后支持",
+            welcome_recent_path_missing_tooltip: "路径不可访问，可能被移动、删除或外接盘未挂载",
+            welcome_no_recent: "暂无最近项目",
+            welcome_just_now: "刚刚",
+            welcome_minutes_ago_fmt: "{} 分钟前",
+            welcome_hours_ago_fmt: "{} 小时前",
+            welcome_days_ago_fmt: "{} 天前",
         }
     }
 }
@@ -4100,6 +4124,18 @@ pub static ZH_CN: I18n = I18n {
     // ── Diff hunk navigation boundary (N6b) ──
     nav_end: "已到末尾",
     nav_start: "已到开头",
+
+    // ── Welcome screen (N9) ──
+    welcome_recent_list_title: "最近打开",
+    welcome_open_folder_btn: "打开文件夹...",
+    welcome_clone_btn: "从 URL 克隆...",
+    welcome_clone_tooltip: "M2 后支持",
+    welcome_recent_path_missing_tooltip: "路径不可访问，可能被移动、删除或外接盘未挂载",
+    welcome_no_recent: "暂无最近项目",
+    welcome_just_now: "刚刚",
+    welcome_minutes_ago_fmt: "{} 分钟前",
+    welcome_hours_ago_fmt: "{} 小时前",
+    welcome_days_ago_fmt: "{} 天前",
 };
 
 pub static EN: I18n = I18n {
@@ -5450,4 +5486,16 @@ pub static EN: I18n = I18n {
     // ── Diff hunk navigation boundary (N6b) ──
     nav_end: "Already at last change",
     nav_start: "Already at first change",
+
+    // ── Welcome screen (N9) ──
+    welcome_recent_list_title: "Recent Projects",
+    welcome_open_folder_btn: "Open Folder...",
+    welcome_clone_btn: "Clone from URL...",
+    welcome_clone_tooltip: "Available after M2",
+    welcome_recent_path_missing_tooltip: "Path not accessible — it may have been moved, deleted, or the drive is not mounted",
+    welcome_no_recent: "No recent projects",
+    welcome_just_now: "just now",
+    welcome_minutes_ago_fmt: "{} minutes ago",
+    welcome_hours_ago_fmt: "{} hours ago",
+    welcome_days_ago_fmt: "{} days ago",
 };
