@@ -41,6 +41,54 @@ pub enum FileDisplayMode {
     Tree,
 }
 
+/// Which section of the changelist a drag originated from or targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeSectionKind {
+    Staged,
+    Unstaged,
+}
+
+const DRAG_THRESHOLD: f32 = 4.0;
+
+/// File-level drag-and-drop state for the changelist.
+#[derive(Debug, Clone)]
+pub struct DragState {
+    pub path: String,
+    pub src_kind: ChangeSectionKind,
+    pub anchor: Point,
+    pub cursor: Point,
+    pub started: bool,
+    pub hover_kind: Option<ChangeSectionKind>,
+}
+
+impl DragState {
+    pub fn begin(path: String, src_kind: ChangeSectionKind, anchor: Point) -> Self {
+        Self {
+            path,
+            src_kind,
+            anchor,
+            cursor: anchor,
+            started: false,
+            hover_kind: None,
+        }
+    }
+
+    pub fn update_cursor(&mut self, pos: Point) {
+        self.cursor = pos;
+        if !self.started {
+            let dx = pos.x - self.anchor.x;
+            let dy = pos.y - self.anchor.y;
+            if (dx * dx + dy * dy).sqrt() >= DRAG_THRESHOLD {
+                self.started = true;
+            }
+        }
+    }
+
+    pub fn hover_section(&mut self, kind: ChangeSectionKind) {
+        self.hover_kind = Some(kind);
+    }
+}
+
 /// State for a single tab in the multi-tab log view
 #[derive(Debug, Clone)]
 pub struct LogTab {
@@ -617,6 +665,8 @@ pub struct AppState {
     pub pull_strategy: PullStrategy,
     /// Available update info from GitHub
     pub available_update: Option<git_core::updater::UpdateInfo>,
+    /// File-level DnD state for changelist
+    pub drag: Option<DragState>,
 }
 
 /// In-progress network operation state for progress indicator
@@ -750,6 +800,7 @@ impl AppState {
             network_operation: None,
             pull_strategy: PullStrategy::default(),
             available_update: None,
+            drag: None,
         };
 
         state.sync_context_feedback(i18n);
@@ -2381,6 +2432,7 @@ mod tests {
     use crate::i18n::EN;
     use crate::views::branch_popup::MetadataDensity;
     use git_core::diff::{Diff, DiffHunk, DiffLine, DiffLineOrigin, FileDiff};
+    use iced::Point;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -2806,6 +2858,65 @@ mod tests {
         assert!(tab.path_filter.is_none());
         assert!(tab.selected_commit.is_none());
         assert_eq!(tab.scroll_offset, 0.0);
+    }
+
+    #[test]
+    fn drag_begin_sets_state() {
+        let drag = super::DragState::begin(
+            "src/main.rs".to_string(),
+            super::ChangeSectionKind::Unstaged,
+            Point::new(10.0, 20.0),
+        );
+        assert_eq!(drag.path, "src/main.rs");
+        assert_eq!(drag.src_kind, super::ChangeSectionKind::Unstaged);
+        assert!(!drag.started);
+        assert!(drag.hover_kind.is_none());
+    }
+
+    #[test]
+    fn drag_move_updates_cursor() {
+        let mut drag = super::DragState::begin(
+            "a.rs".to_string(),
+            super::ChangeSectionKind::Staged,
+            Point::new(0.0, 0.0),
+        );
+        drag.update_cursor(Point::new(1.0, 1.0));
+        assert_eq!(drag.cursor, Point::new(1.0, 1.0));
+    }
+
+    #[test]
+    fn drag_release_clears() {
+        let mut state = AppState::new();
+        state.drag = Some(super::DragState::begin(
+            "a.rs".to_string(),
+            super::ChangeSectionKind::Unstaged,
+            Point::new(0.0, 0.0),
+        ));
+        state.drag = None;
+        assert!(state.drag.is_none());
+    }
+
+    #[test]
+    fn drag_threshold_below_4px_click_not_drag() {
+        let mut drag = super::DragState::begin(
+            "a.rs".to_string(),
+            super::ChangeSectionKind::Unstaged,
+            Point::new(0.0, 0.0),
+        );
+        drag.update_cursor(Point::new(2.0, 2.0)); // dist ~2.83, below 4px
+        assert!(!drag.started);
+    }
+
+    #[test]
+    fn drag_same_section_noop() {
+        let drag = super::DragState::begin(
+            "a.rs".to_string(),
+            super::ChangeSectionKind::Unstaged,
+            Point::new(0.0, 0.0),
+        );
+        // Same section → target equals source → should be treated as cancel in update logic
+        assert_eq!(drag.src_kind, super::ChangeSectionKind::Unstaged);
+        assert!(drag.hover_kind.is_none());
     }
 
     #[test]

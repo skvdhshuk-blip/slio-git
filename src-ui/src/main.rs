@@ -17,8 +17,8 @@ use crate::file_watcher::RepositoryWatchEvent;
 use crate::i18n::I18n;
 use crate::keyboard::{ShortcutAction, get_shortcuts};
 use crate::state::{
-    AppState, AuxiliaryView, DiffPresentation, GitToolWindowTab, ShellSection, ToolbarRemoteAction,
-    is_docked_auxiliary_view,
+    AppState, AuxiliaryView, ChangeSectionKind, DiffPresentation, DragState, GitToolWindowTab,
+    ShellSection, ToolbarRemoteAction, is_docked_auxiliary_view,
 };
 use crate::theme::BadgeTone;
 use crate::views::main_window::MainWindow;
@@ -107,10 +107,15 @@ fn app_subscription(state: &AppState) -> Subscription<Message> {
     use iced::keyboard;
 
     let keyboard = keyboard::listen().filter_map(|event| match event {
-        keyboard::Event::KeyPressed { key, modifiers, .. } => get_shortcuts()
-            .into_iter()
-            .find(|shortcut| key == shortcut.key && modifiers == shortcut.modifiers)
-            .map(|shortcut| Message::KeyboardShortcut(shortcut.action)),
+        keyboard::Event::KeyPressed { key, modifiers, .. } => {
+            if key == keyboard::Key::Named(keyboard::key::Named::Escape) {
+                return Some(Message::CancelDrag);
+            }
+            get_shortcuts()
+                .into_iter()
+                .find(|shortcut| key == shortcut.key && modifiers == shortcut.modifiers)
+                .map(|shortcut| Message::KeyboardShortcut(shortcut.action))
+        }
         _ => None,
     });
 
@@ -634,6 +639,33 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::ToggleUnstagedCollapsed => {
             // Toggled via AppState; stored in shell for now
         }
+        Message::BeginFileDrag(path, src_kind) => {
+            let anchor = state.change_context_menu_cursor;
+            state.drag = Some(DragState::begin(path, src_kind, anchor));
+        }
+        Message::DragHoverSection(kind) => {
+            if let Some(drag) = state.drag.as_mut() {
+                drag.hover_section(kind);
+            }
+        }
+        Message::DragRelease => {
+            if let Some(drag) = state.drag.take() {
+                if drag.started {
+                    if let Some(target) = drag.hover_kind {
+                        if target != drag.src_kind {
+                            let msg = match target {
+                                ChangeSectionKind::Staged => Message::StageFile(drag.path),
+                                ChangeSectionKind::Unstaged => Message::UnstageFile(drag.path),
+                            };
+                            return update(state, msg);
+                        }
+                    }
+                }
+            }
+        }
+        Message::CancelDrag => {
+            state.drag = None;
+        }
         Message::StageHunk(path, hunk_index) => {
             if let Some(repo) = &state.current_repository {
                 let file_path = std::path::Path::new(&path);
@@ -818,6 +850,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::TrackChangeContextMenuCursor(position) => {
             state.track_change_context_menu_cursor(position);
+            if let Some(drag) = state.drag.as_mut() {
+                drag.update_cursor(position);
+            }
         }
         Message::OpenChangeContextMenu(path) => {
             state.open_change_context_menu(path);
@@ -5670,6 +5705,11 @@ fn build_change_sections<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Eleme
     .with_toggle_display_mode(Message::ToggleFileDisplayMode)
     .with_toggle_staged(Message::ToggleStagedCollapsed)
     .with_toggle_unstaged(Message::ToggleUnstagedCollapsed)
+    .with_drag_state(state.drag.as_ref())
+    .with_drag_start_handler(Message::BeginFileDrag)
+    .with_drag_hover_handler(Message::DragHoverSection)
+    .with_drag_release(Message::DragRelease)
+    .with_drag_cancel(Message::CancelDrag)
     .view()
 }
 
@@ -6726,6 +6766,10 @@ pub enum Message {
     UpdateCheckResult(Option<git_core::updater::UpdateInfo>),
     OpenUpdateUrl,
     DismissUpdate,
+    BeginFileDrag(String, ChangeSectionKind),
+    DragHoverSection(ChangeSectionKind),
+    DragRelease,
+    CancelDrag,
 }
 
 #[cfg(test)]
@@ -6854,6 +6898,75 @@ mod tests {
             Some("src/main.rs")
         );
         assert!(state.history_commit_diff_popup.is_none());
+    }
+
+    #[test]
+    fn drag_transitions_idle_to_armed_on_press() {
+        let mut state = AppState::new();
+        let _ = update(
+            &mut state,
+            Message::BeginFileDrag("src/main.rs".to_string(), ChangeSectionKind::Unstaged),
+        );
+        let drag = state.drag.as_ref().expect("drag state set");
+        assert_eq!(drag.path, "src/main.rs");
+        assert_eq!(drag.src_kind, ChangeSectionKind::Unstaged);
+        assert!(!drag.started);
+    }
+
+    #[test]
+    fn drag_threshold_distance_enters_dragging() {
+        use crate::state::DragState;
+        let mut drag = DragState::begin(
+            "a.rs".to_string(),
+            ChangeSectionKind::Staged,
+            Point::new(0.0, 0.0),
+        );
+        drag.update_cursor(Point::new(3.0, 3.0)); // dist ~4.24 >= 4.0
+        assert!(drag.started);
+    }
+
+    #[test]
+    fn drag_release_on_opposite_section_dispatches_stage() {
+        let mut state = AppState::new();
+        let _ = update(
+            &mut state,
+            Message::BeginFileDrag("src/main.rs".to_string(), ChangeSectionKind::Unstaged),
+        );
+        if let Some(drag) = state.drag.as_mut() {
+            drag.started = true;
+            drag.hover_kind = Some(ChangeSectionKind::Staged);
+        }
+        // DragRelease should call StageFile — state will try to actually stage (no repo),
+        // but drag state must be cleared
+        let _ = update(&mut state, Message::DragRelease);
+        assert!(state.drag.is_none());
+    }
+
+    #[test]
+    fn drag_release_on_same_section_cancels() {
+        let mut state = AppState::new();
+        let _ = update(
+            &mut state,
+            Message::BeginFileDrag("src/main.rs".to_string(), ChangeSectionKind::Unstaged),
+        );
+        if let Some(drag) = state.drag.as_mut() {
+            drag.started = true;
+            drag.hover_kind = Some(ChangeSectionKind::Unstaged);
+        }
+        let _ = update(&mut state, Message::DragRelease);
+        assert!(state.drag.is_none());
+    }
+
+    #[test]
+    fn drag_cancel_on_exit_clears_state() {
+        let mut state = AppState::new();
+        let _ = update(
+            &mut state,
+            Message::BeginFileDrag("a.rs".to_string(), ChangeSectionKind::Staged),
+        );
+        assert!(state.drag.is_some());
+        let _ = update(&mut state, Message::CancelDrag);
+        assert!(state.drag.is_none());
     }
 
     #[test]

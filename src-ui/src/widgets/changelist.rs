@@ -6,32 +6,41 @@
 
 use crate::components::status_icons::FileStatus;
 use crate::i18n::I18n;
-use crate::state::FileDisplayMode;
+use crate::state::{ChangeSectionKind, DragState, FileDisplayMode};
 use crate::theme::{self, BadgeTone, Surface};
 use crate::widgets::{self, scrollable};
 use git_core::index::Change;
-use iced::widget::{Button, Column, Container, Row, Space, Text, mouse_area, text};
-use iced::{Alignment, Element, Length, Point, mouse};
+use iced::widget::{Button, Column, Container, Row, Space, Stack, Text, mouse_area, text};
+use iced::{Alignment, Background, Color, Element, Length, Point, mouse};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::rc::Rc;
 
+/// Local display kind — includes Untracked which the public enum omits.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(dead_code)]
-enum ChangeSectionKind {
+enum SectionKind {
     // IDEA-style sort order: STAGED > UNSTAGED > UNTRACKED
     Staged,
     Unstaged,
+    #[allow(dead_code)]
     Untracked,
 }
 
-impl ChangeSectionKind {
+impl SectionKind {
     #[allow(dead_code)]
     fn context_label(self) -> &'static str {
         match self {
-            ChangeSectionKind::Staged => "Staged",
-            ChangeSectionKind::Unstaged => "Changes",
-            ChangeSectionKind::Untracked => "New Files",
+            SectionKind::Staged => "Staged",
+            SectionKind::Unstaged => "Changes",
+            SectionKind::Untracked => "New Files",
+        }
+    }
+
+    fn to_pub(self) -> Option<ChangeSectionKind> {
+        match self {
+            SectionKind::Staged => Some(ChangeSectionKind::Staged),
+            SectionKind::Unstaged => Some(ChangeSectionKind::Unstaged),
+            SectionKind::Untracked => None,
         }
     }
 }
@@ -45,6 +54,7 @@ pub struct ChangesList<'a, Message> {
     display_mode: FileDisplayMode,
     staged_collapsed: bool,
     unstaged_collapsed: bool,
+    drag: Option<&'a DragState>,
     on_select: Option<Rc<dyn Fn(String) -> Message + 'a>>,
     on_stage: Option<Rc<dyn Fn(String) -> Message + 'a>>,
     on_unstage: Option<Rc<dyn Fn(String) -> Message + 'a>>,
@@ -53,6 +63,10 @@ pub struct ChangesList<'a, Message> {
     on_toggle_display_mode: Option<Message>,
     on_toggle_staged: Option<Message>,
     on_toggle_unstaged: Option<Message>,
+    on_drag_start: Option<Rc<dyn Fn(String, ChangeSectionKind) -> Message + 'a>>,
+    on_drag_hover: Option<Rc<dyn Fn(ChangeSectionKind) -> Message + 'a>>,
+    on_drag_release: Option<Message>,
+    on_drag_cancel: Option<Message>,
 }
 
 impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
@@ -71,6 +85,7 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
             display_mode: FileDisplayMode::Flat,
             staged_collapsed: false,
             unstaged_collapsed: false,
+            drag: None,
             on_select: None,
             on_stage: None,
             on_unstage: None,
@@ -79,6 +94,10 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
             on_toggle_display_mode: None,
             on_toggle_staged: None,
             on_toggle_unstaged: None,
+            on_drag_start: None,
+            on_drag_hover: None,
+            on_drag_release: None,
+            on_drag_cancel: None,
         }
     }
 
@@ -157,6 +176,37 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
         self
     }
 
+    pub fn with_drag_state(mut self, drag: Option<&'a DragState>) -> Self {
+        self.drag = drag;
+        self
+    }
+
+    pub fn with_drag_start_handler<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(String, ChangeSectionKind) -> Message + 'a,
+    {
+        self.on_drag_start = Some(Rc::new(handler));
+        self
+    }
+
+    pub fn with_drag_hover_handler<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(ChangeSectionKind) -> Message + 'a,
+    {
+        self.on_drag_hover = Some(Rc::new(handler));
+        self
+    }
+
+    pub fn with_drag_release(mut self, msg: Message) -> Self {
+        self.on_drag_release = Some(msg);
+        self
+    }
+
+    pub fn with_drag_cancel(mut self, msg: Message) -> Self {
+        self.on_drag_cancel = Some(msg);
+        self
+    }
+
     pub fn view(&self) -> Element<'a, Message> {
         let total_changes = self.staged.len() + self.unstaged.len() + self.untracked.len();
         if total_changes == 0 {
@@ -175,7 +225,7 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
             sections = sections.push(self.build_collapsible_section(
                 self.i18n.staged_changes,
                 self.staged,
-                ChangeSectionKind::Staged,
+                SectionKind::Staged,
                 self.staged_collapsed,
                 self.on_toggle_staged.clone(),
             ));
@@ -188,7 +238,7 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
             sections = sections.push(self.build_collapsible_section_refs(
                 self.i18n.unstaged_changes,
                 &unstaged_combined,
-                ChangeSectionKind::Unstaged,
+                SectionKind::Unstaged,
                 self.unstaged_collapsed,
                 self.on_toggle_unstaged.clone(),
             ));
@@ -196,7 +246,7 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
 
         let scrollable = scrollable::styled(sections).height(Length::Fill);
 
-        if let Some(handler) = self.on_track_cursor.as_ref() {
+        let base: Element<'a, Message> = if let Some(handler) = self.on_track_cursor.as_ref() {
             let handle = handler.clone();
             mouse_area(
                 Container::new(scrollable)
@@ -208,6 +258,32 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
             .into()
         } else {
             scrollable.into()
+        };
+
+        // Ghost overlay: follows cursor when dragging, no handlers (avoids eating on_enter)
+        if let Some(drag) = self.drag.filter(|d| d.started) {
+            let ghost_label = split_path(&drag.path).0;
+            let ghost = Container::new(
+                Text::new(ghost_label)
+                    .size(theme::typography::CAPTION_SIZE)
+                    .color(Color::WHITE),
+            )
+            .padding([2, 6])
+            .style(theme::panel_style(Surface::ListSelection))
+            .width(Length::Shrink);
+
+            let cx = drag.cursor.x.max(0.0) as u16;
+            let cy = drag.cursor.y.max(0.0) as u16;
+            let ghost_row = Row::new()
+                .push(Space::new().width(Length::Fixed(cx as f32)))
+                .push(ghost);
+            let ghost_col = Column::new()
+                .push(Space::new().height(Length::Fixed(cy as f32)))
+                .push(ghost_row);
+
+            Stack::new().push(base).push(ghost_col).into()
+        } else {
+            base
         }
     }
 
@@ -242,7 +318,7 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
         &self,
         title: &'a str,
         changes: &'a [Change],
-        kind: ChangeSectionKind,
+        kind: SectionKind,
         collapsed: bool,
         on_toggle: Option<Message>,
     ) -> Element<'a, Message> {
@@ -254,11 +330,24 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
         &self,
         title: &'a str,
         changes: &[&'a Change],
-        kind: ChangeSectionKind,
+        kind: SectionKind,
         collapsed: bool,
         on_toggle: Option<Message>,
     ) -> Element<'a, Message> {
         let expand_icon = if collapsed { "▶" } else { "▼" };
+
+        // Highlight section header when it is the active drop target
+        let is_drop_target = self
+            .drag
+            .as_ref()
+            .and_then(|d| d.hover_kind)
+            .and_then(|hk| kind.to_pub().map(|pk| pk == hk))
+            .unwrap_or(false);
+        let header_surface = if is_drop_target {
+            Surface::ListSelection
+        } else {
+            Surface::ListRow
+        };
 
         let header_row = Row::new()
             .spacing(theme::spacing::XS)
@@ -278,14 +367,45 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
                 Self::section_badge_tone(kind),
             ));
 
-        let header: Element<'a, Message> = if let Some(msg) = on_toggle {
-            Button::new(header_row)
+        let header_container = Container::new(header_row)
+            .padding([2, 4])
+            .width(Length::Fill)
+            .style(theme::panel_style(header_surface));
+
+        let header: Element<'a, Message> = if let Some(pub_kind) = kind.to_pub() {
+            if let Some(hover_handler) = self.on_drag_hover.as_ref() {
+                let hover_msg = hover_handler(pub_kind);
+                let mut area = mouse_area(if let Some(msg) = on_toggle {
+                    Button::new(header_container)
+                        .style(theme::button_style(theme::ButtonTone::Ghost))
+                        .padding(0)
+                        .on_press(msg)
+                        .width(Length::Fill)
+                        .into()
+                } else {
+                    Element::from(header_container)
+                });
+                area = area.on_enter(hover_msg);
+                area.into()
+            } else if let Some(msg) = on_toggle {
+                Button::new(header_container)
+                    .style(theme::button_style(theme::ButtonTone::Ghost))
+                    .padding(0)
+                    .on_press(msg)
+                    .width(Length::Fill)
+                    .into()
+            } else {
+                Element::from(header_container)
+            }
+        } else if let Some(msg) = on_toggle {
+            Button::new(header_container)
                 .style(theme::button_style(theme::ButtonTone::Ghost))
-                .padding([2, 4])
+                .padding(0)
                 .on_press(msg)
+                .width(Length::Fill)
                 .into()
         } else {
-            Container::new(header_row).padding([2, 4]).into()
+            Element::from(header_container)
         };
 
         let mut section = Column::new().spacing(0).push(header);
@@ -310,7 +430,7 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
         &self,
         mut section: Column<'a, Message>,
         changes: &[&'a Change],
-        kind: ChangeSectionKind,
+        kind: SectionKind,
     ) -> Column<'a, Message> {
         // Group files by directory, collecting indices
         let mut dir_groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -355,13 +475,9 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
         section
     }
 
-    fn build_change_row(
-        &self,
-        change: &'a Change,
-        kind: ChangeSectionKind,
-    ) -> Element<'a, Message> {
+    fn build_change_row(&self, change: &'a Change, kind: SectionKind) -> Element<'a, Message> {
         let status = FileStatus::from(&change.status);
-        let staged = matches!(kind, ChangeSectionKind::Staged);
+        let staged = matches!(kind, SectionKind::Staged);
         let is_selected = self.selected_path == Some(change.path.as_str());
         let (file_name, parent_path) = split_path(&change.path);
 
@@ -453,31 +569,58 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
 
         info_row = info_row.push(action_button);
 
-        let item_panel = Container::new(info_row)
-            .padding([2, 4])
+        // Dim source row while dragging it
+        let is_dragged_source = self
+            .drag
+            .as_ref()
+            .map(|d| d.started && d.path == change.path)
+            .unwrap_or(false);
+
+        let row_surface = if is_selected {
+            Surface::ListSelection
+        } else {
+            Surface::ListRow
+        };
+
+        let item_panel = if is_dragged_source {
+            Container::new(
+                iced::widget::container(info_row)
+                    .padding([2, 4])
+                    .width(Length::Fill)
+                    .style(move |theme| {
+                        let mut style = theme::panel_style(row_surface)(theme);
+                        if let Some(bg) = style.background {
+                            style.background = Some(match bg {
+                                Background::Color(c) => {
+                                    Background::Color(Color { a: c.a * 0.4, ..c })
+                                }
+                                other => other,
+                            });
+                        }
+                        style
+                    }),
+            )
             .width(Length::Fill)
-            .style(theme::panel_style(if is_selected {
-                Surface::ListSelection
-            } else {
-                Surface::ListRow
-            }));
+        } else {
+            Container::new(info_row)
+                .padding([2, 4])
+                .width(Length::Fill)
+                .style(theme::panel_style(row_surface))
+        };
 
         let selection: Element<'a, Message> = if let Some(select_message) = self
             .on_select
             .as_ref()
             .map(|handler| handler(change.path.clone()))
         {
-            let mut area = mouse_area(
-                Container::new(
-                    Button::new(item_panel)
-                        .width(Length::Fill)
-                        .style(theme::button_style(theme::ButtonTone::Ghost))
-                        .on_press(select_message.clone()),
-                )
-                .width(Length::Fill),
-            )
-            .on_double_click(select_message)
-            .interaction(mouse::Interaction::Pointer);
+            let btn = Button::new(item_panel)
+                .width(Length::Fill)
+                .style(theme::button_style(theme::ButtonTone::Ghost))
+                .on_press(select_message.clone());
+
+            let mut area = mouse_area(Container::new(btn).width(Length::Fill))
+                .on_double_click(select_message)
+                .interaction(mouse::Interaction::Pointer);
 
             if let Some(context_message) = self
                 .on_context_menu
@@ -485,6 +628,17 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
                 .map(|handler| handler(change.path.clone()))
             {
                 area = area.on_right_press(context_message);
+            }
+
+            // Outer mouse_area captures drag-start (fires before Button's on_press per iced
+            // outer→inner dispatch; Button on_press still fires for click selection)
+            if let Some(pub_kind) = kind.to_pub() {
+                if let Some(drag_handler) = self.on_drag_start.as_ref() {
+                    let drag_msg = drag_handler(change.path.clone(), pub_kind);
+                    let inner: Element<'a, Message> = area.into();
+                    let outer = mouse_area(inner).on_press(drag_msg);
+                    return Container::new(outer).width(Length::Fill).into();
+                }
             }
 
             area.into()
@@ -495,11 +649,11 @@ impl<'a, Message: Clone + 'a> ChangesList<'a, Message> {
         Container::new(selection).width(Length::Fill).into()
     }
 
-    fn section_badge_tone(kind: ChangeSectionKind) -> BadgeTone {
+    fn section_badge_tone(kind: SectionKind) -> BadgeTone {
         match kind {
-            ChangeSectionKind::Staged => BadgeTone::Success,
-            ChangeSectionKind::Unstaged => BadgeTone::Accent,
-            ChangeSectionKind::Untracked => BadgeTone::Neutral,
+            SectionKind::Staged => BadgeTone::Success,
+            SectionKind::Unstaged => BadgeTone::Accent,
+            SectionKind::Untracked => BadgeTone::Neutral,
         }
     }
 }
@@ -524,12 +678,13 @@ fn split_path(path: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::ChangeSectionKind;
 
     #[test]
-    fn change_section_kind_exposes_compact_context_label() {
-        assert_eq!(ChangeSectionKind::Staged.context_label(), "Staged");
-        assert_eq!(ChangeSectionKind::Unstaged.context_label(), "Changes");
-        assert_eq!(ChangeSectionKind::Untracked.context_label(), "New Files");
+    fn section_kind_exposes_compact_context_label() {
+        assert_eq!(SectionKind::Staged.context_label(), "Staged");
+        assert_eq!(SectionKind::Unstaged.context_label(), "Changes");
+        assert_eq!(SectionKind::Untracked.context_label(), "New Files");
     }
 
     #[test]
@@ -542,5 +697,19 @@ mod tests {
             split_path("Cargo.toml"),
             ("Cargo.toml".to_string(), String::new())
         );
+    }
+
+    #[test]
+    fn section_header_drop_target_wiring() {
+        // SectionKind::Staged maps to ChangeSectionKind::Staged
+        assert_eq!(
+            SectionKind::Staged.to_pub(),
+            Some(ChangeSectionKind::Staged)
+        );
+        assert_eq!(
+            SectionKind::Unstaged.to_pub(),
+            Some(ChangeSectionKind::Unstaged)
+        );
+        assert_eq!(SectionKind::Untracked.to_pub(), None);
     }
 }

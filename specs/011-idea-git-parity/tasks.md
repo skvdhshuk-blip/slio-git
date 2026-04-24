@@ -64,7 +64,7 @@
 ### Implementation for User Story 1
 
 - [x] T019 [US1] Rewrite changelist widget with two collapsible tree groups (Staged, Unstaged Changes) supporting flat list and directory tree modes with toggle button, and stage/unstage icon buttons per file row ("+" to stage, "-" to unstage) in src-ui/src/widgets/changelist.rs
-- [ ] T020 [US1] Implement drag-and-drop between Staged and Unstaged groups using mouse events + visual overlay in src-ui/src/widgets/changelist.rs (deferred — +/- buttons provide equivalent functionality)
+- [x] T020 [US1] Implement drag-and-drop between Staged and Unstaged groups using mouse events + visual overlay in src-ui/src/widgets/changelist.rs (completed 2026-04-23: file-level DnD with 4px threshold, ghost overlay, section header highlight)
 - [x] T022 [US1] Add "Stage Hunk" and "Unstage Hunk" buttons to diff viewer hunk headers in src-ui/src/widgets/diff_viewer.rs
 - [x] T023 [P] [US1] Add "Stage Hunk" and "Unstage Hunk" buttons to split diff viewer hunk headers in src-ui/src/widgets/split_diff_viewer.rs
 - [x] T024 [US1] Extend commit panel with recent message history dropdown (last 10 messages) and amend toggle checkbox in src-ui/src/widgets/commit_panel.rs
