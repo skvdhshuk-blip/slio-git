@@ -1346,6 +1346,13 @@ pub struct I18n {
     pub contained_in_branches_label: &'static str,
     pub loading_containing_branches: &'static str,
     pub no_containing_branches: &'static str,
+
+    // ── Checkout ref (T4b) ──
+    pub checkout_ref_placeholder: &'static str,
+    pub checkout_ref_dirty: &'static str,
+    pub checkout_ref_invalid: &'static str,
+    pub checkout_ref_done_fmt: &'static str,
+    pub checkout_ref_failed_fmt: &'static str,
 }
 
 impl I18n {
@@ -2659,6 +2666,13 @@ impl I18n {
             contained_in_branches_label: "包含该提交的分支",
             loading_containing_branches: "正在加载分支…",
             no_containing_branches: "暂无包含该提交的分支",
+
+            // ── Checkout ref (T4b) ──
+            checkout_ref_placeholder: "branch / tag / commit",
+            checkout_ref_dirty: "工作区有未提交改动，无法切换",
+            checkout_ref_invalid: "无效的 ref",
+            checkout_ref_done_fmt: "已切换到 {}",
+            checkout_ref_failed_fmt: "切换失败：{}",
         }
     }
 }
@@ -3966,6 +3980,13 @@ pub static ZH_CN: I18n = I18n {
     contained_in_branches_label: "包含该提交的分支",
     loading_containing_branches: "正在加载分支…",
     no_containing_branches: "暂无包含该提交的分支",
+
+    // ── Checkout ref (T4b) ──
+    checkout_ref_placeholder: "branch / tag / commit",
+    checkout_ref_dirty: "工作区有未提交改动，无法切换",
+    checkout_ref_invalid: "无效的 ref",
+    checkout_ref_done_fmt: "已切换到 {}",
+    checkout_ref_failed_fmt: "切换失败：{}",
 };
 
 pub static EN: I18n = I18n {
@@ -5272,4 +5293,11 @@ pub static EN: I18n = I18n {
     contained_in_branches_label: "Contained in Branches",
     loading_containing_branches: "Loading branches…",
     no_containing_branches: "No branches contain this commit",
+
+    // ── Checkout ref (T4b) ──
+    checkout_ref_placeholder: "branch / tag / commit",
+    checkout_ref_dirty: "Working tree has uncommitted changes",
+    checkout_ref_invalid: "Invalid ref",
+    checkout_ref_done_fmt: "Checked out {}",
+    checkout_ref_failed_fmt: "Checkout failed: {}",
 };

@@ -6,6 +6,131 @@ use crate::process::git_command;
 use crate::repository::{Repository, SyncStatus, compact_branch_sync_hint, compact_relative_time};
 use log::info;
 
+/// Identifies what kind of ref was resolved during checkout_ref.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefKind {
+    Branch,
+    Tag,
+    Commit,
+}
+
+/// Result returned by checkout_ref.
+#[derive(Debug, Clone)]
+pub struct CheckoutOutcome {
+    pub ref_kind: RefKind,
+    pub target_oid: String,
+}
+
+/// Checkout a branch name, tag name, or commit hash.
+///
+/// Security: input is trimmed and capped at 512 bytes. Dirty working tree is
+/// refused before any HEAD modification.
+pub fn checkout_ref(repo: &Repository, ref_str: &str) -> Result<CheckoutOutcome, GitError> {
+    let ref_str = ref_str.trim();
+
+    if ref_str.is_empty() || ref_str.len() > 512 {
+        return Err(GitError::InvalidInput {
+            message: "ref must be 1–512 characters".to_string(),
+        });
+    }
+
+    let repo_lock = repo.inner.read().unwrap();
+
+    // Refuse dirty working tree before touching HEAD.
+    let statuses = repo_lock
+        .statuses(None)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "checkout_ref".to_string(),
+            details: e.to_string(),
+        })?;
+    let is_dirty = statuses.iter().any(|s| {
+        let flags = s.status();
+        flags != git2::Status::CURRENT && !flags.contains(git2::Status::IGNORED)
+    });
+    if is_dirty {
+        return Err(GitError::DirtyWorkingTree);
+    }
+
+    let obj = repo_lock
+        .revparse_single(ref_str)
+        .map_err(|_| GitError::InvalidInput {
+            message: format!("invalid ref: {ref_str}"),
+        })?;
+
+    let target_oid = obj.id().to_string();
+
+    // Determine what the ref resolves to and checkout appropriately.
+    let ref_kind = if let Ok(branch) = repo_lock.find_branch(ref_str, git2::BranchType::Local) {
+        // It's a local branch — move HEAD symbolically.
+        let refname = format!("refs/heads/{ref_str}");
+        let commit = branch
+            .get()
+            .peel_to_commit()
+            .map_err(|e| GitError::OperationFailed {
+                operation: "checkout_ref".to_string(),
+                details: e.to_string(),
+            })?;
+        repo_lock
+            .checkout_tree(commit.as_object(), None)
+            .map_err(|e| GitError::OperationFailed {
+                operation: "checkout_ref".to_string(),
+                details: e.to_string(),
+            })?;
+        repo_lock
+            .set_head(&refname)
+            .map_err(|e| GitError::OperationFailed {
+                operation: "checkout_ref".to_string(),
+                details: e.to_string(),
+            })?;
+        RefKind::Branch
+    } else if let Ok(tag_obj) = repo_lock.find_reference(&format!("refs/tags/{ref_str}")) {
+        // It's a tag — peel to commit, then detach HEAD.
+        let commit = tag_obj
+            .peel_to_commit()
+            .map_err(|e| GitError::OperationFailed {
+                operation: "checkout_ref".to_string(),
+                details: e.to_string(),
+            })?;
+        repo_lock
+            .checkout_tree(commit.as_object(), None)
+            .map_err(|e| GitError::OperationFailed {
+                operation: "checkout_ref".to_string(),
+                details: e.to_string(),
+            })?;
+        repo_lock
+            .set_head_detached(commit.id())
+            .map_err(|e| GitError::OperationFailed {
+                operation: "checkout_ref".to_string(),
+                details: e.to_string(),
+            })?;
+        RefKind::Tag
+    } else {
+        // Treat as commit hash / other detachable ref.
+        let commit = obj.peel_to_commit().map_err(|_| GitError::InvalidInput {
+            message: format!("ref '{ref_str}' does not resolve to a commit"),
+        })?;
+        repo_lock
+            .checkout_tree(commit.as_object(), None)
+            .map_err(|e| GitError::OperationFailed {
+                operation: "checkout_ref".to_string(),
+                details: e.to_string(),
+            })?;
+        repo_lock
+            .set_head_detached(commit.id())
+            .map_err(|e| GitError::OperationFailed {
+                operation: "checkout_ref".to_string(),
+                details: e.to_string(),
+            })?;
+        RefKind::Commit
+    };
+
+    info!("checkout_ref '{}' → {:?} {}", ref_str, ref_kind, target_oid);
+    Ok(CheckoutOutcome {
+        ref_kind,
+        target_oid,
+    })
+}
+
 /// Lightweight branch reference returned by branches_containing_commit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BranchRef {

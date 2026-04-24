@@ -1898,6 +1898,64 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     state.branch_popup.smart_checkout_branch = None;
                     state.branch_popup.smart_checkout_affected_files.clear();
                 }
+                BranchPopupMessage::CheckoutInputChanged(s) => {
+                    state.branch_popup.checkout_input = s;
+                }
+                BranchPopupMessage::CheckoutRef(ref_str) => {
+                    if let Ok(repo) = require_repository(state) {
+                        match git_core::checkout_ref(&repo, &ref_str) {
+                            Ok(outcome) => {
+                                state.branch_popup.checkout_input = String::new();
+                                let msg = i18n
+                                    .checkout_ref_done_fmt
+                                    .replace("{}", &outcome.target_oid[..8]);
+                                state.branch_popup.success_message = Some(msg.clone());
+                                let _ = refresh_repository_after_action(state, &repo, false, i18n);
+                                if let Some(current) = state.current_repository.clone() {
+                                    state.branch_popup.load_branches(&current, i18n);
+                                }
+                                state.set_success(msg, None, "workspace.branches");
+                            }
+                            Err(git_core::GitError::DirtyWorkingTree) => {
+                                let msg = i18n.checkout_ref_dirty.to_string();
+                                state.branch_popup.error = Some(msg.clone());
+                                report_async_failure(
+                                    state,
+                                    i18n.checkout_ref_dirty,
+                                    msg,
+                                    "workspace.branches",
+                                    "workspace.branches.checkout_ref",
+                                    i18n,
+                                );
+                            }
+                            Err(git_core::GitError::InvalidInput { .. }) => {
+                                let msg = i18n.checkout_ref_invalid.to_string();
+                                state.branch_popup.error = Some(msg.clone());
+                                report_async_failure(
+                                    state,
+                                    i18n.checkout_ref_invalid,
+                                    msg,
+                                    "workspace.branches",
+                                    "workspace.branches.checkout_ref",
+                                    i18n,
+                                );
+                            }
+                            Err(e) => {
+                                let msg =
+                                    i18n.checkout_ref_failed_fmt.replace("{}", &e.to_string());
+                                state.branch_popup.error = Some(msg.clone());
+                                report_async_failure(
+                                    state,
+                                    i18n.checkout_ref_invalid,
+                                    msg,
+                                    "workspace.branches",
+                                    "workspace.branches.checkout_ref",
+                                    i18n,
+                                );
+                            }
+                        }
+                    }
+                }
                 BranchPopupMessage::MergeBranch(name) => {
                     if let Ok(repo) = require_repository(state) {
                         let branch_name = name.clone();
@@ -4718,6 +4776,7 @@ fn branch_popup_message_closes_context_menu(message: &BranchPopupMessage) -> boo
             | BranchPopupMessage::OpenStashes
             | BranchPopupMessage::OpenRebase
             | BranchPopupMessage::Close
+            | BranchPopupMessage::CheckoutRef(_)
     )
 }
 

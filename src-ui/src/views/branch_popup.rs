@@ -75,6 +75,9 @@ pub enum BranchPopupMessage {
     SmartCheckout(String),
     ForceCheckout(String),
     CancelSmartCheckout,
+    // Checkout ref (branch / tag / commit)
+    CheckoutInputChanged(String),
+    CheckoutRef(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,6 +174,8 @@ pub struct BranchPopupState {
     pub smart_checkout_is_remote: bool,
     /// Files that would be overwritten by checkout
     pub smart_checkout_affected_files: Vec<String>,
+    /// Input for unified ref checkout (branch / tag / commit)
+    pub checkout_input: String,
 }
 
 impl BranchPopupState {
@@ -205,6 +210,7 @@ impl BranchPopupState {
             smart_checkout_branch: None,
             smart_checkout_is_remote: false,
             smart_checkout_affected_files: Vec::new(),
+            checkout_input: String::new(),
         }
     }
 
@@ -1604,9 +1610,18 @@ pub fn view<'a>(state: &'a BranchPopupState, i18n: &'a I18n) -> Element<'a, Bran
     let quick_actions_row2 = Row::new()
         .spacing(theme::spacing::XS)
         .align_y(Alignment::Center)
-        .push(button::compact_ghost(
-            i18n.fetch,
-            Some(BranchPopupMessage::Refresh),
+        .push(
+            Container::new(text_input::styled(
+                i18n.checkout_ref_placeholder,
+                &state.checkout_input,
+                BranchPopupMessage::CheckoutInputChanged,
+            ))
+            .width(Length::Fill),
+        )
+        .push(button::secondary(
+            i18n.checkout,
+            (!state.checkout_input.trim().is_empty() && !state.is_loading)
+                .then(|| BranchPopupMessage::CheckoutRef(state.checkout_input.clone())),
         ));
     let quick_actions = Container::new(
         Column::new()

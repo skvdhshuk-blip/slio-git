@@ -31,6 +31,12 @@ pub enum GitError {
     #[error("Merge conflict detected")]
     MergeConflict,
 
+    #[error("Working tree has uncommitted changes")]
+    DirtyWorkingTree,
+
+    #[error("Invalid input: {message}")]
+    InvalidInput { message: String },
+
     #[error("Authentication failed for remote: {remote}")]
     AuthenticationFailed { remote: String },
 
