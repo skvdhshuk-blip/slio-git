@@ -26,7 +26,7 @@ use crate::views::{
     branch_popup::{self, BranchPopupMessage, PendingCommitAction},
     commit_dialog::CommitDialogMessage,
     history_view::{self, HistoryMessage},
-    rebase_editor::{self, RebaseEditorMessage},
+    rebase_editor::{self, ROW_HEIGHT, RebaseEditorMessage},
     remote_dialog::{self, RemoteDialogMessage},
     stash_panel::{self, StashPanelMessage},
     tag_dialog::{self, TagDialogMessage},
@@ -105,7 +105,9 @@ pub fn main() -> iced::Result {
 
 fn app_subscription(state: &AppState) -> Subscription<Message> {
     use iced::keyboard;
+    use iced::keyboard::key::Named;
 
+    // Non-capturing shortcut subscription (iced requires zero-size closures for filter_map)
     let keyboard = keyboard::listen().filter_map(|event| match event {
         keyboard::Event::KeyPressed { key, modifiers, .. } => {
             if key == keyboard::Key::Named(keyboard::key::Named::Escape) {
@@ -120,6 +122,29 @@ fn app_subscription(state: &AppState) -> Subscription<Message> {
     });
 
     let mut subscriptions = vec![keyboard];
+
+    // Esc guard for inline edit and DnD cancellation — only active when needed
+    if state.rebase_editor.inline_edit_index.is_some() {
+        subscriptions.push(keyboard::listen().filter_map(|event| match event {
+            keyboard::Event::KeyPressed { key, modifiers, .. }
+                if key == keyboard::Key::Named(Named::Escape) && modifiers.is_empty() =>
+            {
+                Some(Message::RebaseEditorMessage(
+                    RebaseEditorMessage::CancelInlineEdit,
+                ))
+            }
+            _ => None,
+        }));
+    } else if state.rebase_editor.drag_active {
+        subscriptions.push(keyboard::listen().filter_map(|event| match event {
+            keyboard::Event::KeyPressed { key, modifiers, .. }
+                if key == keyboard::Key::Named(Named::Escape) && modifiers.is_empty() =>
+            {
+                Some(Message::RebaseEditorMessage(RebaseEditorMessage::CancelDnD))
+            }
+            _ => None,
+        }));
+    }
 
     if let Some(repo_path) = state.active_project_path().map(Path::to_path_buf) {
         subscriptions
@@ -3904,6 +3929,49 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             }
             RebaseEditorMessage::CloseTodoContextMenu => {
                 state.rebase_editor.context_menu_index = None;
+            }
+            RebaseEditorMessage::DragStart(index, _pos) => {
+                state.rebase_editor.drag_source = Some(index);
+                state.rebase_editor.drag_press_point = None;
+                state.rebase_editor.drag_active = false;
+                state.rebase_editor.drag_target_index = None;
+            }
+            RebaseEditorMessage::DragMove(pos) => {
+                if let Some(press) = state.rebase_editor.drag_press_point {
+                    if (pos.y - press.y).abs() > ROW_HEIGHT / 2.0 {
+                        state.rebase_editor.drag_active = true;
+                    }
+                } else {
+                    state.rebase_editor.drag_press_point = Some(pos);
+                }
+            }
+            RebaseEditorMessage::HoverRow(to) => {
+                if state.rebase_editor.drag_active {
+                    // on_release during drag → apply move
+                    if let Some(from) = state.rebase_editor.drag_source {
+                        state.rebase_editor.apply_dnd_move(from, to);
+                    }
+                    state.rebase_editor.cancel_dnd();
+                } else if let Some(from) = state.rebase_editor.drag_source {
+                    // on_release without crossing threshold → select
+                    if from == to {
+                        state.rebase_editor.select_todo(to);
+                    }
+                    state.rebase_editor.cancel_dnd();
+                } else {
+                    state.rebase_editor.select_todo(to);
+                    state.rebase_editor.cancel_dnd();
+                }
+            }
+            RebaseEditorMessage::ApplyDnDMove { from, to } => {
+                state.rebase_editor.apply_dnd_move(from, to);
+                state.rebase_editor.cancel_dnd();
+            }
+            RebaseEditorMessage::CancelDnD => {
+                state.rebase_editor.cancel_dnd();
+            }
+            RebaseEditorMessage::SelectTodo(index) => {
+                state.rebase_editor.select_todo(index);
             }
             RebaseEditorMessage::StartRebase => {
                 if let Ok(repo) = require_repository(state) {

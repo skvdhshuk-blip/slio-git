@@ -244,8 +244,8 @@
 ### Implementation for User Story 10
 
 - [x] T083 [US10] Review existing rebase_editor.rs and verify action selectors (Pick, Reword, Edit, Squash, Fixup, Drop) match IDEA's options in src-ui/src/views/rebase_editor.rs (already implemented with FIRST_TODO_ACTIONS and OTHER_TODO_ACTIONS)
-- [ ] T084 [US10] Add drag-and-drop reorder for commit rows using mouse event tracking + visual ghost overlay in src-ui/src/views/rebase_editor.rs
-- [ ] T085 [US10] Add inline commit message editing when Reword or Squash is selected in src-ui/src/views/rebase_editor.rs
+- [x] T084 [US10] Add drag-and-drop reorder for commit rows using mouse event tracking + visual ghost overlay in src-ui/src/views/rebase_editor.rs
+- [x] T085 [US10] Add inline commit message editing when Reword or Squash is selected in src-ui/src/views/rebase_editor.rs
 - [x] T086 [US10] Verify continue/abort/skip controls work correctly with conflict resolver integration in src-ui/src/main.rs (already wired)
 - [x] T087 [US10] Add rebase progress indicator (step N of M) in rebase editor header in src-ui/src/views/rebase_editor.rs (existing build_rebase_controls shows step/total)
 

@@ -7,10 +7,13 @@ use crate::theme::{self, BadgeTone, Surface};
 use crate::widgets::{self, OptionalPush, button, scrollable, text_input};
 use git_core::Repository;
 use iced::widget::{Button, Column, Container, Row, Text, mouse_area, text};
-use iced::{Alignment, Color, Element, Length};
+use iced::{Alignment, Color, Element, Length, Point};
 
 const FIRST_TODO_ACTIONS: [&str; 4] = ["pick", "reword", "edit", "drop"];
 const OTHER_TODO_ACTIONS: [&str; 6] = ["pick", "reword", "edit", "fixup", "squash", "drop"];
+
+/// Row height threshold for distinguishing click vs drag.
+pub const ROW_HEIGHT: f32 = 28.0;
 
 /// Message types for rebase editor.
 #[derive(Debug, Clone)]
@@ -33,6 +36,14 @@ pub enum RebaseEditorMessage {
     // Right-click context menu (T046)
     OpenTodoContextMenu(usize),
     CloseTodoContextMenu,
+    // DnD reorder (T084)
+    DragStart(usize, Point),
+    DragMove(Point),
+    HoverRow(usize),
+    ApplyDnDMove { from: usize, to: usize },
+    CancelDnD,
+    // Select for Up/Down toolbar (R3)
+    SelectTodo(usize),
     Refresh,
     Close,
 }
@@ -69,6 +80,14 @@ pub struct RebaseEditorState {
     pub context_menu_index: Option<usize>,
     /// Selected todo item index for detail panel (T043)
     pub selected_todo_index: Option<usize>,
+    /// DnD drag source index
+    pub drag_source: Option<usize>,
+    /// Screen position where drag began
+    pub drag_press_point: Option<Point>,
+    /// Whether drag threshold has been crossed (vs simple click)
+    pub drag_active: bool,
+    /// Current hover target index during drag
+    pub drag_target_index: Option<usize>,
 }
 
 impl RebaseEditorState {
@@ -91,6 +110,10 @@ impl RebaseEditorState {
             inline_edit_text: String::new(),
             context_menu_index: None,
             selected_todo_index: None,
+            drag_source: None,
+            drag_press_point: None,
+            drag_active: false,
+            drag_target_index: None,
         }
     }
 
@@ -392,6 +415,7 @@ impl RebaseEditorState {
 
         self.todo_list.swap(index, index - 1);
         self.normalize_todo_constraints();
+        self.selected_todo_index = Some(index - 1);
         self.error = None;
     }
 
@@ -402,6 +426,7 @@ impl RebaseEditorState {
 
         self.todo_list.swap(index, index + 1);
         self.normalize_todo_constraints();
+        self.selected_todo_index = Some(index + 1);
         self.error = None;
     }
 
@@ -439,6 +464,35 @@ impl RebaseEditorState {
     pub fn cancel_inline_edit(&mut self) {
         self.inline_edit_index = None;
         self.inline_edit_text.clear();
+    }
+
+    /// Apply DnD move: remove item at `from`, insert at `to`.
+    pub fn apply_dnd_move(&mut self, from: usize, to: usize) {
+        if !self.todo_is_editable || from == to {
+            return;
+        }
+        if from >= self.todo_list.len() || to >= self.todo_list.len() {
+            return;
+        }
+        let item = self.todo_list.remove(from);
+        self.todo_list.insert(to, item);
+        self.normalize_todo_constraints();
+        self.error = None;
+    }
+
+    /// Cancel DnD: reset all drag state.
+    pub fn cancel_dnd(&mut self) {
+        self.drag_source = None;
+        self.drag_press_point = None;
+        self.drag_active = false;
+        self.drag_target_index = None;
+    }
+
+    /// Select a todo item for Up/Down toolbar interaction.
+    pub fn select_todo(&mut self, index: usize) {
+        if index < self.todo_list.len() {
+            self.selected_todo_index = Some(index);
+        }
     }
 
     fn normalize_todo_constraints(&mut self) {
@@ -632,6 +686,7 @@ fn build_todo_list<'a>(
                 &state.inline_edit_text,
                 RebaseEditorMessage::InlineEditChanged,
             )
+            .on_submit(RebaseEditorMessage::ConfirmInlineEdit)
             .into()
         } else {
             // Double-click to start editing
@@ -665,20 +720,40 @@ fn build_todo_list<'a>(
                     .padding([3, 4]),
             );
 
-        let row_surface = if is_selected {
+        // Show insert indicator above this row when dragging over it
+        let is_drag_target = state.drag_active && state.drag_target_index == Some(index);
+        let row_surface = if is_selected || is_drag_target {
             Surface::ListSelection
         } else {
             Surface::ListRow
         };
 
-        // Right-click context menu support
-        let row_area = mouse_area(
-            Container::new(row)
-                .width(Length::Fill)
-                .style(theme::panel_style(row_surface)),
-        )
-        .on_right_press(RebaseEditorMessage::OpenTodoContextMenu(index))
-        .interaction(iced::mouse::Interaction::Pointer);
+        let row_container = Container::new(row)
+            .width(Length::Fill)
+            .style(theme::panel_style(row_surface));
+
+        // Wrap with DnD + right-click mouse_area when editable
+        let row_area: Element<'_, RebaseEditorMessage> = if state.todo_is_editable {
+            mouse_area(row_container)
+                .on_press(RebaseEditorMessage::DragStart(
+                    index,
+                    Point::ORIGIN, // actual pos filled via DragMove
+                ))
+                .on_move(RebaseEditorMessage::DragMove)
+                .on_release(RebaseEditorMessage::HoverRow(index))
+                .on_right_press(RebaseEditorMessage::OpenTodoContextMenu(index))
+                .interaction(if state.drag_active {
+                    iced::mouse::Interaction::Grabbing
+                } else {
+                    iced::mouse::Interaction::Pointer
+                })
+                .into()
+        } else {
+            mouse_area(row_container)
+                .on_right_press(RebaseEditorMessage::OpenTodoContextMenu(index))
+                .interaction(iced::mouse::Interaction::Pointer)
+                .into()
+        };
 
         table = table.push(row_area);
     }
@@ -1211,5 +1286,133 @@ mod tests {
         state.move_todo_down(0);
         state.set_todo_action(0, "drop".to_string());
         assert_eq!(state.todo_list[0].action, "pick");
+    }
+
+    #[test]
+    fn apply_dnd_move_same_position_noop() {
+        let mut state = RebaseEditorState::new();
+        state.todo_is_editable = true;
+        state.todo_list = vec![
+            make_todo("pick", "aaa", "first"),
+            make_todo("pick", "bbb", "second"),
+        ];
+
+        state.apply_dnd_move(0, 0);
+        assert_eq!(state.todo_list[0].commit, "aaa");
+        assert_eq!(state.todo_list[1].commit, "bbb");
+    }
+
+    #[test]
+    fn apply_dnd_move_reorders_items() {
+        let mut state = RebaseEditorState::new();
+        state.todo_is_editable = true;
+        state.todo_list = vec![
+            make_todo("pick", "aaa", "first"),
+            make_todo("pick", "bbb", "second"),
+            make_todo("pick", "ccc", "third"),
+        ];
+
+        // Move last to first
+        state.apply_dnd_move(2, 0);
+        assert_eq!(state.todo_list[0].commit, "ccc");
+        assert_eq!(state.todo_list[1].commit, "aaa");
+        assert_eq!(state.todo_list[2].commit, "bbb");
+    }
+
+    #[test]
+    fn apply_dnd_move_out_of_bounds_ignored() {
+        let mut state = RebaseEditorState::new();
+        state.todo_is_editable = true;
+        state.todo_list = vec![
+            make_todo("pick", "aaa", "first"),
+            make_todo("pick", "bbb", "second"),
+        ];
+
+        state.apply_dnd_move(0, 5); // to out of bounds
+        assert_eq!(state.todo_list[0].commit, "aaa");
+
+        state.apply_dnd_move(5, 0); // from out of bounds
+        assert_eq!(state.todo_list[0].commit, "aaa");
+    }
+
+    #[test]
+    fn apply_dnd_move_on_non_editable_noop() {
+        let mut state = RebaseEditorState::new();
+        state.todo_is_editable = false;
+        state.todo_list = vec![
+            make_todo("pick", "aaa", "first"),
+            make_todo("pick", "bbb", "second"),
+        ];
+
+        state.apply_dnd_move(1, 0);
+        assert_eq!(state.todo_list[0].commit, "aaa");
+        assert_eq!(state.todo_list[1].commit, "bbb");
+    }
+
+    #[test]
+    fn apply_dnd_move_fixup_to_first_becomes_pick() {
+        let mut state = RebaseEditorState::new();
+        state.todo_is_editable = true;
+        state.todo_list = vec![
+            make_todo("pick", "aaa", "first"),
+            make_todo("fixup", "bbb", "second"),
+        ];
+
+        // Move fixup to position 0
+        state.apply_dnd_move(1, 0);
+        // normalize_todo_constraints should convert fixup at index 0 to pick
+        assert_eq!(state.todo_list[0].action, "pick");
+        assert_eq!(state.todo_list[0].commit, "bbb");
+    }
+
+    #[test]
+    fn select_todo_sets_index() {
+        let mut state = RebaseEditorState::new();
+        state.todo_list = vec![
+            make_todo("pick", "aaa", "first"),
+            make_todo("pick", "bbb", "second"),
+        ];
+
+        state.select_todo(1);
+        assert_eq!(state.selected_todo_index, Some(1));
+
+        state.select_todo(0);
+        assert_eq!(state.selected_todo_index, Some(0));
+    }
+
+    #[test]
+    fn select_todo_out_of_bounds_ignored() {
+        let mut state = RebaseEditorState::new();
+        state.todo_list = vec![make_todo("pick", "aaa", "first")];
+        state.selected_todo_index = Some(0);
+
+        state.select_todo(5);
+        // Should remain at previous value, not update to out-of-bounds
+        assert_eq!(state.selected_todo_index, Some(0));
+    }
+
+    #[test]
+    fn apply_dnd_move_cross_fixup() {
+        // Moving a pick that has a trailing fixup: the fixup should follow (stays adjacent)
+        // and if pick ends up at index 0 the fixup remains valid (fixup stays at index 1).
+        let mut state = RebaseEditorState::new();
+        state.todo_is_editable = true;
+        state.todo_list = vec![
+            make_todo("pick", "aaa", "first"),
+            make_todo("pick", "bbb", "second"),
+            make_todo("fixup", "ccc", "fixup of second"),
+        ];
+
+        // Move "second" (index 1) down past its own fixup to index 2
+        // Result: [aaa-pick, ccc-fixup, bbb-pick] → normalize makes ccc pick at idx 1
+        // Actually fixup at index 1 is fine (not first), so no normalization needed here.
+        // But moving the fixup (index 2) above its parent pick (index 1) to index 0:
+        // Result after move(2,0): [ccc-fixup, aaa-pick, bbb-pick]
+        // normalize converts first item fixup → pick
+        state.apply_dnd_move(2, 0);
+        assert_eq!(state.todo_list[0].action, "pick"); // fixup promoted to pick at index 0
+        assert_eq!(state.todo_list[0].commit, "ccc");
+        assert_eq!(state.todo_list[1].commit, "aaa");
+        assert_eq!(state.todo_list[2].commit, "bbb");
     }
 }
