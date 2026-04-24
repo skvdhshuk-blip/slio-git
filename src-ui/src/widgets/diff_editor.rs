@@ -2,6 +2,7 @@
 
 use crate::theme;
 use crate::widgets::diff_core;
+use git_core::BlameInfo;
 use git_core::diff::{
     EditorDiffBlock, EditorDiffBlockKind, EditorDiffHunk, EditorDiffLine, EditorDiffModel,
     EditorLineMapEntry, InlineChangeSpan,
@@ -19,6 +20,7 @@ use std::path::Path;
 use std::sync::Arc;
 use unicode_width::UnicodeWidthChar;
 
+const BLAME_GUTTER_WIDTH: f32 = 80.0;
 const CODE_PADDING_X: f32 = 5.0;
 const LINK_MAP_WIDTH: f32 = 32.0;
 const OVERVIEW_WIDTH: f32 = 18.0;
@@ -1718,6 +1720,135 @@ fn is_mutating_message(message: &EditorMessage) -> bool {
 }
 
 // ═══════════════════════════════════════
+// Blame Gutter Canvas
+// ═══════════════════════════════════════
+
+#[derive(Debug, Clone)]
+struct BlameGutterCanvas {
+    lines: Arc<Vec<BlameInfo>>,
+    viewport_scroll: f32,
+    line_height: f32,
+    viewport_height: f32,
+}
+
+#[derive(Default)]
+struct BlameGutterState {
+    cache: canvas::Cache<Renderer>,
+    last_scroll_q: Cell<i32>,
+    cursor_y: Cell<i32>,
+}
+
+impl<Message> canvas::Program<Message> for BlameGutterCanvas {
+    type State = BlameGutterState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &iced::widget::canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let _ = (event, bounds);
+        let new_y = cursor.position_in(bounds).map(|p| p.y as i32).unwrap_or(-1);
+        if new_y != state.cursor_y.get() {
+            state.cursor_y.set(new_y);
+            state.cache.clear();
+        }
+        None
+    }
+
+    fn draw(
+        &self,
+        state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let scroll_q = (self.viewport_scroll * 0.5).round() as i32;
+        if state.last_scroll_q.get() != scroll_q {
+            state.last_scroll_q.set(scroll_q);
+            state.cache.clear();
+        }
+
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
+            // Background
+            frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::darcula::BG_CARD);
+
+            if self.line_height <= 0.0 || self.lines.is_empty() {
+                return;
+            }
+
+            let start_line = (self.viewport_scroll / self.line_height).floor().max(0.0) as usize;
+            let visible_count = (self.viewport_height / self.line_height).ceil() as usize + 1;
+            let end_line = (start_line + visible_count).min(self.lines.len());
+
+            let cursor_in_gutter = cursor.position_in(bounds);
+            let hovered_line_idx = cursor_in_gutter
+                .map(|p| ((self.viewport_scroll + p.y) / self.line_height).floor() as usize);
+
+            for idx in start_line..end_line {
+                let info = &self.lines[idx];
+                let y = idx as f32 * self.line_height - self.viewport_scroll;
+
+                let shorthash: String = info.commit_oid.chars().take(7).collect();
+                let author_short: String = info.author_name.chars().take(2).collect();
+                let label = format!("{shorthash} {author_short}");
+
+                frame.fill_text(canvas::Text {
+                    content: label,
+                    position: Point::new(4.0, y + self.line_height * 0.15),
+                    color: theme::darcula::TEXT_SECONDARY,
+                    size: iced::Pixels(11.0),
+                    font: theme::app_font(),
+                    align_x: iced::Alignment::Start.into(),
+                    align_y: iced::alignment::Vertical::Top,
+                    line_height: iced::widget::text::LineHeight::Relative(1.0),
+                    shaping: iced::widget::text::Shaping::Basic,
+                    max_width: BLAME_GUTTER_WIDTH - 8.0,
+                });
+
+                // Hover tooltip
+                if hovered_line_idx == Some(idx) {
+                    use chrono::{DateTime, Utc};
+                    let dt = DateTime::<Utc>::from_timestamp(info.author_time, 0)
+                        .map(|d| d.format("%Y-%m-%d").to_string())
+                        .unwrap_or_default();
+                    let tooltip = format!("{} · {} · {}", info.author_name, info.summary, dt);
+
+                    let tip_y = (y + self.line_height).min(bounds.height - 28.0);
+                    let tip_w = bounds.width.max(200.0);
+                    frame.fill_rectangle(
+                        Point::new(0.0, tip_y),
+                        Size::new(tip_w, 20.0),
+                        Color {
+                            r: 0.2,
+                            g: 0.2,
+                            b: 0.25,
+                            a: 0.95,
+                        },
+                    );
+                    frame.fill_text(canvas::Text {
+                        content: tooltip,
+                        position: Point::new(4.0, tip_y + 3.0),
+                        color: theme::darcula::TEXT_PRIMARY,
+                        size: iced::Pixels(11.0),
+                        font: theme::app_font(),
+                        align_x: iced::Alignment::Start.into(),
+                        align_y: iced::alignment::Vertical::Top,
+                        line_height: iced::widget::text::LineHeight::Relative(1.0),
+                        shaping: iced::widget::text::Shaping::Basic,
+                        max_width: tip_w - 8.0,
+                    });
+                }
+            }
+        });
+
+        vec![geometry]
+    }
+}
+
+// ═══════════════════════════════════════
 // Unified Diff Editor (single CodeEditor pane)
 // ═══════════════════════════════════════
 
@@ -1740,6 +1871,8 @@ pub struct UnifiedDiffEditorState {
     source_diff: git_core::diff::Diff,
     font_size: f32,
     context_menu: Option<Point>,
+    /// Blame annotation data — set via `set_blame_lines`
+    pub blame_lines: Option<Arc<Vec<BlameInfo>>>,
 }
 
 impl std::fmt::Debug for UnifiedDiffEditorState {
@@ -1818,7 +1951,18 @@ impl UnifiedDiffEditorState {
             source_diff: diff.clone(),
             font_size,
             context_menu: None,
+            blame_lines: None,
         }
+    }
+
+    /// Set blame annotation data for gutter rendering.
+    pub fn set_blame_lines(&mut self, lines: Arc<Vec<BlameInfo>>) {
+        self.blame_lines = Some(lines);
+    }
+
+    /// Clear blame annotation data.
+    pub fn clear_blame_lines(&mut self) {
+        self.blame_lines = None;
     }
 
     pub fn update(&mut self, event: UnifiedDiffEditorEvent) -> iced::Task<UnifiedDiffEditorEvent> {
@@ -1900,10 +2044,29 @@ impl UnifiedDiffEditorState {
             ));
         }
 
-        Container::new(stack)
+        let editor_container = Container::new(stack)
             .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+            .height(Length::Fill);
+
+        if let Some(blame_lines) = &self.blame_lines {
+            let gutter = Canvas::new(BlameGutterCanvas {
+                lines: Arc::clone(blame_lines),
+                viewport_scroll: self.editor.viewport_scroll(),
+                line_height: self.editor.line_height(),
+                viewport_height: self.editor.viewport_height(),
+            })
+            .width(Length::Fixed(BLAME_GUTTER_WIDTH))
+            .height(Length::Fill);
+
+            Row::new()
+                .push(gutter)
+                .push(editor_container)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            editor_container.into()
+        }
     }
 }
 

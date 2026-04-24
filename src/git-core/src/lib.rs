@@ -114,7 +114,7 @@ pub use tag::{
 };
 
 // New modules for IDEA git parity
-pub use blame::{BlameEntry, blame_file};
+pub use blame::{BlameEntry, BlameInfo, blame_file, blame_file_hunks};
 pub use graph::{
     EdgeType, GraphEdge, GraphNode, RefLabel, RefType, compute_graph, compute_ref_labels,
 };

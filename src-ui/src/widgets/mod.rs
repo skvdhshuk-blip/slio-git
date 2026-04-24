@@ -1,5 +1,7 @@
 //! UI widgets module and shared shell primitives.
 
+pub mod blame_cache;
+pub mod blame_worker;
 pub mod button;
 pub mod changelist;
 pub mod commit_compare;

@@ -18,7 +18,7 @@ fn blame_file_returns_correct_attribution_for_single_author() {
         .unwrap();
 
     let r = Repository::discover(repo.path()).unwrap();
-    let entries = git_core::blame_file(&r, std::path::Path::new("hello.txt")).unwrap();
+    let entries = git_core::blame_file_hunks(&r, std::path::Path::new("hello.txt")).unwrap();
 
     assert!(
         !entries.is_empty(),
@@ -39,7 +39,7 @@ fn blame_file_tracks_line_changes_across_commits() {
         .unwrap();
 
     let r = Repository::discover(repo.path()).unwrap();
-    let entries = git_core::blame_file(&r, std::path::Path::new("file.txt")).unwrap();
+    let entries = git_core::blame_file_hunks(&r, std::path::Path::new("file.txt")).unwrap();
 
     // There should be at least 2 hunks (some from first commit, some from second)
     assert!(

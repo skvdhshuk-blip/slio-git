@@ -24,9 +24,94 @@ pub struct BlameEntry {
     pub line_count: u32,
 }
 
-/// Get blame/annotate information for a file
-pub fn blame_file(repo: &Repository, file_path: &Path) -> Result<Vec<BlameEntry>, GitError> {
-    info!("Computing blame for file: {:?}", file_path);
+/// Per-line blame attribution data (expanded from hunks for direct gutter rendering)
+#[derive(Debug, Clone)]
+pub struct BlameInfo {
+    pub line_no: u32,
+    pub commit_oid: String,
+    pub author_name: String,
+    pub author_email: String,
+    /// Unix epoch seconds
+    pub author_time: i64,
+    pub summary: String,
+}
+
+/// Get blame/annotate information for a file, expanded to per-line entries.
+/// If `rev` is Some, blame is computed relative to that revision.
+pub fn blame_file(
+    repo: &Repository,
+    path: &Path,
+    rev: Option<&str>,
+) -> Result<Vec<BlameInfo>, GitError> {
+    info!("Computing blame for {:?} at rev {:?}", path, rev);
+
+    let repo_lock = repo.inner.read().unwrap();
+    let mut opts = git2::BlameOptions::new();
+
+    if let Some(rev_str) = rev {
+        let oid = repo_lock
+            .revparse_single(rev_str)
+            .map_err(|e| GitError::OperationFailed {
+                operation: "blame_file".to_string(),
+                details: format!("Invalid rev {:?}: {}", rev_str, e),
+            })?
+            .id();
+        opts.newest_commit(oid);
+    }
+
+    let blame =
+        repo_lock
+            .blame_file(path, Some(&mut opts))
+            .map_err(|e| GitError::OperationFailed {
+                operation: "blame_file".to_string(),
+                details: format!("Failed to compute blame for {:?}: {}", path, e),
+            })?;
+
+    let mut lines: Vec<BlameInfo> = Vec::new();
+
+    for i in 0..blame.len() {
+        let hunk = blame
+            .get_index(i)
+            .ok_or_else(|| GitError::OperationFailed {
+                operation: "blame_file".to_string(),
+                details: format!("Failed to get blame hunk at index {}", i),
+            })?;
+
+        let commit_id = hunk.final_commit_id();
+        let sig = hunk.final_signature();
+
+        let author_name = sig.name().unwrap_or("Unknown").to_string();
+        let author_email = sig.email().unwrap_or("").to_string();
+        let author_time = sig.when().seconds();
+        let commit_oid = commit_id.to_string();
+
+        let summary = repo_lock
+            .find_commit(commit_id)
+            .ok()
+            .and_then(|c| c.summary().map(|s| s.to_string()))
+            .unwrap_or_default();
+
+        let start = hunk.final_start_line() as u32;
+        let count = hunk.lines_in_hunk() as u32;
+        for offset in 0..count {
+            lines.push(BlameInfo {
+                line_no: start + offset,
+                commit_oid: commit_oid.clone(),
+                author_name: author_name.clone(),
+                author_email: author_email.clone(),
+                author_time,
+                summary: summary.clone(),
+            });
+        }
+    }
+
+    info!("Blame computed: {} lines for {:?}", lines.len(), path);
+    Ok(lines)
+}
+
+/// Legacy hunk-level blame — kept for backwards compatibility.
+pub fn blame_file_hunks(repo: &Repository, file_path: &Path) -> Result<Vec<BlameEntry>, GitError> {
+    info!("Computing hunk blame for file: {:?}", file_path);
 
     let repo_lock = repo.inner.read().unwrap();
     let mut opts = git2::BlameOptions::new();
@@ -55,7 +140,6 @@ pub fn blame_file(repo: &Repository, file_path: &Path) -> Result<Vec<BlameEntry>
         let author_email = sig.email().unwrap_or("").to_string();
         let timestamp = sig.when().seconds();
 
-        // Try to get commit message
         let message = repo_lock
             .find_commit(commit_id)
             .ok()
