@@ -305,7 +305,7 @@
 ### Cross-Cutting Implementation
 
 - [x] T100 Implement GPG/SSH signature verification: extract signature from commit header, shell out to gpg/ssh-keygen, cache results per commit hash in src/git-core/src/signature.rs (created in Phase 1)
-- [ ] T101 Display signature verification badges (verified/unverified) in log commit list and commit detail panel in src-ui/src/views/history_view.rs (deferred — SignatureStatus struct populated, badge rendering needs UI work)
+- [x] T101 Display signature verification badges (verified/unverified) in log commit list and commit detail panel in src-ui/src/views/history_view.rs — Completed in T1-B-B PR #8 2be14d0
 - [x] T102 [P] Implement submodule change detection: detect submodule entries in status, show commit range summary in changelist in src/git-core/src/submodule.rs (created in Phase 1, wired in index.rs)
 - [x] T103 [P] Add detached HEAD state handling: show commit hash in branch widget, warn on push attempt in src-ui/src/views/main_window.rs (current_branch_display already returns "detached HEAD")
 - [ ] T104 Add virtual scrolling optimization for branch popup (500+ branches) and commit graph (10k+ commits) using lazy rendering in src-ui/src/widgets/commit_graph.rs and src-ui/src/views/branch_popup.rs (deferred — performance optimization)

@@ -16,7 +16,7 @@
 
 **Purpose**: Confirm baseline — all existing tests pass before any changes
 
-- [ ] T001 Run `cargo test --workspace` to establish baseline test count (expect 94 tests passing) in project root
+- [x] T001 Run `cargo test --workspace` to establish baseline test count (expect 94 tests passing) in project root — Completed in T3 PR #1 87f552e
 
 **Checkpoint**: Baseline green — safe to proceed with constant adjustments
 
@@ -30,12 +30,12 @@
 
 ### Implementation
 
-- [ ] T002 [US1] Reduce `action_row` padding from `[10, 8]` to `[4, 8]` in src-ui/src/widgets/menu.rs (FR-001)
-- [ ] T003 [P] [US1] Reduce menu group padding from `[8, 10]` to `[4, 8]` in src-ui/src/widgets/menu.rs (FR-001)
-- [ ] T004 [P] [US1] Remove detail/description text rendering from menu item rows — hide subtitle text entirely in src-ui/src/widgets/menu.rs (FR-002)
-- [ ] T005 [P] [US1] Set group header font size to 10px and separator height to 1px with 2px vertical spacing in src-ui/src/widgets/menu.rs (FR-003)
-- [ ] T006 [P] [US1] Reduce `HISTORY_CONTEXT_MENU_WIDTH` constant from `332.0` to `280.0` in src-ui/src/views/history_view.rs (FR-008)
-- [ ] T007 [P] [US1] Reduce branch popup context menu item padding from `[8, 12]` to `[4, 8]` in src-ui/src/views/branch_popup.rs (FR-009)
+- [x] T002 [US1] Reduce `action_row` padding from `[10, 8]` to `[4, 8]` in src-ui/src/widgets/menu.rs (FR-001) — Completed in T3 PR #1 87f552e
+- [x] T003 [P] [US1] Reduce menu group padding from `[8, 10]` to `[4, 8]` in src-ui/src/widgets/menu.rs (FR-001) — Completed in T3 PR #1 87f552e
+- [x] T004 [P] [US1] Remove detail/description text rendering from menu item rows — hide subtitle text entirely in src-ui/src/widgets/menu.rs (FR-002) — Completed in T3 PR #1 87f552e
+- [x] T005 [P] [US1] Set group header font size to 10px and separator height to 1px with 2px vertical spacing in src-ui/src/widgets/menu.rs (FR-003) — Completed in T3 PR #1 87f552e
+- [x] T006 [P] [US1] Reduce `HISTORY_CONTEXT_MENU_WIDTH` constant from `332.0` to `280.0` in src-ui/src/views/history_view.rs (FR-008) — Completed in T3 PR #1 87f552e
+- [x] T007 [P] [US1] Reduce branch popup context menu item padding from `[8, 12]` to `[4, 8]` in src-ui/src/views/branch_popup.rs (FR-009) — Completed in T3 PR #1 87f552e
 
 **Checkpoint**: All context menus (commit log + branch popup) display at compact IDEA density, SC-001 satisfied
 
@@ -49,11 +49,11 @@
 
 ### Implementation
 
-- [ ] T008 [US2] Reduce `HISTORY_ROW_HEIGHT` from `24.0` to `22.0` in src-ui/src/views/history_view.rs (FR-004)
-- [ ] T009 [P] [US2] Reduce `HISTORY_GRAPH_LANE_WIDTH` from `16.0` to `14.0` in src-ui/src/views/history_view.rs (FR-005)
-- [ ] T010 [P] [US2] Reduce `HISTORY_GRAPH_NODE_RADIUS` from `4.0` to `3.0` in src-ui/src/views/history_view.rs (FR-006)
-- [ ] T011 [P] [US2] Reduce `HISTORY_GRAPH_LINE_WIDTH` from `1.6` to `1.5` in src-ui/src/views/history_view.rs (FR-006)
-- [ ] T012 [P] [US2] Reduce commit row padding from `[8, 10]` to `[4, 8]` in src-ui/src/views/history_view.rs (FR-007)
+- [x] T008 [US2] Reduce `HISTORY_ROW_HEIGHT` from `24.0` to `22.0` in src-ui/src/views/history_view.rs (FR-004) — Completed in T3 PR #1 87f552e
+- [x] T009 [P] [US2] Reduce `HISTORY_GRAPH_LANE_WIDTH` from `16.0` to `14.0` in src-ui/src/views/history_view.rs (FR-005) — Completed in T3 PR #1 87f552e
+- [x] T010 [P] [US2] Reduce `HISTORY_GRAPH_NODE_RADIUS` from `4.0` to `3.0` in src-ui/src/views/history_view.rs (FR-006) — Completed in T3 PR #1 87f552e
+- [x] T011 [P] [US2] Reduce `HISTORY_GRAPH_LINE_WIDTH` from `1.6` to `1.5` in src-ui/src/views/history_view.rs (FR-006) — Completed in T3 PR #1 87f552e
+- [x] T012 [P] [US2] Reduce commit row padding from `[8, 10]` to `[4, 8]` in src-ui/src/views/history_view.rs (FR-007) — Completed in T3 PR #1 87f552e
 
 **Checkpoint**: Log view row density matches IDEA visual reference, SC-002 satisfied (≥10% more rows per screen)
 
@@ -63,9 +63,9 @@
 
 **Purpose**: Verify all changes together and confirm zero regressions
 
-- [ ] T013 Run `cargo test --workspace --locked` and confirm all 94 existing tests still pass (SC-003)
-- [ ] T014 [P] Run `cargo clippy --workspace -- -D warnings` and fix any new warnings introduced
-- [ ] T015 [P] Run `cargo fmt --all -- --check` and fix any formatting issues
+- [x] T013 Run `cargo test --workspace --locked` and confirm all 94 existing tests still pass (SC-003) — Completed in T3 PR #1 87f552e
+- [x] T014 [P] Run `cargo clippy --workspace -- -D warnings` and fix any new warnings introduced — Completed in T3 PR #1 87f552e
+- [x] T015 [P] Run `cargo fmt --all -- --check` and fix any formatting issues — Completed in T3 PR #1 87f552e
 
 **Checkpoint**: SC-003 satisfied — zero test regression across all 3 modified files
 
