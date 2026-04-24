@@ -220,29 +220,29 @@ pub fn format_shortcut(shortcut: &KeyboardShortcut) -> String {
 }
 
 /// Get the description for a shortcut action
-pub fn action_description(action: ShortcutAction) -> &'static str {
+pub fn action_description(action: ShortcutAction, i18n: &crate::i18n::I18n) -> &'static str {
     match action {
-        ShortcutAction::StageFile => "暂存选中文件",
-        ShortcutAction::UnstageFile => "取消暂存选中文件",
-        ShortcutAction::StageAll => "暂存全部",
-        ShortcutAction::UnstageAll => "取消暂存全部",
-        ShortcutAction::Refresh => "刷新",
-        ShortcutAction::ToggleChangesPanel => "切换变更面板",
-        ShortcutAction::OpenCommitDialog => "打开提交对话框",
-        ShortcutAction::ToggleAmendCommitMode => "切换 amend 模式",
-        ShortcutAction::OpenPushDialog => "打开推送对话框",
-        ShortcutAction::ShowFileDiff => "显示文件差异",
-        ShortcutAction::NavigatePrevFile => "上一个文件",
-        ShortcutAction::NavigateNextFile => "下一个文件",
-        ShortcutAction::PrevHunk => "上一个差异块",
-        ShortcutAction::NextHunk => "下一个差异块",
-        ShortcutAction::Commit => "提交",
-        ShortcutAction::StashSave => "保存储藏",
-        ShortcutAction::StashPop => "弹出储藏",
-        ShortcutAction::StashDrop => "删除储藏",
-        ShortcutAction::StashList => "列出储藏",
-        ShortcutAction::SwitchToLogTab => "切换到日志",
-        ShortcutAction::SwitchToChangesTab => "切换到变更",
+        ShortcutAction::StageFile => i18n.kbd_stage_file,
+        ShortcutAction::UnstageFile => i18n.kbd_unstage_file,
+        ShortcutAction::StageAll => i18n.kbd_stage_all,
+        ShortcutAction::UnstageAll => i18n.kbd_unstage_all,
+        ShortcutAction::Refresh => i18n.kbd_refresh,
+        ShortcutAction::ToggleChangesPanel => i18n.kbd_toggle_changes_panel,
+        ShortcutAction::OpenCommitDialog => i18n.kbd_open_commit_dialog,
+        ShortcutAction::ToggleAmendCommitMode => i18n.kbd_toggle_amend_commit_mode,
+        ShortcutAction::OpenPushDialog => i18n.kbd_open_push_dialog,
+        ShortcutAction::ShowFileDiff => i18n.kbd_show_file_diff,
+        ShortcutAction::NavigatePrevFile => i18n.kbd_navigate_prev_file,
+        ShortcutAction::NavigateNextFile => i18n.kbd_navigate_next_file,
+        ShortcutAction::PrevHunk => i18n.kbd_prev_hunk,
+        ShortcutAction::NextHunk => i18n.kbd_next_hunk,
+        ShortcutAction::Commit => i18n.kbd_commit,
+        ShortcutAction::StashSave => i18n.kbd_stash_save,
+        ShortcutAction::StashPop => i18n.kbd_stash_pop,
+        ShortcutAction::StashDrop => i18n.kbd_stash_drop,
+        ShortcutAction::StashList => i18n.kbd_stash_list,
+        ShortcutAction::SwitchToLogTab => i18n.kbd_switch_to_log_tab,
+        ShortcutAction::SwitchToChangesTab => i18n.kbd_switch_to_changes_tab,
     }
 }
 
@@ -276,9 +276,10 @@ mod tests {
 
     #[test]
     fn toggle_amend_shortcut_has_user_facing_description() {
+        let i18n = crate::i18n::I18n::chinese();
         assert_eq!(
-            action_description(ShortcutAction::ToggleAmendCommitMode),
-            "切换 amend 模式"
+            action_description(ShortcutAction::ToggleAmendCommitMode, &i18n),
+            i18n.kbd_toggle_amend_commit_mode
         );
     }
 }

@@ -1361,6 +1361,33 @@ pub struct I18n {
     pub sig_missing_key: &'static str,
     pub sig_bad: &'static str,
     pub sig_unverified: &'static str,
+
+    // ── Keyboard action descriptions (T7 R1) ──
+    pub kbd_stage_file: &'static str,
+    pub kbd_unstage_file: &'static str,
+    pub kbd_stage_all: &'static str,
+    pub kbd_unstage_all: &'static str,
+    pub kbd_refresh: &'static str,
+    pub kbd_toggle_changes_panel: &'static str,
+    pub kbd_open_commit_dialog: &'static str,
+    pub kbd_toggle_amend_commit_mode: &'static str,
+    pub kbd_open_push_dialog: &'static str,
+    pub kbd_show_file_diff: &'static str,
+    pub kbd_navigate_prev_file: &'static str,
+    pub kbd_navigate_next_file: &'static str,
+    pub kbd_prev_hunk: &'static str,
+    pub kbd_next_hunk: &'static str,
+    pub kbd_commit: &'static str,
+    pub kbd_stash_save: &'static str,
+    pub kbd_stash_pop: &'static str,
+    pub kbd_stash_drop: &'static str,
+    pub kbd_stash_list: &'static str,
+    pub kbd_switch_to_log_tab: &'static str,
+    pub kbd_switch_to_changes_tab: &'static str,
+
+    // ── Language change (T7 R3) ──
+    pub lang_change_prompt: &'static str,
+    pub lang_change_restart_hint: &'static str,
 }
 
 impl I18n {
@@ -2687,6 +2714,33 @@ impl I18n {
             sig_missing_key: "缺失公钥",
             sig_bad: "签名无效",
             sig_unverified: "未验证",
+
+            // ── Keyboard action descriptions (T7 R1) ──
+            kbd_stage_file: "暂存选中文件",
+            kbd_unstage_file: "取消暂存选中文件",
+            kbd_stage_all: "暂存全部",
+            kbd_unstage_all: "取消暂存全部",
+            kbd_refresh: "刷新",
+            kbd_toggle_changes_panel: "切换变更面板",
+            kbd_open_commit_dialog: "打开提交对话框",
+            kbd_toggle_amend_commit_mode: "切换 amend 模式",
+            kbd_open_push_dialog: "打开推送对话框",
+            kbd_show_file_diff: "显示文件差异",
+            kbd_navigate_prev_file: "上一个文件",
+            kbd_navigate_next_file: "下一个文件",
+            kbd_prev_hunk: "上一个差异块",
+            kbd_next_hunk: "下一个差异块",
+            kbd_commit: "提交",
+            kbd_stash_save: "保存储藏",
+            kbd_stash_pop: "弹出储藏",
+            kbd_stash_drop: "删除储藏",
+            kbd_stash_list: "列出储藏",
+            kbd_switch_to_log_tab: "切换到日志",
+            kbd_switch_to_changes_tab: "切换到变更",
+
+            // ── Language change (T7 R3) ──
+            lang_change_prompt: "语言已更改",
+            lang_change_restart_hint: "重启应用后生效",
         }
     }
 }
@@ -4007,6 +4061,33 @@ pub static ZH_CN: I18n = I18n {
     sig_missing_key: "缺失公钥",
     sig_bad: "签名无效",
     sig_unverified: "未验证",
+
+    // ── Keyboard action descriptions (T7 R1) ──
+    kbd_stage_file: "暂存选中文件",
+    kbd_unstage_file: "取消暂存选中文件",
+    kbd_stage_all: "暂存全部",
+    kbd_unstage_all: "取消暂存全部",
+    kbd_refresh: "刷新",
+    kbd_toggle_changes_panel: "切换变更面板",
+    kbd_open_commit_dialog: "打开提交对话框",
+    kbd_toggle_amend_commit_mode: "切换 amend 模式",
+    kbd_open_push_dialog: "打开推送对话框",
+    kbd_show_file_diff: "显示文件差异",
+    kbd_navigate_prev_file: "上一个文件",
+    kbd_navigate_next_file: "下一个文件",
+    kbd_prev_hunk: "上一个差异块",
+    kbd_next_hunk: "下一个差异块",
+    kbd_commit: "提交",
+    kbd_stash_save: "保存储藏",
+    kbd_stash_pop: "弹出储藏",
+    kbd_stash_drop: "删除储藏",
+    kbd_stash_list: "列出储藏",
+    kbd_switch_to_log_tab: "切换到日志",
+    kbd_switch_to_changes_tab: "切换到变更",
+
+    // ── Language change (T7 R3) ──
+    lang_change_prompt: "语言已更改",
+    lang_change_restart_hint: "重启应用后生效",
 };
 
 pub static EN: I18n = I18n {
@@ -5326,4 +5407,31 @@ pub static EN: I18n = I18n {
     sig_missing_key: "Missing public key",
     sig_bad: "Bad signature",
     sig_unverified: "Unverified",
+
+    // ── Keyboard action descriptions (T7 R1) ──
+    kbd_stage_file: "Stage selected file",
+    kbd_unstage_file: "Unstage selected file",
+    kbd_stage_all: "Stage all",
+    kbd_unstage_all: "Unstage all",
+    kbd_refresh: "Refresh",
+    kbd_toggle_changes_panel: "Toggle changes panel",
+    kbd_open_commit_dialog: "Open commit dialog",
+    kbd_toggle_amend_commit_mode: "Toggle amend mode",
+    kbd_open_push_dialog: "Open push dialog",
+    kbd_show_file_diff: "Show file diff",
+    kbd_navigate_prev_file: "Previous file",
+    kbd_navigate_next_file: "Next file",
+    kbd_prev_hunk: "Previous hunk",
+    kbd_next_hunk: "Next hunk",
+    kbd_commit: "Commit",
+    kbd_stash_save: "Save stash",
+    kbd_stash_pop: "Pop stash",
+    kbd_stash_drop: "Drop stash",
+    kbd_stash_list: "List stashes",
+    kbd_switch_to_log_tab: "Switch to Log tab",
+    kbd_switch_to_changes_tab: "Switch to Changes tab",
+
+    // ── Language change (T7 R3) ──
+    lang_change_prompt: "Language changed",
+    lang_change_restart_hint: "Restart the app to apply",
 };

@@ -4,6 +4,7 @@
 
 mod file_watcher;
 mod i18n;
+mod i18n_smoke;
 mod keyboard;
 mod logging;
 mod state;
@@ -591,6 +592,14 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     state.close_auxiliary_view(i18n);
                     state.set_success(i18n.settings_saved, None, "settings.save");
                 }
+                SettingsMessage::SetLanguage(_) => {
+                    state.git_settings.apply_message(&msg);
+                    state.show_toast(
+                        crate::state::FeedbackLevel::Info,
+                        i18n.lang_change_prompt,
+                        Some(i18n.lang_change_restart_hint.to_string()),
+                    );
+                }
                 other => state.git_settings.apply_message(other),
             }
         }
@@ -909,7 +918,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 report_async_failure(
                     state,
                     i18n.copy_path_failed,
-                    error,
+                    error.to_message(i18n),
                     "workspace.copy_path",
                     "workspace.copy_path",
                     i18n,
@@ -2204,7 +2213,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         report_async_failure(
                             state,
                             i18n.copy_commit_hash_failed,
-                            error,
+                            error.to_message(i18n),
                             "workspace.branches",
                             "workspace.branches.copy_commit",
                             i18n,
@@ -2680,7 +2689,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         report_async_failure(
                             state,
                             i18n.copy_commit_hash_failed,
-                            error,
+                            error.to_message(i18n),
                             "workspace.history",
                             "workspace.history.copy_commit",
                             i18n,
@@ -5138,15 +5147,31 @@ fn report_async_failure(
     state.set_error_with_source(title, detail, source);
 }
 
-fn copy_text_to_clipboard(value: &str) -> Result<(), String> {
+pub enum ClipboardError {
+    Unsupported,
+    NoCommand,
+    Unknown(String),
+}
+
+impl ClipboardError {
+    fn to_message(&self, i18n: &I18n) -> String {
+        match self {
+            ClipboardError::Unsupported => i18n.clipboard_unsupported.to_string(),
+            ClipboardError::NoCommand => i18n.clipboard_no_command.to_string(),
+            ClipboardError::Unknown(msg) => msg.clone(),
+        }
+    }
+}
+
+fn copy_text_to_clipboard(value: &str) -> Result<(), ClipboardError> {
     #[cfg(target_os = "macos")]
     {
-        return pipe_command_stdin("pbcopy", &[], value);
+        return pipe_command_stdin("pbcopy", &[], value).map_err(ClipboardError::Unknown);
     }
 
     #[cfg(target_os = "windows")]
     {
-        return pipe_command_stdin("cmd", &["/C", "clip"], value);
+        return pipe_command_stdin("cmd", &["/C", "clip"], value).map_err(ClipboardError::Unknown);
     }
 
     #[cfg(target_os = "linux")]
@@ -5161,11 +5186,11 @@ fn copy_text_to_clipboard(value: &str) -> Result<(), String> {
             }
         }
 
-        return Err("当前系统没有可用的剪贴板命令（wl-copy / xclip / xsel）".to_string());
+        return Err(ClipboardError::NoCommand);
     }
 
     #[allow(unreachable_code)]
-    Err("当前平台暂不支持复制到系统剪贴板".to_string())
+    Err(ClipboardError::Unsupported)
 }
 
 fn pipe_command_stdin(command: &str, args: &[&str], value: &str) -> Result<(), String> {
@@ -5178,17 +5203,17 @@ fn pipe_command_stdin(command: &str, args: &[&str], value: &str) -> Result<(), S
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("无法启动剪贴板命令 {command}: {error}"))?;
+        .map_err(|error| format!("Cannot start clipboard command {command}: {error}"))?;
 
     if let Some(stdin) = child.stdin.as_mut() {
         stdin
             .write_all(value.as_bytes())
-            .map_err(|error| format!("写入系统剪贴板失败: {error}"))?;
+            .map_err(|error| format!("Failed to write to clipboard: {error}"))?;
     }
 
     let output = child
         .wait_with_output()
-        .map_err(|error| format!("等待剪贴板命令完成失败: {error}"))?;
+        .map_err(|error| format!("Failed waiting for clipboard command: {error}"))?;
 
     if output.status.success() {
         Ok(())

@@ -1,0 +1,32 @@
+name: CJK Guard
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  cjk-guard:
+    name: No raw CJK outside i18n
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Clippy (workspace)
+        run: |
+          # collapsible_if / let_and_return / single_match: 系统性风格历史债，全局豁免
+          # rationale: 2026-04-23 T7落地时确认，见yunxiao #4902b9c1dc7b7da87af70bcd0a
+          cargo clippy --workspace --all-targets --locked -- \
+            -D warnings \
+            -A clippy::collapsible_if \
+            -A clippy::let_and_return \
+            -A clippy::single_match
+      - name: No raw CJK string literals outside i18n.rs
+        run: |
+          if grep -rn '"[^"]*[一-龥][^"]*"' src-ui/src/ \
+              --include='*.rs' \
+              --exclude='i18n.rs' \
+              --exclude-dir='tests'; then
+            echo "Raw CJK string literals found outside i18n.rs"
+            exit 1
+          fi

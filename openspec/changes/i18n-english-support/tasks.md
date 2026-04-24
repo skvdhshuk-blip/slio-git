@@ -9,9 +9,9 @@
 - [ ] 2.1 Add new `I18n` fields for strings currently hardcoded but missing from the struct (feedback messages, dialog titles, status bar text, etc.)
 - [ ] 2.2 Replace hardcoded Chinese strings in `src-ui/src/main.rs` with `i18n.*` references
 - [ ] 2.3 Replace hardcoded Chinese strings in `src-ui/src/views/*.rs` (main_window, history_view, branch_popup, settings_view, tag_dialog, rebase_editor)
-- [ ] 2.4 Replace hardcoded Chinese strings in `src-ui/src/widgets/*.rs` (menu, commit_panel, diff_editor, merge_editor)
-- [ ] 2.5 Replace hardcoded Chinese strings in `src-ui/src/state.rs` (feedback messages, shell titles)
-- [ ] 2.6 Run CJK grep audit: `grep -rn '[\u4e00-\u9fff]' src-ui/src/views/ src-ui/src/widgets/` and fix remaining user-facing literals
+- [x] 2.4 Replace hardcoded Chinese strings in `src-ui/src/widgets/*.rs` (menu, commit_panel, diff_editor, merge_editor) — verified empty via grep 2026-04-24
+- [x] 2.5 Replace hardcoded Chinese strings in `src-ui/src/state.rs` (feedback messages, shell titles) — verified empty via grep 2026-04-24
+- [x] 2.6 Run CJK grep audit: `grep -rn '[\u4e00-\u9fff]' src-ui/src/views/ src-ui/src/widgets/` and fix remaining user-facing literals
 
 ## 3. Locale Detection & Persistence
 
@@ -25,11 +25,11 @@
 
 - [x] 4.1 Add language picker to `src-ui/src/views/settings_view.rs` with options: Auto (System) / 中文 / English
 - [x] 4.2 Add `Message::ChangeLanguage(Option<String>)` and handler to update state and persist
-- [ ] 4.3 Show restart-required hint when language is changed
+- [x] 4.3 Show restart-required hint when language is changed
 
 ## 5. Verification
 
 - [x] 5.1 Build and run in English mode — verify all major views render correctly (Changes, Log, Branch popup, Settings, context menus)
-- [ ] 5.2 Build and run in Chinese mode — verify no regressions
+- [x] 5.2 Build and run in Chinese mode — verify no regressions
 - [x] 5.3 Run `cargo test --workspace` — ensure all tests pass
-- [ ] 5.4 Run e2e test suite with English locale to verify keyboard shortcuts and basic flows still work
+- [x] 5.4 Run e2e test suite with English locale to verify keyboard shortcuts and basic flows still work
