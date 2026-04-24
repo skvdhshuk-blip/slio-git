@@ -2,6 +2,7 @@
 
 use crate::error::GitError;
 use crate::process::git_command;
+use crate::signature::SignatureCache;
 use chrono::{Local, LocalResult, TimeZone};
 use git2::Repository as Git2Repository;
 use log::info;
@@ -80,12 +81,18 @@ pub struct Repository {
     pub workdir: Option<PathBuf>,
     pub state: RepositoryState,
     pub(crate) inner: Arc<RwLock<Git2Repository>>,
+    signature_cache: Arc<SignatureCache>,
 }
 
 impl Repository {
     /// Get repository path
     pub fn path(&self) -> &Path {
         self.workdir.as_deref().unwrap_or(&self.path)
+    }
+
+    /// Get the signature cache for this repository
+    pub fn signature_cache(&self) -> &SignatureCache {
+        &self.signature_cache
     }
 
     /// Get a working directory suitable for running git commands that need a work tree.
@@ -183,6 +190,7 @@ impl Repository {
             workdir,
             state,
             inner: Arc::new(RwLock::new(repo)),
+            signature_cache: Arc::new(SignatureCache::new()),
         })
     }
 
@@ -321,6 +329,7 @@ impl Repository {
         self.workdir = new_repo.workdir().map(|path| path.to_path_buf());
         self.state = convert_state(new_repo.state());
         *self.inner.write().unwrap() = new_repo;
+        self.signature_cache.clear();
 
         info!("Repository refreshed, state: {:?}", self.state);
         Ok(())

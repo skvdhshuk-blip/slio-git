@@ -3,7 +3,7 @@
 use crate::error::GitError;
 use crate::graph::{RefLabel, compute_ref_labels};
 use crate::repository::Repository;
-use crate::signature::SignatureStatus;
+use crate::signature::{SignatureCache, SignatureStatus};
 use git2::Sort;
 use log::info;
 use std::collections::HashMap;
@@ -27,11 +27,12 @@ pub struct HistoryEntry {
     pub signature_status: Option<SignatureStatus>,
 }
 
-/// Helper to build a HistoryEntry from a git2 Commit, with optional ref labels backfill.
+/// Helper to build a HistoryEntry from a git2 Commit, with optional ref labels and cache lookup.
 fn entry_from_commit(
     commit: &git2::Commit,
     oid: git2::Oid,
     ref_map: Option<&HashMap<String, Vec<RefLabel>>>,
+    sig_cache: Option<&SignatureCache>,
 ) -> HistoryEntry {
     let author_name = commit.author().name().unwrap_or("").to_string();
     let author_email = commit.author().email().unwrap_or("").to_string();
@@ -54,6 +55,9 @@ fn entry_from_commit(
         .cloned()
         .unwrap_or_default();
 
+    // Only consult cache — async backfill is handled by T1-B-B
+    let signature_status = sig_cache.and_then(|c| c.get(oid));
+
     HistoryEntry {
         id: oid.to_string(),
         message: commit.message().unwrap_or("").to_string(),
@@ -64,7 +68,7 @@ fn entry_from_commit(
         committer_name,
         committer_email,
         refs,
-        signature_status: None,
+        signature_status,
     }
 }
 
@@ -76,6 +80,7 @@ pub fn get_history(
     info!("Getting commit history, max: {:?}", max_count);
 
     let ref_map = compute_ref_labels(repo).unwrap_or_default();
+    let sig_cache = repo.signature_cache();
     let repo_lock = repo.inner.read().unwrap();
 
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
@@ -101,7 +106,12 @@ pub fn get_history(
         if let Ok(oid) = oid_result
             && let Ok(commit) = repo_lock.find_commit(oid)
         {
-            history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
+            history.push(entry_from_commit(
+                &commit,
+                oid,
+                Some(&ref_map),
+                Some(sig_cache),
+            ));
         }
     }
 
@@ -121,6 +131,7 @@ pub fn get_history_for_ref(
     );
 
     let ref_map = compute_ref_labels(repo).unwrap_or_default();
+    let sig_cache = repo.signature_cache();
     let repo_lock = repo.inner.read().unwrap();
 
     let object = repo_lock
@@ -161,7 +172,12 @@ pub fn get_history_for_ref(
         if let Ok(oid) = oid_result
             && let Ok(commit) = repo_lock.find_commit(oid)
         {
-            history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
+            history.push(entry_from_commit(
+                &commit,
+                oid,
+                Some(&ref_map),
+                Some(sig_cache),
+            ));
         }
     }
 
@@ -182,6 +198,7 @@ pub fn search_history(
     info!("Searching history for '{}'", pattern);
 
     let ref_map = compute_ref_labels(repo).unwrap_or_default();
+    let sig_cache = repo.signature_cache();
     let repo_lock = repo.inner.read().unwrap();
 
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
@@ -210,7 +227,12 @@ pub fn search_history(
         {
             let message = commit.message().unwrap_or("").to_lowercase();
             if message.contains(&pattern_lower) {
-                history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
+                history.push(entry_from_commit(
+                    &commit,
+                    oid,
+                    Some(&ref_map),
+                    Some(sig_cache),
+                ));
             }
         }
     }
@@ -228,6 +250,7 @@ pub fn get_history_for_author(
     info!("Getting history for author '{}'", author);
 
     let ref_map = compute_ref_labels(repo).unwrap_or_default();
+    let sig_cache = repo.signature_cache();
     let repo_lock = repo.inner.read().unwrap();
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
         operation: "get_history_for_author".to_string(),
@@ -253,7 +276,12 @@ pub fn get_history_for_author(
             let name = commit.author().name().unwrap_or("").to_lowercase();
             let email = commit.author().email().unwrap_or("").to_lowercase();
             if name.contains(&author_lower) || email.contains(&author_lower) {
-                history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
+                history.push(entry_from_commit(
+                    &commit,
+                    oid,
+                    Some(&ref_map),
+                    Some(sig_cache),
+                ));
             }
         }
     }
@@ -271,6 +299,7 @@ pub fn get_history_for_path(
     info!("Getting history for path '{}'", file_path);
 
     let ref_map = compute_ref_labels(repo).unwrap_or_default();
+    let sig_cache = repo.signature_cache();
     let repo_lock = repo.inner.read().unwrap();
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
         operation: "get_history_for_path".to_string(),
@@ -336,7 +365,12 @@ pub fn get_history_for_path(
             };
 
             if touches_path {
-                history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
+                history.push(entry_from_commit(
+                    &commit,
+                    oid,
+                    Some(&ref_map),
+                    Some(sig_cache),
+                ));
             }
         }
     }
@@ -358,6 +392,7 @@ pub fn get_history_for_date_range(
     );
 
     let ref_map = compute_ref_labels(repo).unwrap_or_default();
+    let sig_cache = repo.signature_cache();
     let repo_lock = repo.inner.read().unwrap();
     let mut revwalk = repo_lock.revwalk().map_err(|e| GitError::OperationFailed {
         operation: "get_history_for_date_range".to_string(),
@@ -385,7 +420,12 @@ pub fn get_history_for_date_range(
                 break;
             }
             if ts <= end_time {
-                history.push(entry_from_commit(&commit, oid, Some(&ref_map)));
+                history.push(entry_from_commit(
+                    &commit,
+                    oid,
+                    Some(&ref_map),
+                    Some(sig_cache),
+                ));
             }
         }
     }

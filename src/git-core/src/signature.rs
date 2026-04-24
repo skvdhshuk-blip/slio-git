@@ -7,45 +7,32 @@ use log::info;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-/// Signature type
-#[derive(Debug, Clone, PartialEq)]
-pub enum SignatureType {
-    Gpg,
-    Ssh,
+/// Reason a signature failed to verify
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VerificationFailureReason {
     Unknown,
+    Expired,
+    ExpiredKey,
+    RevokedKey,
+    CannotVerify,
 }
 
-/// GPG/SSH signature verification result for a commit
-#[derive(Debug, Clone)]
-pub struct SignatureStatus {
-    /// Whether the commit has a signature
-    pub is_signed: bool,
-    /// Whether the signature verified successfully
-    pub is_verified: bool,
-    /// Name from the signing key
-    pub signer_name: Option<String>,
-    /// Key fingerprint/ID
-    pub key_id: Option<String>,
-    /// Signature type
-    pub signature_type: SignatureType,
+/// GPG/SSH signature verification result for a commit (sealed enum, 4 states)
+#[derive(Debug, Clone, PartialEq)]
+pub enum SignatureStatus {
+    /// No signature present
+    NoSignature,
+    /// Signature verified successfully
+    Verified { user: String, fingerprint: String },
+    /// Signature present but verification failed for a typed reason
+    NotVerified { reason: VerificationFailureReason },
+    /// Signature is cryptographically bad
+    Bad,
 }
 
-impl SignatureStatus {
-    /// Create an unsigned status
-    pub fn unsigned() -> Self {
-        Self {
-            is_signed: false,
-            is_verified: false,
-            signer_name: None,
-            key_id: None,
-            signature_type: SignatureType::Unknown,
-        }
-    }
-}
-
-/// Cache for signature verification results (commit hash → status)
+/// Cache for signature verification results (commit Oid → status)
 pub struct SignatureCache {
-    cache: RwLock<HashMap<String, SignatureStatus>>,
+    cache: RwLock<HashMap<git2::Oid, SignatureStatus>>,
 }
 
 impl SignatureCache {
@@ -55,12 +42,16 @@ impl SignatureCache {
         }
     }
 
-    pub fn get(&self, commit_id: &str) -> Option<SignatureStatus> {
-        self.cache.read().unwrap().get(commit_id).cloned()
+    pub fn get(&self, oid: git2::Oid) -> Option<SignatureStatus> {
+        self.cache.read().unwrap().get(&oid).cloned()
     }
 
-    pub fn insert(&self, commit_id: String, status: SignatureStatus) {
-        self.cache.write().unwrap().insert(commit_id, status);
+    pub fn insert(&self, oid: git2::Oid, status: SignatureStatus) {
+        self.cache.write().unwrap().insert(oid, status);
+    }
+
+    pub fn clear(&self) {
+        self.cache.write().unwrap().clear();
     }
 }
 
@@ -70,89 +61,66 @@ impl Default for SignatureCache {
     }
 }
 
-/// Extract and verify the signature of a commit
+/// Extract and verify the signature of a commit using `git log --format=%G?%n%GS%n%GF`.
+///
+/// Mirrors IDEA's GitCommitSignatureLoaderBase approach: one subprocess call yields
+/// the status code, signer name, and fingerprint together, avoiding fragile stderr
+/// regex on `verify-commit --raw`.
 pub fn verify_commit_signature(
     repo: &Repository,
-    commit_id: &str,
+    oid: git2::Oid,
 ) -> Result<SignatureStatus, GitError> {
-    info!("Verifying signature for commit: {}", commit_id);
+    info!("Verifying signature for commit: {}", oid);
 
-    let repo_lock = repo.inner.read().unwrap();
-    let oid = git2::Oid::from_str(commit_id).map_err(|e| GitError::CommitNotFound {
-        id: format!("{}: {}", commit_id, e),
-    })?;
+    let repo_path = repo.command_cwd();
+    let commit_id = oid.to_string();
 
-    let commit = repo_lock
-        .find_commit(oid)
-        .map_err(|_| GitError::CommitNotFound {
-            id: commit_id.to_string(),
+    let output = git_command()
+        .args(["log", "-1", "--format=%G?%n%GS%n%GF", &commit_id])
+        .current_dir(&repo_path)
+        .output()
+        .map_err(|e| GitError::OperationFailed {
+            operation: "verify_commit_signature".to_string(),
+            details: e.to_string(),
         })?;
 
-    // Try to extract signature from commit
-    let (signature, signed_data) = match repo_lock.extract_signature(&oid, None) {
-        Ok((sig, data)) => (sig, data),
-        Err(_) => {
-            info!("No signature found for commit {}", commit_id);
-            return Ok(SignatureStatus::unsigned());
-        }
+    if !output.status.success() {
+        return Ok(SignatureStatus::NotVerified {
+            reason: VerificationFailureReason::CannotVerify,
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+
+    let status_code = lines.next().unwrap_or("").trim();
+    let signer = lines.next().unwrap_or("").trim().to_string();
+    let fingerprint = lines.next().unwrap_or("").trim().to_string();
+
+    let result = match status_code {
+        "G" => SignatureStatus::Verified {
+            user: signer,
+            fingerprint,
+        },
+        "U" => SignatureStatus::NotVerified {
+            reason: VerificationFailureReason::Unknown,
+        },
+        "X" => SignatureStatus::NotVerified {
+            reason: VerificationFailureReason::Expired,
+        },
+        "Y" => SignatureStatus::NotVerified {
+            reason: VerificationFailureReason::ExpiredKey,
+        },
+        "R" => SignatureStatus::NotVerified {
+            reason: VerificationFailureReason::RevokedKey,
+        },
+        "E" => SignatureStatus::NotVerified {
+            reason: VerificationFailureReason::CannotVerify,
+        },
+        "B" => SignatureStatus::Bad,
+        _ => SignatureStatus::NoSignature,
     };
 
-    let sig_str = signature.as_str().unwrap_or("");
-    let _data_str = signed_data.as_str().unwrap_or("");
-
-    // Detect signature type
-    let signature_type = if sig_str.contains("-----BEGIN PGP SIGNATURE-----") {
-        SignatureType::Gpg
-    } else if sig_str.contains("-----BEGIN SSH SIGNATURE-----") {
-        SignatureType::Ssh
-    } else {
-        SignatureType::Unknown
-    };
-
-    // Shell out to verify
-    let repo_path = repo.command_cwd();
-    let output = git_command()
-        .args(["verify-commit", "--raw", commit_id])
-        .current_dir(&repo_path)
-        .output();
-
-    let (is_verified, signer_name, key_id) = match output {
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let verified = stderr.contains("[GNUPG:] GOODSIG")
-                || stderr.contains("[GNUPG:] VALIDSIG")
-                || out.status.success();
-
-            let signer = stderr
-                .lines()
-                .find(|l| l.contains("GOODSIG"))
-                .and_then(|l| l.split_whitespace().nth(3))
-                .map(|s| s.to_string())
-                .or_else(|| commit.author().name().map(|n| n.to_string()));
-
-            let kid = stderr
-                .lines()
-                .find(|l| l.contains("VALIDSIG"))
-                .and_then(|l| l.split_whitespace().nth(2))
-                .map(|s| s.to_string());
-
-            (verified, signer, kid)
-        }
-        Err(_) => (false, None, None),
-    };
-
-    let status = SignatureStatus {
-        is_signed: true,
-        is_verified,
-        signer_name,
-        key_id,
-        signature_type,
-    };
-
-    info!(
-        "Signature verification for {}: signed={}, verified={}",
-        commit_id, status.is_signed, status.is_verified
-    );
-
-    Ok(status)
+    info!("Signature verification for {}: {:?}", commit_id, result);
+    Ok(result)
 }

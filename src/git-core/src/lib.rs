@@ -119,7 +119,9 @@ pub use graph::{
     EdgeType, GraphEdge, GraphNode, RefLabel, RefType, compute_graph, compute_ref_labels,
 };
 pub use reflog::recent_checkout_branches;
-pub use signature::{SignatureCache, SignatureStatus, SignatureType, verify_commit_signature};
+pub use signature::{
+    SignatureCache, SignatureStatus, VerificationFailureReason, verify_commit_signature,
+};
 pub use submodule::{SubmoduleChange, is_submodule, list_submodules, submodule_summary};
 pub use worktree::{WorkingTree, create_worktree, list_worktrees, remove_worktree};
 

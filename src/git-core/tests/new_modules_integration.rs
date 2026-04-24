@@ -6,6 +6,7 @@
 mod test_helpers;
 
 use git_core::Repository;
+use git2;
 use test_helpers::TestRepo;
 
 // ── T099a: Blame ──────────────────────────────────────────────────────────────
@@ -187,11 +188,14 @@ fn verify_commit_signature_returns_unsigned_for_normal_commit() {
 
     let r = Repository::discover(repo.path()).unwrap();
     let history = git_core::get_history(&r, Some(1)).unwrap();
-    let commit_id = &history[0].id;
+    let oid = git2::Oid::from_str(&history[0].id).unwrap();
 
-    let status = git_core::verify_commit_signature(&r, commit_id).unwrap();
-    assert!(!status.is_signed, "normal commit should not be signed");
-    assert!(!status.is_verified);
+    let status = git_core::verify_commit_signature(&r, oid).unwrap();
+    assert_eq!(
+        status,
+        git_core::SignatureStatus::NoSignature,
+        "normal commit should be NoSignature"
+    );
 }
 
 // ── Commit message history ────────────────────────────────────────────────────
