@@ -99,6 +99,8 @@ pub struct GitSettings {
     pub llm_model: String,
     // Language: None = auto-detect, Some("zh-CN"), Some("en")
     pub language: Option<String>,
+    /// Max commits loaded in history view (default 100)
+    pub history_commit_limit: u32,
 }
 
 impl Default for GitSettings {
@@ -122,6 +124,7 @@ impl Default for GitSettings {
             llm_api_key: String::new(),
             llm_model: "deepseek-chat".to_string(),
             language: None,
+            history_commit_limit: 100,
         }
     }
 }
@@ -232,6 +235,11 @@ impl GitSettings {
                         Some(value.to_string())
                     };
                 }
+                "history_commit_limit" => {
+                    if let Ok(n) = value.parse::<u32>() {
+                        s.history_commit_limit = n.max(1).min(50_000);
+                    }
+                }
                 _ => {}
             }
         }
@@ -278,7 +286,8 @@ impl GitSettings {
              llm_api_url\t{}\n\
              llm_api_key\t{}\n\
              llm_model\t{}\n\
-             language\t{}\n",
+             language\t{}\n\
+             history_commit_limit\t{}\n",
             self.auto_update_on_push_reject,
             self.pull_autocrlf_true,
             self.protected_branches,
@@ -295,6 +304,7 @@ impl GitSettings {
             self.llm_api_key,
             self.llm_model,
             self.language.as_deref().unwrap_or("auto"),
+            self.history_commit_limit,
         )
     }
 

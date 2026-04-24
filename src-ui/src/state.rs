@@ -667,6 +667,8 @@ pub struct AppState {
     pub available_update: Option<git_core::updater::UpdateInfo>,
     /// File-level DnD state for changelist
     pub drag: Option<DragState>,
+    /// Performance HUD state
+    pub hud: crate::perf::HudState,
 }
 
 /// In-progress network operation state for progress indicator
@@ -801,6 +803,7 @@ impl AppState {
             pull_strategy: PullStrategy::default(),
             available_update: None,
             drag: None,
+            hud: crate::perf::HudState::new(false),
         };
 
         state.sync_context_feedback(i18n);
@@ -1081,7 +1084,9 @@ impl AppState {
             return;
         };
 
-        self.history_view.load_history(&repo, i18n);
+        let limit = self.git_settings.history_commit_limit;
+        self.history_view
+            .load_history_with_limit(&repo, i18n, limit);
         self.branch_popup.load_branches(&repo, i18n);
     }
 

@@ -139,11 +139,15 @@ impl HistoryState {
     }
 
     pub fn load_history(&mut self, repo: &Repository, i18n: &I18n) {
+        self.load_history_with_limit(repo, i18n, 100);
+    }
+
+    pub fn load_history_with_limit(&mut self, repo: &Repository, i18n: &I18n, limit: u32) {
         self.is_loading = true;
         self.error = None;
         self.refresh_repo_context(repo);
 
-        match get_history(repo, Some(100)) {
+        match get_history(repo, Some(limit as usize)) {
             Ok(entries) => {
                 self.entries = entries.clone();
                 self.filtered_entries = entries;

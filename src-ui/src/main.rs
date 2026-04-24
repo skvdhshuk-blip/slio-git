@@ -7,6 +7,7 @@ mod i18n;
 mod i18n_smoke;
 mod keyboard;
 mod logging;
+pub mod perf;
 mod state;
 mod theme;
 
@@ -65,6 +66,15 @@ pub fn main() -> iced::Result {
     }
     info!("Starting slio-git UI");
 
+    let perf_hud_on_start = std::env::args().any(|a| a == "--perf-hud");
+    let history_limit_override: Option<u32> = {
+        let args: Vec<String> = std::env::args().collect();
+        args.windows(2)
+            .find(|w| w[0] == "--history-limit")
+            .and_then(|w| w[1].parse::<u32>().ok())
+            .map(|n| n.max(1).min(50_000))
+    };
+
     // Load embedded window icon (64x64 RGBA)
     let icon_data = include_bytes!("../assets/icon_64.rgba");
     let window_icon = iced::window::icon::from_rgba(icon_data.to_vec(), 64, 64).ok();
@@ -85,13 +95,20 @@ pub fn main() -> iced::Result {
     }
 
     iced::application(
-        || {
+        move || {
             let startup_task = Task::perform(
                 git_core::updater::check_for_update(env!("CARGO_PKG_VERSION").to_string()),
                 |result| Message::UpdateCheckResult(result.ok().flatten()),
             );
             let init_i18n = i18n::locale(None);
-            (AppState::restore(init_i18n), startup_task)
+            let mut app_state = AppState::restore(init_i18n);
+            if perf_hud_on_start {
+                app_state.hud = crate::perf::HudState::new(true);
+            }
+            if let Some(limit) = history_limit_override {
+                app_state.git_settings.history_commit_limit = limit;
+            }
+            (app_state, startup_task)
         },
         update,
         view,
@@ -114,6 +131,9 @@ fn app_subscription(state: &AppState) -> Subscription<Message> {
             if key == keyboard::Key::Named(keyboard::key::Named::Escape) {
                 return Some(Message::CancelDrag);
             }
+            if key == keyboard::Key::Named(Named::F12) && modifiers.is_empty() {
+                return Some(Message::ToggleHud);
+            }
             get_shortcuts()
                 .into_iter()
                 .find(|shortcut| key == shortcut.key && modifiers == shortcut.modifiers)
@@ -123,6 +143,11 @@ fn app_subscription(state: &AppState) -> Subscription<Message> {
     });
 
     let mut subscriptions = vec![keyboard];
+
+    // Frame subscription for HUD — only injected when HUD is visible (zero overhead when hidden)
+    if state.hud.visible {
+        subscriptions.push(iced::window::frames().map(Message::FrameTick));
+    }
 
     // Esc guard for inline edit and DnD cancellation — only active when needed
     if state.rebase_editor.inline_edit_index.is_some() {
@@ -192,6 +217,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             | Message::CloseToolbarRemoteMenu
             | Message::DismissToast
             | Message::ToolbarRemoteActionSelected { .. }
+            | Message::FrameTick(_)
     ) {
         state.close_toolbar_remote_menu();
     }
@@ -720,6 +746,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::CancelDrag => {
             state.drag = None;
+        }
+        Message::FrameTick(now) => {
+            state.hud.record_frame(now);
+        }
+        Message::ToggleHud => {
+            state.hud.toggle();
         }
         Message::StageHunk(path, hunk_index) => {
             if let Some(repo) = &state.current_repository {
@@ -5593,7 +5625,59 @@ fn view(state: &AppState) -> Element<'_, Message> {
     }
 
     let layered = wrap_with_history_commit_diff_popup(state, i18n, layered);
+    let layered = wrap_with_hud_overlay(state, layered);
     wrap_with_pending_commit_action_dialog(state, layered)
+}
+
+fn wrap_with_hud_overlay<'a>(
+    state: &'a AppState,
+    base: Element<'a, Message>,
+) -> Element<'a, Message> {
+    if !state.hud.visible {
+        return base;
+    }
+    let lines = state.hud.text_lines();
+    let hud_content = Column::new()
+        .spacing(2)
+        .push(
+            Text::new(lines[0].clone())
+                .size(11)
+                .color(Color::from_rgb(0.0, 1.0, 0.4)),
+        )
+        .push(
+            Text::new(lines[1].clone())
+                .size(11)
+                .color(Color::from_rgb(0.0, 1.0, 0.4)),
+        );
+
+    let hud_box = Container::new(hud_content)
+        .padding([4, 8])
+        .style(|_: &Theme| iced::widget::container::Style {
+            background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.65))),
+            border: Border {
+                color: Color::from_rgba(0.0, 1.0, 0.4, 0.4),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        });
+
+    let positioned = Container::new(hud_box)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::End)
+        .align_y(Alignment::End)
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 8.0,
+            bottom: 24.0,
+            left: 0.0,
+        });
+
+    iced::widget::stack([base, positioned.into()])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 fn wrap_with_pending_commit_action_dialog<'a>(
@@ -7029,6 +7113,8 @@ pub enum Message {
     DragHoverSection(ChangeSectionKind),
     DragRelease,
     CancelDrag,
+    FrameTick(Instant),
+    ToggleHud,
 }
 
 #[cfg(test)]
