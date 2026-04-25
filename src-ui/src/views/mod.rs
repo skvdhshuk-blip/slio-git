@@ -2,6 +2,7 @@
 
 pub mod branch_popup;
 pub mod commit_dialog;
+pub mod console_output;
 pub mod history_view;
 pub mod log_filter_bar;
 pub mod main_window;

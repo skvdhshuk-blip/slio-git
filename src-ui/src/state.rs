@@ -754,6 +754,7 @@ pub struct AppState {
     /// Performance HUD state
     pub hud: crate::perf::HudState,
     pub log_filter_text_gen: usize,
+    pub console: crate::views::console_output::ConsoleOutputState,
 }
 
 /// In-progress network operation state for progress indicator
@@ -889,6 +890,7 @@ impl AppState {
             available_update: None,
             drag: None,
             hud: crate::perf::HudState::new(false),
+            console: crate::views::console_output::ConsoleOutputState::default(),
             log_filter_text_gen: 0,
         };
 

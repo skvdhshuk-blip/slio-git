@@ -40,6 +40,8 @@ pub enum ShortcutAction {
     SwitchToChangesTab,
     // Open folder (Welcome + global, N9)
     OpenFolder,
+    // Toggle console output panel (IDEA: Cmd+F12 / Ctrl+F12)
+    ToggleConsole,
 }
 
 /// Keyboard shortcut definition
@@ -192,6 +194,12 @@ pub fn get_shortcuts() -> Vec<KeyboardShortcut> {
             key: Key::Named(Named::F7),
             action: ShortcutAction::PrevHunk,
         },
+        // Cmd+F12 / Ctrl+F12: Toggle console (IDEA style)
+        KeyboardShortcut {
+            modifiers: Modifiers::CTRL,
+            key: Key::Named(Named::F12),
+            action: ShortcutAction::ToggleConsole,
+        },
     ]
 }
 
@@ -253,6 +261,7 @@ pub fn action_description(action: ShortcutAction, i18n: &crate::i18n::I18n) -> &
         ShortcutAction::SwitchToLogTab => i18n.kbd_switch_to_log_tab,
         ShortcutAction::SwitchToChangesTab => i18n.kbd_switch_to_changes_tab,
         ShortcutAction::OpenFolder => i18n.welcome_open_folder_btn,
+        ShortcutAction::ToggleConsole => i18n.kbd_toggle_console,
     }
 }
 
