@@ -1,0 +1,34 @@
+# Compiled class file
+*.class
+
+# Log file
+*.log
+
+# Package Files
+*.jar
+*.war
+*.nar
+*.ear
+
+# Build directories
+target/
+build/
+out/
+
+# Gradle
+.gradle/
+
+# Kotlin
+*.kotlin_module
+
+# IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Android
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/

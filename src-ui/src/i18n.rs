@@ -1447,6 +1447,23 @@ pub struct I18n {
     pub td_remote_label: &'static str,
     pub td_no_remotes: &'static str,
     pub tag_push_in_progress: &'static str,
+
+    // ── Gitignore templates (W3 #bc2a61, IDEA: addNewElementsToIgnoreFile) ──
+    pub aux_gitignore: &'static str,
+    pub gi_title: &'static str,
+    pub gi_eyebrow: &'static str,
+    pub gi_subtitle: &'static str,
+    pub gi_detail: &'static str,
+    pub gi_preview_title: &'static str,
+    pub gi_preview_empty: &'static str,
+    pub gi_apply_btn: &'static str,
+    pub gi_selected_fmt: &'static str,
+    pub gi_status_done: &'static str,
+    pub gi_status_done_detail_fmt: &'static str,
+    pub gi_status_failed: &'static str,
+    pub gi_opened: &'static str,
+    pub cannot_open_gitignore_panel: &'static str,
+    pub show_gitignore_btn: &'static str,
 }
 
 impl I18n {
@@ -2857,6 +2874,23 @@ impl I18n {
             td_remote_label: "远程",
             td_no_remotes: "未配置远程",
             tag_push_in_progress: "推送中...",
+
+            // ── Gitignore templates ──
+            aux_gitignore: "Gitignore",
+            gi_title: "Gitignore 模板",
+            gi_eyebrow: "Gitignore",
+            gi_subtitle: "选择语言或平台模板",
+            gi_detail: "应用后内容会追加到仓库根 .gitignore，不会覆盖现有条目",
+            gi_preview_title: "预览",
+            gi_preview_empty: "请先选择一个模板",
+            gi_apply_btn: "应用到 .gitignore",
+            gi_selected_fmt: "已选择: {}",
+            gi_status_done: "已应用",
+            gi_status_done_detail_fmt: "{} 模板已追加到 .gitignore",
+            gi_status_failed: "应用失败",
+            gi_opened: "Gitignore 模板面板已打开",
+            cannot_open_gitignore_panel: "无法打开 Gitignore 面板",
+            show_gitignore_btn: "Gitignore 模板",
         }
     }
 }
@@ -4261,6 +4295,23 @@ pub static ZH_CN: I18n = I18n {
     td_remote_label: "远程",
     td_no_remotes: "未配置远程",
     tag_push_in_progress: "推送中...",
+
+    // ── Gitignore templates ──
+    aux_gitignore: "Gitignore",
+    gi_title: "Gitignore 模板",
+    gi_eyebrow: "Gitignore",
+    gi_subtitle: "选择语言或平台模板",
+    gi_detail: "应用后内容会追加到仓库根 .gitignore，不会覆盖现有条目",
+    gi_preview_title: "预览",
+    gi_preview_empty: "请先选择一个模板",
+    gi_apply_btn: "应用到 .gitignore",
+    gi_selected_fmt: "已选择: {}",
+    gi_status_done: "已应用",
+    gi_status_done_detail_fmt: "{} 模板已追加到 .gitignore",
+    gi_status_failed: "应用失败",
+    gi_opened: "Gitignore 模板面板已打开",
+    cannot_open_gitignore_panel: "无法打开 Gitignore 面板",
+    show_gitignore_btn: "Gitignore 模板",
 };
 
 pub static EN: I18n = I18n {
@@ -5664,4 +5715,21 @@ pub static EN: I18n = I18n {
     td_remote_label: "Remote",
     td_no_remotes: "No remotes configured",
     tag_push_in_progress: "Pushing...",
+
+    // ── Gitignore templates (W3, IDEA: addNewElementsToIgnoreFile) ──
+    aux_gitignore: "Gitignore",
+    gi_title: "Gitignore Templates",
+    gi_eyebrow: "Gitignore",
+    gi_subtitle: "Pick a language or platform template",
+    gi_detail: "Content is appended to the repository root .gitignore — existing entries are preserved.",
+    gi_preview_title: "Preview",
+    gi_preview_empty: "Select a template to preview its content",
+    gi_apply_btn: "Apply to .gitignore",
+    gi_selected_fmt: "Selected: {}",
+    gi_status_done: "Applied",
+    gi_status_done_detail_fmt: "Appended {} template to .gitignore",
+    gi_status_failed: "Failed to apply",
+    gi_opened: "Gitignore templates panel opened",
+    cannot_open_gitignore_panel: "Cannot open Gitignore panel",
+    show_gitignore_btn: "Gitignore Templates",
 };

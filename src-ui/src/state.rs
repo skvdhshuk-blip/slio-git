@@ -5,6 +5,7 @@ use crate::theme;
 use crate::views::{
     branch_popup::{BranchPopupState, CommitActionConfirmation},
     commit_dialog::CommitDialogState,
+    gitignore_view::GitignoreState,
     history_view::HistoryState,
     rebase_editor::RebaseEditorState,
     remote_dialog::RemoteDialogState,
@@ -482,6 +483,7 @@ pub enum AuxiliaryView {
     Rebase,
     Worktrees,
     Settings,
+    Gitignore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -703,6 +705,7 @@ pub struct AppState {
     pub history_commit_diff_popup: Option<HistoryCommitDiffPopupState>,
     pub remote_dialog: RemoteDialogState,
     pub tag_dialog: TagDialogState,
+    pub gitignore_view: GitignoreState,
     pub stash_panel: StashPanelState,
     pub rebase_editor: RebaseEditorState,
     pub toolbar_remote_menu: Option<ToolbarRemoteMenuState>,
@@ -863,6 +866,7 @@ impl AppState {
             history_commit_diff_popup: None,
             remote_dialog: RemoteDialogState::default(),
             tag_dialog: TagDialogState::default(),
+            gitignore_view: GitignoreState::default(),
             stash_panel: StashPanelState::default(),
             rebase_editor: RebaseEditorState::default(),
             toolbar_remote_menu: None,
@@ -2195,7 +2199,8 @@ impl AppState {
                     | AuxiliaryView::Stashes
                     | AuxiliaryView::Rebase
                     | AuxiliaryView::Worktrees
-                    | AuxiliaryView::Settings => {}
+                    | AuxiliaryView::Settings
+                    | AuxiliaryView::Gitignore => {}
                     AuxiliaryView::Branches => {
                         shell.title = branch_actions_label;
                         shell.subtitle = branch.clone();
@@ -2538,6 +2543,8 @@ fn auxiliary_label(view: AuxiliaryView, i18n: Option<&I18n>) -> String {
         (AuxiliaryView::Stashes, None) => "Stashes".to_string(),
         (AuxiliaryView::Worktrees, None) => "Worktrees".to_string(),
         (AuxiliaryView::Settings, None) => "Settings".to_string(),
+        (AuxiliaryView::Gitignore, Some(i)) => i.aux_gitignore.to_string(),
+        (AuxiliaryView::Gitignore, None) => "Gitignore".to_string(),
     }
 }
 

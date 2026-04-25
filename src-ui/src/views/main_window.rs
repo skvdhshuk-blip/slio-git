@@ -61,6 +61,7 @@ pub struct MainWindow<'a, Message> {
     pub on_dismiss_feedback: Message,
     pub on_dismiss_toast: Message,
     pub on_show_settings: Message,
+    pub on_show_gitignore: Message,
 }
 
 impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
@@ -93,6 +94,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
         on_dismiss_feedback: Message,
         on_dismiss_toast: Message,
         on_show_settings: Message,
+        on_show_gitignore: Message,
     ) -> Self {
         Self {
             i18n,
@@ -122,6 +124,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             on_dismiss_feedback,
             on_dismiss_toast,
             on_show_settings,
+            on_show_gitignore,
         }
     }
 
@@ -154,6 +157,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             on_dismiss_feedback,
             on_dismiss_toast,
             on_show_settings,
+            on_show_gitignore,
         } = self;
 
         let banner = state
@@ -233,6 +237,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
                     &on_show_branches,
                     &on_open_repo,
                     &on_show_settings,
+                    &on_show_gitignore,
                 ))
                 .push(rule::horizontal(1).style(theme::separator_rule_style()))
                 .push(workspace)
@@ -299,6 +304,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
         on_show_branches: &Message,
         on_open_repo: &Message,
         on_show_settings: &Message,
+        on_show_gitignore: &Message,
     ) -> Element<'a, Message> {
         let context = &state.shell.context_switcher;
         let badges = Self::pick_branch_badges(
@@ -386,6 +392,10 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
                     .chrome
                     .has_staged_changes
                     .then_some(on_commit.clone()),
+            ))
+            .push(button::ghost(
+                i18n.show_gitignore_btn,
+                Some(on_show_gitignore.clone()),
             ))
             .push(
                 Button::new(Self::inline_icon(
@@ -965,6 +975,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             AuxiliaryView::Rebase => RailIcon::Rebase,
             AuxiliaryView::Worktrees => RailIcon::Repository,
             AuxiliaryView::Settings => RailIcon::Repository,
+            AuxiliaryView::Gitignore => RailIcon::Settings,
         }
     }
 

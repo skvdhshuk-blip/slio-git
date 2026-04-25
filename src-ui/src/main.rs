@@ -1353,6 +1353,44 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 );
             }
         }
+        Message::ShowGitignore => {
+            if let Err(error) = open_gitignore_view(state) {
+                report_async_failure(
+                    state,
+                    i18n.cannot_open_gitignore_panel,
+                    error,
+                    "workspace.gitignore",
+                    "workspace.gitignore",
+                    i18n,
+                );
+            }
+        }
+        Message::GitignoreMessage(message) => match message {
+            views::gitignore_view::GitignoreMessage::SelectTemplate(name) => {
+                state.gitignore_view.select(name);
+            }
+            views::gitignore_view::GitignoreMessage::Apply(name) => {
+                if let Some(repo) = state.current_repository.clone() {
+                    state.gitignore_view.apply(&repo, name.clone());
+                    if state.gitignore_view.error.is_none() {
+                        state.set_success(
+                            i18n.gi_status_done,
+                            Some(i18n.gi_status_done_detail_fmt.replace("{}", &name)),
+                            "workspace.gitignore",
+                        );
+                    } else if let Some(error) = state.gitignore_view.error.clone() {
+                        state.set_error(error);
+                    }
+                }
+            }
+            views::gitignore_view::GitignoreMessage::Refresh => {
+                state.gitignore_view.error = None;
+                state.gitignore_view.success_message = None;
+            }
+            views::gitignore_view::GitignoreMessage::Close => {
+                state.close_auxiliary_view(i18n);
+            }
+        },
         Message::ShowRebase => {
             if let Err(error) = open_rebase_editor(state) {
                 report_async_failure(
@@ -4780,6 +4818,7 @@ fn refresh_open_auxiliary_view(state: &mut AppState) {
         Some(AuxiliaryView::Settings)
         | Some(AuxiliaryView::Commit)
         | Some(AuxiliaryView::History)
+        | Some(AuxiliaryView::Gitignore)
         | None => {}
     }
 }
@@ -5149,6 +5188,16 @@ fn open_tag_dialog(state: &mut AppState) -> Result<(), String> {
     }
     state.open_auxiliary_view(AuxiliaryView::Tags, i18n);
     state.set_info(i18n.tags_opened, None, "workspace.tags");
+    Ok(())
+}
+
+fn open_gitignore_view(state: &mut AppState) -> Result<(), String> {
+    let _repo = require_repository(state)?;
+    let i18n = i18n::locale(state.git_settings.language.as_deref());
+    state.gitignore_view.error = None;
+    state.gitignore_view.success_message = None;
+    state.open_auxiliary_view(AuxiliaryView::Gitignore, i18n);
+    state.set_info(i18n.gi_opened, None, "workspace.gitignore");
     Ok(())
 }
 
@@ -5632,6 +5681,7 @@ fn view(state: &AppState) -> Element<'_, Message> {
         Message::DismissFeedback,
         Message::DismissToast,
         Message::ShowSettings,
+        Message::ShowGitignore,
     );
     let mut layered = main_window.view();
 
@@ -6047,6 +6097,8 @@ fn build_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Mess
             }
             AuxiliaryView::Commit => build_changes_body(state, i18n),
             AuxiliaryView::History => build_log_body(state, i18n),
+            AuxiliaryView::Gitignore => views::gitignore_view::view(&state.gitignore_view, i18n)
+                .map(Message::GitignoreMessage),
         };
     }
 
@@ -7358,6 +7410,9 @@ pub enum Message {
     WelcomeOpenProject(std::path::PathBuf),
     /// Tag push completed (async): Ok((tag, remote)) on success, Err((tag, remote, msg)) on failure
     TagPushCompleted(Result<(String, String), (String, String, String)>),
+    /// Gitignore template picker (W3 #bc2a61)
+    ShowGitignore,
+    GitignoreMessage(views::gitignore_view::GitignoreMessage),
 }
 
 #[cfg(test)]

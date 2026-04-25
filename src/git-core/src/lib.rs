@@ -43,6 +43,7 @@ pub mod commit_actions;
 pub mod diff;
 pub mod error;
 pub mod git_utils;
+pub mod gitignore;
 pub mod graph;
 pub mod history;
 pub mod index;
@@ -86,6 +87,7 @@ pub use diff::{
     file_is_binary, get_conflict_diff, resolve_conflict, resolve_conflict_hunk,
 };
 pub use error::GitError;
+pub use gitignore::{gitignore_add, gitignore_list_templates, gitignore_template_content};
 pub use history::{
     HistoryEntry, get_history, get_history_for_author, get_history_for_date_range,
     get_history_for_path, get_history_for_ref, search_history,
