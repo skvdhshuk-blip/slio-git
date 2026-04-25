@@ -1,6 +1,6 @@
 //! Branch popup view.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::i18n::I18n;
 use crate::theme::{self, BadgeTone, Surface};
@@ -78,6 +78,15 @@ pub enum BranchPopupMessage {
     // Checkout ref (branch / tag / commit)
     CheckoutInputChanged(String),
     CheckoutRef(String),
+    // Branch cleanup
+    OpenCleanup,
+    CloseCleanup,
+    ToggleCleanupBranch(String),
+    SelectAllCleanup,
+    DeselectAllCleanup,
+    ShowCleanupConfirm,
+    CancelCleanup,
+    ExecuteCleanupDelete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +185,16 @@ pub struct BranchPopupState {
     pub smart_checkout_affected_files: Vec<String>,
     /// Input for unified ref checkout (branch / tag / commit)
     pub checkout_input: String,
+    /// Whether the cleanup dialog is open
+    pub cleanup_dialog_open: bool,
+    /// Branches that are merged into main (candidates for cleanup)
+    pub cleanup_merged_branches: Vec<String>,
+    /// Currently selected branches for cleanup deletion
+    pub cleanup_selected: HashSet<String>,
+    /// Whether the confirmation dialog is shown
+    pub cleanup_show_confirm: bool,
+    /// Current branch name at cleanup-open time (to protect it from deletion)
+    pub cleanup_current_branch: String,
 }
 
 impl BranchPopupState {
@@ -211,6 +230,11 @@ impl BranchPopupState {
             smart_checkout_is_remote: false,
             smart_checkout_affected_files: Vec::new(),
             checkout_input: String::new(),
+            cleanup_dialog_open: false,
+            cleanup_merged_branches: Vec::new(),
+            cleanup_selected: HashSet::new(),
+            cleanup_show_confirm: false,
+            cleanup_current_branch: String::new(),
         }
     }
 
@@ -894,6 +918,84 @@ impl BranchPopupState {
         self.error = None;
     }
 
+    pub fn open_cleanup(&mut self, repo: &Repository) {
+        self.cleanup_dialog_open = true;
+        self.cleanup_show_confirm = false;
+        self.cleanup_merged_branches = repo.find_merged_branches("main").unwrap_or_default();
+        self.cleanup_selected.clear();
+        self.cleanup_current_branch = repo.current_branch().ok().flatten().unwrap_or_default();
+        // Pre-select all non-protected branches
+        for name in &self.cleanup_merged_branches {
+            if name != &self.cleanup_current_branch && name != "main" && name != "master" {
+                self.cleanup_selected.insert(name.clone());
+            }
+        }
+    }
+
+    pub fn close_cleanup(&mut self) {
+        self.cleanup_dialog_open = false;
+        self.cleanup_show_confirm = false;
+        self.cleanup_merged_branches.clear();
+        self.cleanup_selected.clear();
+    }
+
+    pub fn toggle_cleanup_branch(&mut self, name: String) {
+        if self.cleanup_selected.contains(&name) {
+            self.cleanup_selected.remove(&name);
+        } else {
+            self.cleanup_selected.insert(name);
+        }
+    }
+
+    pub fn select_all_cleanup(&mut self) {
+        for name in &self.cleanup_merged_branches {
+            if name == &self.cleanup_current_branch || name == "main" || name == "master" {
+                continue;
+            }
+            self.cleanup_selected.insert(name.clone());
+        }
+    }
+
+    pub fn deselect_all_cleanup(&mut self) {
+        self.cleanup_selected.clear();
+    }
+
+    pub fn execute_cleanup_delete(&mut self, repo: &Repository, i18n: &I18n) {
+        self.is_loading = true;
+        self.error = None;
+        self.success_message = None;
+
+        let mut deleted = 0usize;
+        let mut failed = 0usize;
+
+        for name in self.cleanup_selected.iter() {
+            // Safety guard: never delete current branch or main/master
+            if name == &self.cleanup_current_branch || name == "main" || name == "master" {
+                continue;
+            }
+            match repo.delete_branch(name) {
+                Ok(()) => deleted += 1,
+                Err(_) => failed += 1,
+            }
+        }
+
+        self.is_loading = false;
+        self.cleanup_dialog_open = false;
+        self.cleanup_show_confirm = false;
+
+        if failed == 0 {
+            self.success_message = Some(
+                i18n.branch_cleanup_success_fmt
+                    .replace("{n}", &deleted.to_string()),
+            );
+        } else {
+            self.error = Some(
+                i18n.branch_cleanup_failed_fmt
+                    .replace("{n}", &failed.to_string()),
+            );
+        }
+    }
+
     pub fn load_selected_branch_history(&mut self, repo: &Repository, i18n: &I18n) {
         let Some(reference) = self.selected_branch.clone() else {
             self.branch_history_entries.clear();
@@ -1568,6 +1670,10 @@ pub fn view<'a>(state: &'a BranchPopupState, i18n: &'a I18n) -> Element<'a, Bran
             }))
             .push(Space::new().width(Length::Fill))
             .push(button::compact_ghost(
+                i18n.branch_cleanup_btn,
+                Some(BranchPopupMessage::OpenCleanup),
+            ))
+            .push(button::compact_ghost(
                 i18n.close,
                 Some(BranchPopupMessage::Close),
             )),
@@ -1722,6 +1828,44 @@ pub fn view<'a>(state: &'a BranchPopupState, i18n: &'a I18n) -> Element<'a, Bran
         .into();
     }
 
+    if state.cleanup_dialog_open {
+        let cleanup_base = opaque(mouse_area(
+            Container::new(Space::new())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(move |_: &Theme| container::Style {
+                    background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.5))),
+                    ..Default::default()
+                }),
+        ));
+
+        if state.cleanup_show_confirm {
+            let dialog = build_cleanup_confirm_dialog(state, i18n);
+            return stack![
+                base,
+                cleanup_base,
+                Container::new(dialog)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+            ]
+            .into();
+        }
+
+        let dialog = build_cleanup_dialog(state, current_branch, i18n);
+        return stack![
+            base,
+            cleanup_base,
+            Container::new(dialog)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+        ]
+        .into();
+    }
+
     base
 }
 
@@ -1849,6 +1993,208 @@ fn build_smart_checkout_dialog<'a>(
     )
     .width(Length::Fixed(440.0))
     .style(|_: &Theme| container::Style {
+        background: Some(Background::Color(theme::darcula::BG_PANEL)),
+        border: Border {
+            width: 1.0,
+            color: theme::darcula::SEPARATOR,
+            radius: theme::radius::LG.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn build_cleanup_dialog<'a>(
+    state: &'a BranchPopupState,
+    current_branch: Option<&'a Branch>,
+    i18n: &'a I18n,
+) -> Element<'a, BranchPopupMessage> {
+    let current_name = current_branch.map(|b| b.name.as_str()).unwrap_or("");
+    let header = Container::new(
+        Row::new()
+            .align_y(Alignment::Center)
+            .push(
+                Text::new(i18n.branch_cleanup_title)
+                    .size(theme::typography::TITLE_SIZE)
+                    .color(theme::darcula::TEXT_PRIMARY),
+            )
+            .push(Space::new().width(Length::Fill))
+            .push(button::compact_ghost(
+                i18n.close,
+                Some(BranchPopupMessage::CloseCleanup),
+            )),
+    )
+    .padding([6, 14])
+    .width(Length::Fill)
+    .style(theme::frame_style(Surface::Toolbar));
+
+    let subtitle = Text::new(i18n.branch_cleanup_subtitle)
+        .size(theme::typography::CAPTION_SIZE)
+        .color(theme::darcula::TEXT_SECONDARY);
+
+    let select_buttons = Row::new()
+        .spacing(theme::spacing::XS)
+        .push(button::compact_ghost(
+            i18n.branch_cleanup_select_all,
+            Some(BranchPopupMessage::SelectAllCleanup),
+        ))
+        .push(button::compact_ghost(
+            i18n.branch_cleanup_deselect_all,
+            Some(BranchPopupMessage::DeselectAllCleanup),
+        ));
+
+    let mut list = Column::new().spacing(4).width(Length::Fill);
+    if state.cleanup_merged_branches.is_empty() {
+        list = list.push(
+            Text::new(i18n.branch_cleanup_no_merged)
+                .size(theme::typography::CAPTION_SIZE)
+                .color(theme::darcula::TEXT_SECONDARY),
+        );
+    } else {
+        for branch_name in &state.cleanup_merged_branches {
+            let is_protected =
+                branch_name == current_name || branch_name == "main" || branch_name == "master";
+            let is_selected = state.cleanup_selected.contains(branch_name);
+            let checkbox_char = if is_selected { "[x]" } else { "[ ]" };
+            let label = if branch_name == current_name {
+                format!(
+                    "{checkbox_char} {branch_name}  ({})",
+                    i18n.branch_cleanup_protected_current
+                )
+            } else if branch_name == "main" || branch_name == "master" {
+                format!(
+                    "{checkbox_char} {branch_name}  ({})",
+                    i18n.branch_cleanup_protected_main
+                )
+            } else {
+                format!("{checkbox_char} {branch_name}")
+            };
+            if is_protected {
+                list = list.push(
+                    Text::new(label)
+                        .size(theme::typography::BODY_SIZE)
+                        .color(theme::darcula::TEXT_DISABLED),
+                );
+            } else {
+                list = list.push(
+                    mouse_area(
+                        Container::new(
+                            Text::new(label)
+                                .size(theme::typography::BODY_SIZE)
+                                .color(theme::darcula::TEXT_PRIMARY),
+                        )
+                        .padding([2, 4])
+                        .width(Length::Fill),
+                    )
+                    .on_press(BranchPopupMessage::ToggleCleanupBranch(branch_name.clone())),
+                );
+            }
+        }
+    }
+
+    let selected_count = state.cleanup_selected.len();
+    let count_text = i18n
+        .branch_cleanup_count_fmt
+        .replace("{n}", &selected_count.to_string());
+    let footer = Row::new()
+        .spacing(theme::spacing::SM)
+        .align_y(Alignment::Center)
+        .push(
+            Text::new(count_text)
+                .size(theme::typography::CAPTION_SIZE)
+                .color(theme::darcula::TEXT_SECONDARY),
+        )
+        .push(Space::new().width(Length::Fill))
+        .push(button::secondary(
+            i18n.branch_cleanup_delete_selected,
+            (selected_count > 0).then(|| BranchPopupMessage::ShowCleanupConfirm),
+        ));
+
+    Container::new(
+        Column::new()
+            .spacing(theme::spacing::SM)
+            .width(Length::Fixed(420.0))
+            .push(header)
+            .push(
+                Column::new()
+                    .spacing(theme::spacing::SM)
+                    .padding([8, 14])
+                    .push(subtitle)
+                    .push(select_buttons)
+                    .push(scrollable::styled(list).height(Length::Fixed(300.0)))
+                    .push(footer),
+            ),
+    )
+    .style(move |_: &Theme| container::Style {
+        background: Some(Background::Color(theme::darcula::BG_PANEL)),
+        border: Border {
+            width: 1.0,
+            color: theme::darcula::SEPARATOR,
+            radius: theme::radius::LG.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn build_cleanup_confirm_dialog<'a>(
+    state: &'a BranchPopupState,
+    i18n: &'a I18n,
+) -> Element<'a, BranchPopupMessage> {
+    let header = Container::new(
+        Row::new().align_y(Alignment::Center).push(
+            Text::new(i18n.branch_cleanup_confirm_title)
+                .size(theme::typography::TITLE_SIZE)
+                .color(theme::darcula::TEXT_PRIMARY),
+        ),
+    )
+    .padding([6, 14])
+    .width(Length::Fill)
+    .style(theme::frame_style(Surface::Toolbar));
+
+    let mut list = Column::new().spacing(2).width(Length::Fill);
+    for name in &state.cleanup_selected {
+        if let Some(branch_name) = state.cleanup_merged_branches.iter().find(|b| *b == name) {
+            list = list.push(
+                Text::new(format!("  {branch_name}"))
+                    .size(theme::typography::BODY_SIZE)
+                    .color(theme::darcula::TEXT_PRIMARY),
+            );
+        }
+    }
+
+    let footer = Row::new()
+        .spacing(theme::spacing::SM)
+        .align_y(Alignment::Center)
+        .push(Space::new().width(Length::Fill))
+        .push(button::compact_ghost(
+            i18n.cancel,
+            Some(BranchPopupMessage::CancelCleanup),
+        ))
+        .push(button::primary(
+            i18n.branch_cleanup_delete_selected,
+            Some(BranchPopupMessage::ExecuteCleanupDelete),
+        ));
+
+    Container::new(
+        Column::new()
+            .spacing(theme::spacing::SM)
+            .width(Length::Fixed(420.0))
+            .push(header)
+            .push(
+                Column::new()
+                    .spacing(theme::spacing::SM)
+                    .padding([8, 14])
+                    .push(
+                        Text::new(i18n.branch_cleanup_confirm_detail)
+                            .size(theme::typography::BODY_SIZE)
+                            .color(theme::darcula::TEXT_PRIMARY),
+                    )
+                    .push(scrollable::styled(list).height(Length::Fixed(200.0)))
+                    .push(footer),
+            ),
+    )
+    .style(move |_: &Theme| container::Style {
         background: Some(Background::Color(theme::darcula::BG_PANEL)),
         border: Border {
             width: 1.0,

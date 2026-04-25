@@ -1427,6 +1427,23 @@ pub struct I18n {
     pub console_clear: &'static str,
     pub console_close: &'static str,
     pub console_empty: &'static str,
+
+    // ── Branch cleanup (T5) ──
+    pub branch_cleanup_btn: &'static str,
+    pub branch_cleanup_title: &'static str,
+    pub branch_cleanup_subtitle: &'static str,
+    pub branch_cleanup_delete_selected: &'static str,
+    pub branch_cleanup_confirm_title: &'static str,
+    pub branch_cleanup_confirm_detail: &'static str,
+    pub branch_cleanup_no_merged: &'static str,
+    pub branch_cleanup_select_all: &'static str,
+    pub branch_cleanup_deselect_all: &'static str,
+    pub branch_cleanup_protected_current: &'static str,
+    pub branch_cleanup_protected_main: &'static str,
+    pub branch_cleanup_deleting: &'static str,
+    pub branch_cleanup_count_fmt: &'static str,
+    pub branch_cleanup_success_fmt: &'static str,
+    pub branch_cleanup_failed_fmt: &'static str,
 }
 
 impl I18n {
@@ -2817,6 +2834,23 @@ impl I18n {
             console_clear: "清空",
             console_close: "关闭",
             console_empty: "暂无输出，执行 Git 命令后结果将在此显示",
+
+            // ── Branch cleanup (T5) ──
+            branch_cleanup_btn: "清理",
+            branch_cleanup_title: "分支清理",
+            branch_cleanup_subtitle: "选择要删除的已合并分支",
+            branch_cleanup_delete_selected: "删除选中",
+            branch_cleanup_confirm_title: "确认删除分支",
+            branch_cleanup_confirm_detail: "以下分支将被删除：",
+            branch_cleanup_no_merged: "未找到已合并的分支",
+            branch_cleanup_select_all: "全选",
+            branch_cleanup_deselect_all: "取消全选",
+            branch_cleanup_protected_current: "当前分支（受保护）",
+            branch_cleanup_protected_main: "main（受保护）",
+            branch_cleanup_deleting: "正在删除...",
+            branch_cleanup_count_fmt: "已选择 {n} 个分支",
+            branch_cleanup_success_fmt: "成功删除 {n} 个分支",
+            branch_cleanup_failed_fmt: "删除 {n} 个分支失败",
         }
     }
 }
@@ -4201,6 +4235,23 @@ pub static ZH_CN: I18n = I18n {
     console_clear: "清空",
     console_close: "关闭",
     console_empty: "暂无输出，执行 Git 命令后结果将在此显示",
+
+    // ── Branch cleanup (T5) ──
+    branch_cleanup_btn: "清理",
+    branch_cleanup_title: "分支清理",
+    branch_cleanup_subtitle: "选择要删除的已合并分支",
+    branch_cleanup_delete_selected: "删除选中",
+    branch_cleanup_confirm_title: "确认删除分支",
+    branch_cleanup_confirm_detail: "以下分支将被删除：",
+    branch_cleanup_no_merged: "未找到已合并的分支",
+    branch_cleanup_select_all: "全选",
+    branch_cleanup_deselect_all: "取消全选",
+    branch_cleanup_protected_current: "当前分支（受保护）",
+    branch_cleanup_protected_main: "main（受保护）",
+    branch_cleanup_deleting: "正在删除...",
+    branch_cleanup_count_fmt: "已选择 {n} 个分支",
+    branch_cleanup_success_fmt: "成功删除 {n} 个分支",
+    branch_cleanup_failed_fmt: "删除 {n} 个分支失败",
 };
 
 pub static EN: I18n = I18n {
@@ -5584,4 +5635,21 @@ pub static EN: I18n = I18n {
     console_clear: "Clear",
     console_close: "Close",
     console_empty: "No output yet. Run a Git command to see results here.",
+
+    // ── Branch cleanup (T5) ──
+    branch_cleanup_btn: "Cleanup",
+    branch_cleanup_title: "Branch Cleanup",
+    branch_cleanup_subtitle: "Select merged branches to delete",
+    branch_cleanup_delete_selected: "Delete Selected",
+    branch_cleanup_confirm_title: "Confirm Branch Deletion",
+    branch_cleanup_confirm_detail: "The following branches will be deleted:",
+    branch_cleanup_no_merged: "No merged branches found",
+    branch_cleanup_select_all: "Select All",
+    branch_cleanup_deselect_all: "Deselect All",
+    branch_cleanup_protected_current: "Current branch (protected)",
+    branch_cleanup_protected_main: "main (protected)",
+    branch_cleanup_deleting: "Deleting...",
+    branch_cleanup_count_fmt: "{n} branches selected",
+    branch_cleanup_success_fmt: "Successfully deleted {n} branch(es)",
+    branch_cleanup_failed_fmt: "Failed to delete {n} branch(es)",
 };

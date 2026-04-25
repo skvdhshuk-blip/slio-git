@@ -314,6 +314,56 @@ impl Repository {
         Ok(merge_base == branch_oid)
     }
 
+    /// Find all local branches merged into the target branch.
+    ///
+    /// Uses `git branch --merged <target>` for a single batch query.
+    /// Returns branch names only (no refs/heads/ prefix).
+    pub fn find_merged_branches(&self, target: &str) -> Result<Vec<String>, GitError> {
+        info!("Finding branches merged into '{}'", target);
+
+        let repo_path = self.command_cwd();
+        let output = git_command()
+            .args(["branch", "--merged", target])
+            .current_dir(&repo_path)
+            .output()
+            .map_err(|e| GitError::OperationFailed {
+                operation: "find_merged_branches".to_string(),
+                details: format!("Failed to execute git branch --merged: {}", e),
+            })?;
+
+        if !output.status.success() {
+            return Err(GitError::OperationFailed {
+                operation: "find_merged_branches".to_string(),
+                details: format!(
+                    "git branch --merged failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            });
+        }
+
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        let branches: Vec<String> = output_str
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                // Skip the current branch marker "* " prefix
+                let name = trimmed.strip_prefix("* ").unwrap_or(trimmed);
+                let name = name.trim();
+                if name.is_empty() {
+                    return None;
+                }
+                Some(name.to_string())
+            })
+            .collect();
+
+        info!(
+            "Found {} branches merged into '{}'",
+            branches.len(),
+            target
+        );
+        Ok(branches)
+    }
+
     pub fn create_branch(&self, name: &str, oid: &str) -> Result<Branch, GitError> {
         self.create_branch_from_start_point(name, oid)
     }

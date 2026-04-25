@@ -2655,6 +2655,44 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     state.show_branch_dropdown = false;
                     state.close_auxiliary_view(i18n);
                 }
+                BranchPopupMessage::OpenCleanup => {
+                    if let Ok(repo) = require_repository(state) {
+                        state.branch_popup.open_cleanup(&repo);
+                    }
+                }
+                BranchPopupMessage::CloseCleanup => state.branch_popup.close_cleanup(),
+                BranchPopupMessage::ToggleCleanupBranch(name) => {
+                    state.branch_popup.toggle_cleanup_branch(name);
+                }
+                BranchPopupMessage::SelectAllCleanup => {
+                    state.branch_popup.select_all_cleanup();
+                }
+                BranchPopupMessage::DeselectAllCleanup => {
+                    state.branch_popup.deselect_all_cleanup();
+                }
+                BranchPopupMessage::ShowCleanupConfirm => {
+                    state.branch_popup.cleanup_show_confirm = true;
+                }
+                BranchPopupMessage::CancelCleanup => state.branch_popup.close_cleanup(),
+                BranchPopupMessage::ExecuteCleanupDelete => {
+                    if let Ok(repo) = require_repository(state) {
+                        let i18n = i18n::locale(state.git_settings.language.as_deref());
+                        state.branch_popup.execute_cleanup_delete(&repo, i18n);
+                        if let Some(msg) = state.branch_popup.success_message.take() {
+                            state.set_info(msg, Some(i18n.done_status.to_string()), "workspace.branches.cleanup");
+                        }
+                        if let Some(err) = state.branch_popup.error.take() {
+                            report_async_failure(
+                                state,
+                                i18n.operation_failed,
+                                err,
+                                "workspace.branches",
+                                "workspace.branches.cleanup",
+                                i18n,
+                            );
+                        }
+                    }
+                }
             }
         }
         Message::HistoryMessage(message) => {
@@ -5032,6 +5070,14 @@ fn branch_popup_message_closes_context_menu(message: &BranchPopupMessage) -> boo
             | BranchPopupMessage::OpenRebase
             | BranchPopupMessage::Close
             | BranchPopupMessage::CheckoutRef(_)
+            | BranchPopupMessage::OpenCleanup
+            | BranchPopupMessage::CloseCleanup
+            | BranchPopupMessage::ToggleCleanupBranch(_)
+            | BranchPopupMessage::SelectAllCleanup
+            | BranchPopupMessage::DeselectAllCleanup
+            | BranchPopupMessage::ShowCleanupConfirm
+            | BranchPopupMessage::CancelCleanup
+            | BranchPopupMessage::ExecuteCleanupDelete
     )
 }
 
