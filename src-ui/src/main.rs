@@ -765,6 +765,21 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::ToggleHud => {
             state.hud.toggle();
         }
+        Message::ToggleConsole => {
+            state.console.toggle();
+        }
+        Message::ConsoleOutputMessage(msg) => match msg {
+            views::console_output::ConsoleOutputMessage::Toggle => {
+                state.console.toggle();
+            }
+            views::console_output::ConsoleOutputMessage::Clear => {
+                state.console.clear();
+            }
+            views::console_output::ConsoleOutputMessage::AppendLine(line) => {
+                state.console.append_line(line);
+            }
+            views::console_output::ConsoleOutputMessage::ScrollChanged(_vp) => {}
+        },
         Message::StageHunk(path, hunk_index) => {
             if let Some(repo) = &state.current_repository {
                 let file_path = std::path::Path::new(&path);
@@ -1162,6 +1177,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 if state.auxiliary_view.is_none() && !state.show_branch_dropdown {
                     return update(state, Message::OpenRepository);
                 }
+            }
+            ShortcutAction::ToggleConsole => {
+                state.console.toggle();
             }
             _ => {}
         },
@@ -5949,8 +5967,22 @@ fn build_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Mess
     }
 }
 
-fn build_docked_tool_window<'a>(_state: &'a AppState) -> Option<Element<'a, Message>> {
-    None
+fn build_docked_tool_window<'a>(state: &'a AppState) -> Option<Element<'a, Message>> {
+    if state.console.visible {
+        let i18n = i18n::locale(state.git_settings.language.as_deref());
+        Some(
+            views::console_output::view(
+                &state.console,
+                i18n.console_title,
+                i18n.console_clear,
+                i18n.console_close,
+                i18n.console_empty,
+            )
+            .map(Message::ConsoleOutputMessage),
+        )
+    } else {
+        None
+    }
 }
 
 fn build_welcome_body<'a>(state: &'a AppState, i18n: &'a i18n::I18n) -> Element<'a, Message> {
@@ -7227,6 +7259,8 @@ pub enum Message {
     CancelDrag,
     FrameTick(Instant),
     ToggleHud,
+    ToggleConsole,
+    ConsoleOutputMessage(views::console_output::ConsoleOutputMessage),
     /// Welcome screen: open a project from recent list (AC-7)
     WelcomeOpenProject(std::path::PathBuf),
 }

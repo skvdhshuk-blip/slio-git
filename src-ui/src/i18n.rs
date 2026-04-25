@@ -1384,6 +1384,7 @@ pub struct I18n {
     pub kbd_stash_list: &'static str,
     pub kbd_switch_to_log_tab: &'static str,
     pub kbd_switch_to_changes_tab: &'static str,
+    pub kbd_toggle_console: &'static str,
 
     // ── Language change (T7 R3) ──
     pub lang_change_prompt: &'static str,
@@ -1421,6 +1422,11 @@ pub struct I18n {
     pub fh_back_to_log: &'static str,
     // ── Autosquash toggle (N8a) ──
     pub autosquash_checkbox_label: &'static str,
+    // ── Console output (T2) ──
+    pub console_title: &'static str,
+    pub console_clear: &'static str,
+    pub console_close: &'static str,
+    pub console_empty: &'static str,
 }
 
 impl I18n {
@@ -2770,6 +2776,7 @@ impl I18n {
             kbd_stash_list: "列出储藏",
             kbd_switch_to_log_tab: "切换到日志",
             kbd_switch_to_changes_tab: "切换到变更",
+            kbd_toggle_console: "切换控制台面板",
 
             // ── Language change (T7 R3) ──
             lang_change_prompt: "语言已更改",
@@ -2806,6 +2813,10 @@ impl I18n {
             fh_path_label: "文件历史",
             fh_back_to_log: "返回日志",
             autosquash_checkbox_label: "自动整理 (Autosquash)",
+            console_title: "Git 输出",
+            console_clear: "清空",
+            console_close: "关闭",
+            console_empty: "暂无输出，执行 Git 命令后结果将在此显示",
         }
     }
 }
@@ -4149,6 +4160,7 @@ pub static ZH_CN: I18n = I18n {
     kbd_stash_list: "列出储藏",
     kbd_switch_to_log_tab: "切换到日志",
     kbd_switch_to_changes_tab: "切换到变更",
+    kbd_toggle_console: "切换控制台面板",
 
     // ── Language change (T7 R3) ──
     lang_change_prompt: "语言已更改",
@@ -4185,6 +4197,10 @@ pub static ZH_CN: I18n = I18n {
     fh_path_label: "文件历史",
     fh_back_to_log: "返回日志",
     autosquash_checkbox_label: "自动整理 (Autosquash)",
+    console_title: "Git 输出",
+    console_clear: "清空",
+    console_close: "关闭",
+    console_empty: "暂无输出，执行 Git 命令后结果将在此显示",
 };
 
 pub static EN: I18n = I18n {
@@ -5527,6 +5543,7 @@ pub static EN: I18n = I18n {
     kbd_stash_list: "List stashes",
     kbd_switch_to_log_tab: "Switch to Log tab",
     kbd_switch_to_changes_tab: "Switch to Changes tab",
+    kbd_toggle_console: "Toggle Console Panel",
 
     // ── Language change (T7 R3) ──
     lang_change_prompt: "Language changed",
@@ -5563,4 +5580,8 @@ pub static EN: I18n = I18n {
     fh_path_label: "File History",
     fh_back_to_log: "Back to Log",
     autosquash_checkbox_label: "Autosquash",
+    console_title: "Git Output",
+    console_clear: "Clear",
+    console_close: "Close",
+    console_empty: "No output yet. Run a Git command to see results here.",
 };
