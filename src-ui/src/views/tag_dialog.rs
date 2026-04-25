@@ -7,9 +7,10 @@ use crate::theme::{self, BadgeTone, Surface};
 use crate::widgets::{self, OptionalPush, button, scrollable, text_input};
 use git_core::{
     Repository,
+    remote::list_remotes,
     tag::{TagInfo, create_lightweight_tag, create_tag, delete_tag, list_tags},
 };
-use iced::widget::{Button, Column, Container, Row, Text, text};
+use iced::widget::{Button, Column, Container, PickList, Row, Text, text};
 use iced::{Alignment, Element, Length};
 
 /// Message types for tag dialog.
@@ -19,7 +20,7 @@ pub enum TagDialogMessage {
     CreateTag(String, String, bool),
     DeleteTag(String),
     DeleteLocalAndRemote(String),
-    PushTag(String),
+    PushTag(String, String),
     DeleteRemoteTag(String),
     SetTagName(String),
     SetTarget(String),
@@ -29,6 +30,7 @@ pub enum TagDialogMessage {
     ValidateCommitRef,
     Refresh,
     Close,
+    SetRemote(String),
 }
 
 /// State for the tag dialog.
@@ -42,9 +44,12 @@ pub struct TagDialogState {
     pub is_lightweight: bool,
     pub is_force: bool,
     pub is_loading: bool,
+    pub is_pushing: bool,
     pub error: Option<String>,
     pub success_message: Option<String>,
     pub validation_result: Option<String>,
+    pub available_remotes: Vec<String>,
+    pub selected_remote: Option<String>,
 }
 
 impl TagDialogState {
@@ -58,9 +63,12 @@ impl TagDialogState {
             is_lightweight: false,
             is_force: false,
             is_loading: false,
+            is_pushing: false,
             error: None,
             success_message: None,
             validation_result: None,
+            available_remotes: Vec::new(),
+            selected_remote: None,
         }
     }
 
@@ -84,6 +92,32 @@ impl TagDialogState {
                 self.error = Some(format!("Failed to load tags: {error}"));
                 self.success_message = None;
                 self.is_loading = false;
+            }
+        }
+
+        self.load_remotes(repo);
+    }
+
+    pub fn load_remotes(&mut self, repo: &Repository) {
+        match list_remotes(repo) {
+            Ok(remotes) => {
+                let names: Vec<String> = remotes.into_iter().map(|r| r.name).collect();
+                let preferred = repo.current_upstream_remote();
+                if self
+                    .selected_remote
+                    .as_ref()
+                    .is_none_or(|selected| !names.iter().any(|n| n == selected))
+                {
+                    self.selected_remote = preferred
+                        .filter(|p| names.iter().any(|n| n == p))
+                        .or_else(|| names.iter().find(|n| n.as_str() == "origin").cloned())
+                        .or_else(|| names.first().cloned());
+                }
+                self.available_remotes = names;
+            }
+            Err(_) => {
+                self.available_remotes.clear();
+                self.selected_remote = None;
             }
         }
     }
@@ -336,9 +370,36 @@ fn build_action_buttons<'a>(
     let can_create =
         !state.is_loading && !state.tag_name.trim().is_empty() && !state.target.trim().is_empty();
 
+    let remote_picker: Element<'a, TagDialogMessage> = if state.available_remotes.is_empty() {
+        Text::new(i18n.td_no_remotes)
+            .size(11)
+            .color(theme::darcula::TEXT_SECONDARY)
+            .into()
+    } else {
+        PickList::new(
+            state.available_remotes.clone(),
+            state.selected_remote.clone(),
+            TagDialogMessage::SetRemote,
+        )
+        .placeholder(i18n.td_remote_label)
+        .into()
+    };
+
+    let push_action = match (
+        state.selected_tag.as_ref(),
+        state.selected_remote.as_ref(),
+        state.is_pushing,
+    ) {
+        (Some(tag), Some(remote), false) => {
+            Some(TagDialogMessage::PushTag(tag.clone(), remote.clone()))
+        }
+        _ => None,
+    };
+
     scrollable::styled_horizontal(
         Row::new()
             .spacing(theme::spacing::XS)
+            .align_y(Alignment::Center)
             .push(button::primary(
                 i18n.td_create_tag_btn,
                 can_create.then(|| {
@@ -349,9 +410,19 @@ fn build_action_buttons<'a>(
                     )
                 }),
             ))
+            .push(
+                Text::new(i18n.td_remote_label)
+                    .size(11)
+                    .color(theme::darcula::TEXT_SECONDARY),
+            )
+            .push(remote_picker)
             .push(button::secondary(
-                i18n.td_push_remote_btn,
-                state.selected_tag.clone().map(TagDialogMessage::PushTag),
+                if state.is_pushing {
+                    i18n.tag_push_in_progress
+                } else {
+                    i18n.td_push_remote_btn
+                },
+                push_action,
             ))
             .push(button::ghost(
                 i18n.td_delete_local_btn,

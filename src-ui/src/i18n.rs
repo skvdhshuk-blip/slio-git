@@ -1444,6 +1444,9 @@ pub struct I18n {
     pub branch_cleanup_count_fmt: &'static str,
     pub branch_cleanup_success_fmt: &'static str,
     pub branch_cleanup_failed_fmt: &'static str,
+    pub td_remote_label: &'static str,
+    pub td_no_remotes: &'static str,
+    pub tag_push_in_progress: &'static str,
 }
 
 impl I18n {
@@ -2851,6 +2854,9 @@ impl I18n {
             branch_cleanup_count_fmt: "已选择 {n} 个分支",
             branch_cleanup_success_fmt: "成功删除 {n} 个分支",
             branch_cleanup_failed_fmt: "删除 {n} 个分支失败",
+            td_remote_label: "远程",
+            td_no_remotes: "未配置远程",
+            tag_push_in_progress: "推送中...",
         }
     }
 }
@@ -4252,6 +4258,9 @@ pub static ZH_CN: I18n = I18n {
     branch_cleanup_count_fmt: "已选择 {n} 个分支",
     branch_cleanup_success_fmt: "成功删除 {n} 个分支",
     branch_cleanup_failed_fmt: "删除 {n} 个分支失败",
+    td_remote_label: "远程",
+    td_no_remotes: "未配置远程",
+    tag_push_in_progress: "推送中...",
 };
 
 pub static EN: I18n = I18n {
@@ -5652,4 +5661,7 @@ pub static EN: I18n = I18n {
     branch_cleanup_count_fmt: "{n} branches selected",
     branch_cleanup_success_fmt: "Successfully deleted {n} branch(es)",
     branch_cleanup_failed_fmt: "Failed to delete {n} branch(es)",
+    td_remote_label: "Remote",
+    td_no_remotes: "No remotes configured",
+    tag_push_in_progress: "Pushing...",
 };

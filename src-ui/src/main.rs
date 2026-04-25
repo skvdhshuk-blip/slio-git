@@ -485,6 +485,36 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 state.show_toast(crate::state::FeedbackLevel::Error, &error, None);
             }
         }
+        Message::TagPushCompleted(result) => {
+            state.tag_dialog.is_pushing = false;
+            match result {
+                Ok((tag, remote)) => {
+                    let message = i18n
+                        .tag_pushed_fmt
+                        .replace("{}", &tag)
+                        .replacen("{}", &remote, 1);
+                    state.tag_dialog.success_message = Some(message.clone());
+                    state.tag_dialog.error = None;
+                    state.set_success(message, None, "workspace.tags");
+                    if let Some(repo) = state.current_repository.clone() {
+                        state.tag_dialog.load_tags(&repo);
+                    }
+                }
+                Err((_tag, _remote, err)) => {
+                    let detail = i18n.push_tag_failed_fmt.replace("{}", &err);
+                    state.tag_dialog.error = Some(detail.clone());
+                    state.tag_dialog.success_message = None;
+                    report_async_failure(
+                        state,
+                        i18n.push_tag,
+                        detail,
+                        "workspace.tags",
+                        "workspace.tags.push",
+                        i18n,
+                    );
+                }
+            }
+        }
         Message::ShowChanges => {
             let previous_section = state.shell.active_section;
             state.close_auxiliary_view(i18n);
@@ -2679,7 +2709,11 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         let i18n = i18n::locale(state.git_settings.language.as_deref());
                         state.branch_popup.execute_cleanup_delete(&repo, i18n);
                         if let Some(msg) = state.branch_popup.success_message.take() {
-                            state.set_info(msg, Some(i18n.done_status.to_string()), "workspace.branches.cleanup");
+                            state.set_info(
+                                msg,
+                                Some(i18n.done_status.to_string()),
+                                "workspace.branches.cleanup",
+                            );
                         }
                         if let Some(err) = state.branch_popup.error.take() {
                             report_async_failure(
@@ -3896,24 +3930,34 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     }
                 }
             }
-            TagDialogMessage::PushTag(name) => {
+            TagDialogMessage::PushTag(name, remote) => {
                 if let Ok(repo) = require_repository(state) {
-                    let remote = repo
-                        .current_upstream_remote()
-                        .unwrap_or_else(|| "origin".to_string());
-                    match git_core::push_tag(&repo, &name, &remote) {
-                        Ok(()) => {
-                            state.tag_dialog.success_message = Some(
-                                i18n.tag_pushed_fmt
-                                    .replace("{}", &name)
-                                    .replacen("{}", &remote, 1),
-                            );
-                        }
-                        Err(e) => {
-                            state.tag_dialog.error =
-                                Some(i18n.push_tag_failed_fmt.replace("{}", &e.to_string()));
-                        }
-                    }
+                    state.tag_dialog.is_pushing = true;
+                    state.tag_dialog.error = None;
+                    state.tag_dialog.success_message = None;
+                    let repo_path = repo.path().to_path_buf();
+                    let tag_name = name.clone();
+                    let remote_name = remote.clone();
+                    return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                let repo =
+                                    git_core::Repository::discover(&repo_path).map_err(|e| {
+                                        (tag_name.clone(), remote_name.clone(), e.to_string())
+                                    })?;
+                                git_core::push_tag(&repo, &tag_name, &remote_name)
+                                    .map(|()| (tag_name.clone(), remote_name.clone()))
+                                    .map_err(|e| {
+                                        (tag_name.clone(), remote_name.clone(), e.to_string())
+                                    })
+                            })
+                            .await
+                            .unwrap_or_else(|join_err| {
+                                Err((name.clone(), remote.clone(), join_err.to_string()))
+                            })
+                        },
+                        Message::TagPushCompleted,
+                    );
                 }
             }
             TagDialogMessage::DeleteRemoteTag(name) => {
@@ -4002,6 +4046,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
             }
             TagDialogMessage::Close => state.close_auxiliary_view(i18n),
+            TagDialogMessage::SetRemote(name) => {
+                state.tag_dialog.selected_remote = Some(name);
+            }
         },
         Message::StashPanelMessage(message) => match message {
             StashPanelMessage::SetNewStashMessage(value) => {
@@ -7309,6 +7356,8 @@ pub enum Message {
     ConsoleOutputMessage(views::console_output::ConsoleOutputMessage),
     /// Welcome screen: open a project from recent list (AC-7)
     WelcomeOpenProject(std::path::PathBuf),
+    /// Tag push completed (async): Ok((tag, remote)) on success, Err((tag, remote, msg)) on failure
+    TagPushCompleted(Result<(String, String), (String, String, String)>),
 }
 
 #[cfg(test)]
