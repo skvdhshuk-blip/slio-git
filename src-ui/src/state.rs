@@ -4,6 +4,7 @@ use crate::i18n::I18n;
 use crate::theme;
 use crate::views::{
     branch_popup::{BranchPopupState, CommitActionConfirmation},
+    clone_dialog::CloneDialogState,
     commit_dialog::CommitDialogState,
     gitignore_view::GitignoreState,
     history_view::HistoryState,
@@ -479,11 +480,27 @@ pub enum AuxiliaryView {
     History,
     Remotes,
     Tags,
+    Clone,
     Stashes,
     Rebase,
     Worktrees,
     Settings,
     Gitignore,
+}
+
+/// Actions available when the repository is in a special state
+/// (merging, rebasing, cherry-pick, revert).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateAction {
+    ContinueRebase,
+    SkipCommit,
+    AbortRebase,
+    QuitMerge,
+    ResolveConflicts,
+    ContinueCherryPick,
+    AbortCherryPick,
+    ContinueRevert,
+    AbortRevert,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -706,6 +723,7 @@ pub struct AppState {
     pub remote_dialog: RemoteDialogState,
     pub tag_dialog: TagDialogState,
     pub gitignore_view: GitignoreState,
+    pub clone_dialog: CloneDialogState,
     pub stash_panel: StashPanelState,
     pub rebase_editor: RebaseEditorState,
     pub toolbar_remote_menu: Option<ToolbarRemoteMenuState>,
@@ -758,6 +776,8 @@ pub struct AppState {
     pub hud: crate::perf::HudState,
     pub log_filter_text_gen: usize,
     pub console: crate::views::console_output::ConsoleOutputState,
+    /// Path to select after an async git operation completes (stage/unstage)
+    pub pending_select_after_op: Option<String>,
 }
 
 /// In-progress network operation state for progress indicator
@@ -867,6 +887,7 @@ impl AppState {
             remote_dialog: RemoteDialogState::default(),
             tag_dialog: TagDialogState::default(),
             gitignore_view: GitignoreState::default(),
+            clone_dialog: CloneDialogState::default(),
             stash_panel: StashPanelState::default(),
             rebase_editor: RebaseEditorState::default(),
             toolbar_remote_menu: None,
@@ -896,6 +917,7 @@ impl AppState {
             hud: crate::perf::HudState::new(false),
             console: crate::views::console_output::ConsoleOutputState::default(),
             log_filter_text_gen: 0,
+            pending_select_after_op: None,
         };
 
         state.sync_context_feedback(i18n);
@@ -960,6 +982,45 @@ impl AppState {
                 enabled: has_repo && self.has_conflicts(),
             },
         ]
+    }
+
+    /// Returns the list of available actions when the repository is in a special state
+    /// (merging, rebasing, cherry-pick, revert).
+    pub fn get_state_actions(&self) -> Vec<StateAction> {
+        use git_core::repository::RepositoryState;
+
+        let Some(repo) = &self.current_repository else {
+            return Vec::new();
+        };
+
+        match repo.get_state() {
+            RepositoryState::Merging => {
+                vec![
+                    StateAction::QuitMerge,
+                    StateAction::ResolveConflicts,
+                ]
+            }
+            RepositoryState::Rebasing => {
+                vec![
+                    StateAction::ContinueRebase,
+                    StateAction::SkipCommit,
+                    StateAction::AbortRebase,
+                ]
+            }
+            RepositoryState::CherryPick => {
+                vec![
+                    StateAction::ContinueCherryPick,
+                    StateAction::AbortCherryPick,
+                ]
+            }
+            RepositoryState::Revert => {
+                vec![
+                    StateAction::ContinueRevert,
+                    StateAction::AbortRevert,
+                ]
+            }
+            _ => Vec::new(),
+        }
     }
 
     pub fn workspace_change_count(&self) -> usize {
@@ -1736,6 +1797,93 @@ impl AppState {
         self.conflicts_present
     }
 
+    /// Apply pre-fetched refresh data to the UI state.
+    /// Called on the UI thread after blocking I/O completes on a background thread.
+    pub fn apply_refresh_result(&mut self, result: crate::RefreshResult, i18n: &I18n) {
+        self.is_loading = false;
+        self.error_message = None;
+
+        // Apply changes (same logic as refresh_changes_inner but with pre-fetched data)
+        let changes = result.changes;
+
+        self.staged_changes = changes
+            .iter()
+            .filter(|c| c.staged && c.status != git_core::index::ChangeStatus::Conflict)
+            .cloned()
+            .collect();
+
+        self.unstaged_changes = changes
+            .iter()
+            .filter(|c| {
+                c.unstaged
+                    && c.status != git_core::index::ChangeStatus::Untracked
+                    && c.status != git_core::index::ChangeStatus::Conflict
+            })
+            .cloned()
+            .collect();
+
+        self.untracked_files = changes
+            .iter()
+            .filter(|c| c.status == git_core::index::ChangeStatus::Untracked)
+            .cloned()
+            .collect();
+
+        self.conflicts_present = changes
+            .iter()
+            .any(|c| c.status == git_core::index::ChangeStatus::Conflict);
+
+        // Handle selected change path validity
+        if let Some(path) = self.selected_change_path.clone() {
+            if self.diff_source == DiffSource::Workspace {
+                let still_exists = changes.iter().any(|c| c.path == path);
+                if still_exists {
+                    if let Err(error) = self.load_diff_for_file_with_i18n(&path, Some(i18n)) {
+                        self.set_error(error);
+                    }
+                } else {
+                    self.selected_change_path = None;
+                    self.show_diff = false;
+                    self.current_diff = None;
+                    self.diff_source = DiffSource::Workspace;
+                    self.editor_diff = None;
+                    self.split_diff_editor = None;
+                    self.unified_diff_editor = None;
+                    self.selected_hunk_index = None;
+                    self.change_context_menu_path = None;
+                    self.change_context_menu_anchor = None;
+                }
+            }
+        }
+
+        if self.selected_change_path.is_none()
+            && self.auxiliary_view.is_none()
+            && self.view_mode == ViewMode::Repository
+        {
+            if let Some(path) = self.preferred_change_path() {
+                self.selected_change_path = Some(path.clone());
+                if let Err(error) = self.load_diff_for_file_with_i18n(&path, Some(i18n)) {
+                    self.set_error(error);
+                }
+            }
+        }
+
+        self.sync_commit_dialog_state();
+        self.sync_shell_state(Some(i18n));
+
+        // Load conflicts if present
+        if self.has_conflicts() {
+            let _ = self.load_conflicts(i18n);
+        } else {
+            self.conflict_files.clear();
+            self.selected_conflict_index = None;
+            self.conflict_merge_index = None;
+            self.auto_merge_result = None;
+            self.conflict_resolver = None;
+        }
+
+        self.mark_workspace_refreshed(std::time::Instant::now());
+    }
+
     pub fn load_conflicts(&mut self, i18n: &I18n) -> Result<(), String> {
         if let Some(repo) = &self.current_repository {
             let previous_selected_path = self
@@ -1854,7 +2002,7 @@ impl AppState {
         self.conflict_resolver = None;
     }
 
-    fn compute_next_selection(&self, path: &str, source_list: &[Change]) -> Option<String> {
+    pub fn compute_next_selection(&self, path: &str, source_list: &[Change]) -> Option<String> {
         if source_list.len() <= 1 {
             return None;
         }
@@ -2200,7 +2348,8 @@ impl AppState {
                     | AuxiliaryView::Rebase
                     | AuxiliaryView::Worktrees
                     | AuxiliaryView::Settings
-                    | AuxiliaryView::Gitignore => {}
+                    | AuxiliaryView::Gitignore
+                    | AuxiliaryView::Clone => {}
                     AuxiliaryView::Branches => {
                         shell.title = branch_actions_label;
                         shell.subtitle = branch.clone();
@@ -2299,6 +2448,7 @@ impl AppState {
         self.history_commit_diff_popup = None;
         self.remote_dialog = RemoteDialogState::default();
         self.tag_dialog = TagDialogState::default();
+        self.clone_dialog = CloneDialogState::default();
         self.stash_panel = StashPanelState::default();
         self.rebase_editor = RebaseEditorState::default();
         for tab in &mut self.log_tabs {
@@ -2545,6 +2695,8 @@ fn auxiliary_label(view: AuxiliaryView, i18n: Option<&I18n>) -> String {
         (AuxiliaryView::Settings, None) => "Settings".to_string(),
         (AuxiliaryView::Gitignore, Some(i)) => i.aux_gitignore.to_string(),
         (AuxiliaryView::Gitignore, None) => "Gitignore".to_string(),
+        (AuxiliaryView::Clone, Some(i)) => i.clone_title.to_string(),
+        (AuxiliaryView::Clone, None) => "Clone".to_string(),
     }
 }
 

@@ -1,6 +1,7 @@
 //! UI views module and shared render helpers.
 
 pub mod branch_popup;
+pub mod clone_dialog;
 pub mod commit_dialog;
 pub mod console_output;
 pub mod gitignore_view;

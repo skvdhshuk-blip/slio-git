@@ -352,6 +352,17 @@ const HISTORY_ROW_HEIGHT: f32 = 22.0;
 const HISTORY_CONTEXT_MENU_WIDTH: f32 = 280.0;
 const HISTORY_CONTEXT_MENU_ESTIMATED_HEIGHT: f32 = 340.0;
 const HISTORY_CONTEXT_MENU_EDGE_PADDING: f32 = 8.0;
+// Shared column widths so the header row and every commit row align pixel-perfectly.
+const HISTORY_HASH_COL_WIDTH: f32 = 64.0;
+const HISTORY_AUTHOR_COL_WIDTH: f32 = 120.0;
+const HISTORY_TIME_COL_WIDTH: f32 = 80.0;
+// Horizontal inset applied identically to the header container and each row button.
+const HISTORY_ROW_HPAD: u16 = 8;
+// Subject wraps but is capped at ~2 lines and clipped, so a narrow message column
+// (e.g. when several wide ref chips are present) can never balloon the row height.
+const HISTORY_MSG_MAX_HEIGHT: f32 = 34.0;
+// Ref chips are bounded in width so many/long chips can't collapse the subject.
+const HISTORY_CHIPS_MAX_WIDTH: f32 = 240.0;
 const HISTORY_GRAPH_LANE_WIDTH: f32 = 14.0;
 const HISTORY_GRAPH_PADDING: f32 = 8.0;
 const HISTORY_GRAPH_MIN_WIDTH: f32 = 56.0;
@@ -713,62 +724,89 @@ fn build_commit_row<'a>(
 ) -> Element<'a, HistoryMessage> {
     let subject = commit_subject(&entry.message);
 
+    let chips = build_ref_chips(entry, i18n);
+
+    // IDEA-style compact row: graph | hash | chips? | message | author | time.
+    // The first cell is an empty spacer the exact width of the graph column; the
+    // graph canvas is overlaid on top via a Stack (below), so the row height is
+    // driven purely by the wrapping subject text rather than by the canvas — a
+    // Fill-height canvas as a normal Row child would greedily eat the viewport.
+    let content = Row::new()
+        .spacing(theme::spacing::SM)
+        .align_y(Alignment::Center)
+        .push(
+            // Reserve the graph column and enforce a comfortable single-line
+            // minimum height; the row grows taller when the subject wraps.
+            Space::new()
+                .width(Length::Fixed(graph_width))
+                .height(Length::Fixed(HISTORY_ROW_HEIGHT)),
+        )
+        .push(
+            Text::new(short_commit_id(&entry.id))
+                .size(11)
+                .font(Font::MONOSPACE)
+                .width(Length::Fixed(HISTORY_HASH_COL_WIDTH))
+                .wrapping(text::Wrapping::None)
+                .color(theme::darcula::TEXT_DISABLED),
+        )
+        .push_maybe(chips.map(|c| {
+            Container::new(c)
+                .max_width(HISTORY_CHIPS_MAX_WIDTH)
+                .clip(true)
+        }))
+        .push(
+            // Subject wraps (CJK included via WordOrGlyph) but is height-capped and
+            // clipped, so it grows to at most ~2 lines and never balloons even when
+            // the available width is tiny.
+            Container::new(
+                Text::new(subject)
+                    .size(12)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            )
+            .width(Length::Fill)
+            .max_height(HISTORY_MSG_MAX_HEIGHT)
+            .clip(true),
+        )
+        .push(
+            Text::new(&entry.author_name)
+                .size(11)
+                .width(Length::Fixed(HISTORY_AUTHOR_COL_WIDTH))
+                .wrapping(text::Wrapping::None)
+                .color(theme::darcula::TEXT_SECONDARY),
+        )
+        .push(
+            Text::new(format_relative_time(entry.timestamp))
+                .size(11)
+                .width(Length::Fixed(HISTORY_TIME_COL_WIDTH))
+                .align_x(iced::alignment::Horizontal::Right)
+                .wrapping(text::Wrapping::None)
+                .color(theme::darcula::TEXT_DISABLED),
+        );
+
+    // Graph overlay: Fixed width (sits over the reserved spacer at the left) and
+    // Fill height, so it fills the content-driven row height — its node centers
+    // and its connecting lines reach the row's top & bottom edges on every row,
+    // wrapped or not. Stack sizes itself to its first child (`content`).
     let graph = Canvas::new(HistoryGraphCanvas {
         row: graph_row.clone(),
         is_selected,
     })
     .width(Length::Fixed(graph_width))
-    .height(Length::Fixed(HISTORY_ROW_HEIGHT));
+    .height(Length::Fill);
 
-    let chips = build_ref_chips(entry, i18n);
-
-    // IDEA-style compact row: graph | hash | chips? | message | author | date
-    let row = Container::new(
-        Row::new()
-            .spacing(theme::spacing::SM)
-            .align_y(Alignment::Center)
-            .push(graph)
-            .push(
-                Text::new(short_commit_id(&entry.id))
-                    .size(11)
-                    .font(Font::MONOSPACE)
-                    .width(Length::Fixed(60.0))
-                    .wrapping(text::Wrapping::None)
-                    .color(theme::darcula::TEXT_DISABLED),
-            )
-            .push_maybe(chips.map(|c| Container::new(c).width(Length::Shrink)))
-            .push(
-                Text::new(subject)
-                    .size(12)
-                    .width(Length::Fill)
-                    .wrapping(text::Wrapping::None),
-            )
-            .push(
-                Text::new(&entry.author_name)
-                    .size(11)
-                    .width(Length::Fixed(100.0))
-                    .wrapping(text::Wrapping::WordOrGlyph)
-                    .color(theme::darcula::TEXT_SECONDARY),
-            )
-            .push(
-                Text::new(format_relative_time(entry.timestamp))
-                    .size(11)
-                    .width(Length::Fixed(80.0))
-                    .wrapping(text::Wrapping::None)
-                    .color(theme::darcula::TEXT_DISABLED),
-            ),
-    )
-    .padding([2, 6])
-    .style(theme::panel_style(if is_menu_open || is_selected {
-        Surface::Selection
-    } else {
-        Surface::Editor
-    }));
+    let row = Container::new(stack![content, graph])
+        .padding([2, 0])
+        .style(theme::panel_style(if is_menu_open || is_selected {
+            Surface::Selection
+        } else {
+            Surface::Editor
+        }));
 
     mouse_area(
         Container::new(
             Button::new(row)
                 .width(Length::Fill)
+                .padding([0, HISTORY_ROW_HPAD])
                 .style(widgets::menu::trigger_row_button_style(
                     is_selected,
                     is_menu_open,
@@ -842,7 +880,10 @@ fn build_history_list<'a>(state: &'a HistoryState, i18n: &'a I18n) -> Element<'a
                 )
                 .push(
                     Container::new(
+                        // Mirror the body columns 1:1 (same widths + spacing) so each
+                        // header label sits exactly above its data column.
                         Row::new()
+                            .spacing(theme::spacing::SM)
                             .align_y(Alignment::Center)
                             .push(
                                 Text::new(i18n.graph_label)
@@ -851,25 +892,32 @@ fn build_history_list<'a>(state: &'a HistoryState, i18n: &'a I18n) -> Element<'a
                                     .color(theme::darcula::TEXT_DISABLED),
                             )
                             .push(
-                                Text::new(i18n.commit)
+                                Text::new(i18n.hist_col_hash)
                                     .size(10)
-                                    .width(Length::FillPortion(5))
+                                    .width(Length::Fixed(HISTORY_HASH_COL_WIDTH))
                                     .color(theme::darcula::TEXT_DISABLED),
                             )
                             .push(
-                                Text::new(i18n.author_hash)
+                                Text::new(i18n.commit)
                                     .size(10)
-                                    .width(Length::FillPortion(3))
+                                    .width(Length::Fill)
+                                    .color(theme::darcula::TEXT_DISABLED),
+                            )
+                            .push(
+                                Text::new(i18n.hist_col_author)
+                                    .size(10)
+                                    .width(Length::Fixed(HISTORY_AUTHOR_COL_WIDTH))
                                     .color(theme::darcula::TEXT_DISABLED),
                             )
                             .push(
                                 Text::new(i18n.time_label)
                                     .size(10)
-                                    .width(Length::FillPortion(2))
+                                    .width(Length::Fixed(HISTORY_TIME_COL_WIDTH))
+                                    .align_x(iced::alignment::Horizontal::Right)
                                     .color(theme::darcula::TEXT_DISABLED),
                             ),
                     )
-                    .padding([6, 8])
+                    .padding([6, HISTORY_ROW_HPAD])
                     .style(theme::panel_style(Surface::ToolbarField)),
                 )
                 .push(scrollable::styled(list).height(Length::Fill)),

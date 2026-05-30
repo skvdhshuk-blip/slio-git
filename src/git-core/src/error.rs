@@ -40,6 +40,9 @@ pub enum GitError {
     #[error("Authentication failed for remote: {remote}")]
     AuthenticationFailed { remote: String },
 
+    #[error("Clone failed for '{url}': {details}")]
+    CloneFailed { url: String, details: String },
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -57,7 +60,9 @@ impl GitError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            GitError::AuthenticationFailed { .. } | GitError::RemoteFailed { .. }
+            GitError::AuthenticationFailed { .. }
+                | GitError::RemoteFailed { .. }
+                | GitError::CloneFailed { .. }
         )
     }
 }

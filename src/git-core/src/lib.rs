@@ -38,6 +38,7 @@ mod tests {
 
 pub mod blame;
 pub mod branch;
+pub mod clone;
 pub mod commit;
 pub mod commit_actions;
 pub mod diff;
@@ -93,8 +94,9 @@ pub use history::{
     get_history_for_path, get_history_for_ref, search_history,
 };
 pub use index::{
-    Change, ChangeStatus, Hunk, HunkLine, Index, IndexEntry, discard_file, get_file_hunks,
-    get_status, stage_file, stage_hunk, unstage_file, unstage_hunk,
+    Change, ChangeStatus, Hunk, HunkLine, Index, IndexEntry, LineSide, discard_file,
+    get_file_hunks, get_index_hunks, get_status, stage_file, stage_hunk, stage_lines, unstage_file,
+    unstage_hunk, unstage_lines,
 };
 pub use process::{background_command, configure_background_command, git_command};
 pub use rebase::{
@@ -117,6 +119,7 @@ pub use tag::{
 
 // New modules for IDEA git parity
 pub use blame::{BlameEntry, BlameInfo, blame_file, blame_file_hunks};
+pub use clone::{CloneOptions, CloneProgress, clone, validate_clone_url};
 pub use graph::{
     EdgeType, GraphEdge, GraphNode, RefLabel, RefType, compute_graph, compute_ref_labels,
 };

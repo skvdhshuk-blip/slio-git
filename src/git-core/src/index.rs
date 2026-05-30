@@ -366,6 +366,15 @@ pub struct HunkLine {
     pub content: String,
 }
 
+/// Which side of the diff a line selection refers to
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineSide {
+    /// Old (deletion) side — lines prefixed with `-`
+    Old,
+    /// New (addition) side — lines prefixed with `+`
+    New,
+}
+
 /// Get hunks for a specific file (between workdir and index)
 pub fn get_file_hunks(repo: &Repository, file_path: &Path) -> Result<Vec<Hunk>, GitError> {
     let repo_lock = repo.inner.read().unwrap();
@@ -380,43 +389,56 @@ pub fn get_file_hunks(repo: &Repository, file_path: &Path) -> Result<Vec<Hunk>, 
             details: e.to_string(),
         })?;
 
-    let mut hunks = Vec::new();
+    collect_diff_hunks(&diff)
+}
 
-    diff.print(git2::DiffFormat::Patch, |_delta, hunk, line| {
-        if let Some(hunk) = hunk {
-            let header = String::from_utf8_lossy(hunk.header()).to_string();
-            let (old_start, old_lines, new_start, new_lines) = parse_hunk_header(&header);
+/// Collect hunks from a git2 Diff, correctly aggregating lines per hunk.
+///
+/// In git2's `diff.print` callback, `hunk` is `Some` for *every* line that
+/// belongs to a hunk (not just the first line).  We detect hunk boundaries by
+/// comparing the hunk header.  Lines with origin `'H'` are the hunk-header
+/// pseudo-lines that git2 emits and are skipped (the header text is taken from
+/// `hunk.header()` instead).
+fn collect_diff_hunks(diff: &git2::Diff) -> Result<Vec<Hunk>, GitError> {
+    let mut hunks: Vec<Hunk> = Vec::new();
 
-            let mut hunk_lines = Vec::new();
+    diff.print(git2::DiffFormat::Patch, |_delta, hunk_opt, line| {
+        let origin = line.origin();
 
-            // Read the hunk lines
-            let content = String::from_utf8_lossy(line.content()).to_string();
-            let origin = line.origin();
-            hunk_lines.push(HunkLine {
-                origin,
-                content: content.clone(),
-            });
+        // Skip the hunk-header pseudo-line that git2 emits.
+        if origin == 'H' {
+            return true;
+        }
 
-            hunks.push(Hunk {
-                old_start,
-                old_lines,
-                new_start,
-                new_lines,
-                header,
-                lines: hunk_lines,
-            });
-        } else {
-            // Add line to the last hunk
-            if let Some(last_hunk) = hunks.last_mut() {
-                let content = String::from_utf8_lossy(line.content()).to_string();
-                let origin = line.origin();
-                last_hunk.lines.push(HunkLine { origin, content });
+        if let Some(hunk_info) = hunk_opt {
+            let header = String::from_utf8_lossy(hunk_info.header()).to_string();
+            let needs_new = match hunks.last() {
+                Some(last) => last.header != header,
+                None => true,
+            };
+            if needs_new {
+                let (old_start, old_lines, new_start, new_lines) = parse_hunk_header(&header);
+                hunks.push(Hunk {
+                    old_start,
+                    old_lines,
+                    new_start,
+                    new_lines,
+                    header,
+                    lines: Vec::new(),
+                });
             }
         }
+
+        // Append the line to the current (last) hunk.
+        if let Some(last_hunk) = hunks.last_mut() {
+            let content = String::from_utf8_lossy(line.content()).to_string();
+            last_hunk.lines.push(HunkLine { origin, content });
+        }
+
         true
     })
     .map_err(|e| GitError::OperationFailed {
-        operation: "get_file_hunks".to_string(),
+        operation: "collect_diff_hunks".to_string(),
         details: e.to_string(),
     })?;
 
@@ -584,97 +606,37 @@ pub fn unstage_hunk(
 }
 
 /// Get hunks between index and HEAD for a specific file
-fn get_index_hunks(repo: &Repository, file_path: &Path) -> Result<Vec<Hunk>, GitError> {
-    let mut hunks = Vec::new();
+pub fn get_index_hunks(repo: &Repository, file_path: &Path) -> Result<Vec<Hunk>, GitError> {
+    let repo_lock = repo.inner.read().unwrap();
 
-    {
-        let repo_lock = repo.inner.read().unwrap();
+    let head = repo_lock.head().map_err(|e| GitError::OperationFailed {
+        operation: "get_index_hunks".to_string(),
+        details: e.to_string(),
+    })?;
 
-        let head = repo_lock.head().map_err(|e| GitError::OperationFailed {
-            operation: "get_index_hunks".to_string(),
-            details: e.to_string(),
-        })?;
-
-        let commit = head
-            .peel_to_commit()
-            .map_err(|e| GitError::OperationFailed {
-                operation: "get_index_hunks".to_string(),
-                details: e.to_string(),
-            })?;
-
-        let head_tree = commit.tree().map_err(|e| GitError::OperationFailed {
-            operation: "get_index_hunks".to_string(),
-            details: e.to_string(),
-        })?;
-
-        let mut diff_opts = DiffOptions::new();
-        diff_opts.pathspec(file_path);
-
-        let diff = repo_lock
-            .diff_tree_to_index(Some(&head_tree), None, Some(&mut diff_opts))
-            .map_err(|e| GitError::OperationFailed {
-                operation: "get_index_hunks".to_string(),
-                details: e.to_string(),
-            })?;
-
-        // Process diff within the lock scope
-        let mut current_hunk: Option<(String, u32, u32, u32, u32, Vec<HunkLine>)> = None;
-
-        diff.print(git2::DiffFormat::Patch, |_delta, hunk, line| {
-            if let Some(hunk) = hunk {
-                // Save previous hunk if exists
-                if let Some((header, old_start, old_lines, new_start, new_lines, lines)) =
-                    current_hunk.take()
-                {
-                    hunks.push(Hunk {
-                        header,
-                        old_start,
-                        old_lines,
-                        new_start,
-                        new_lines,
-                        lines,
-                    });
-                }
-
-                let header = String::from_utf8_lossy(hunk.header()).to_string();
-                let (old_start, old_lines, new_start, new_lines) = parse_hunk_header(&header);
-
-                let content = String::from_utf8_lossy(line.content()).to_string();
-                let origin = line.origin();
-                let hunk_lines = vec![HunkLine { origin, content }];
-
-                current_hunk = Some((
-                    header, old_start, old_lines, new_start, new_lines, hunk_lines,
-                ));
-            } else if let Some((header, old_start, old_lines, new_start, new_lines, mut lines)) =
-                current_hunk.take()
-            {
-                let content = String::from_utf8_lossy(line.content()).to_string();
-                let origin = line.origin();
-                lines.push(HunkLine { origin, content });
-                current_hunk = Some((header, old_start, old_lines, new_start, new_lines, lines));
-            }
-            true
-        })
+    let commit = head
+        .peel_to_commit()
         .map_err(|e| GitError::OperationFailed {
             operation: "get_index_hunks".to_string(),
             details: e.to_string(),
         })?;
 
-        // Save last hunk
-        if let Some((header, old_start, old_lines, new_start, new_lines, lines)) = current_hunk {
-            hunks.push(Hunk {
-                header,
-                old_start,
-                old_lines,
-                new_start,
-                new_lines,
-                lines,
-            });
-        }
-    }
+    let head_tree = commit.tree().map_err(|e| GitError::OperationFailed {
+        operation: "get_index_hunks".to_string(),
+        details: e.to_string(),
+    })?;
 
-    Ok(hunks)
+    let mut diff_opts = DiffOptions::new();
+    diff_opts.pathspec(file_path);
+
+    let diff = repo_lock
+        .diff_tree_to_index(Some(&head_tree), None, Some(&mut diff_opts))
+        .map_err(|e| GitError::OperationFailed {
+            operation: "get_index_hunks".to_string(),
+            details: e.to_string(),
+        })?;
+
+    collect_diff_hunks(&diff)
 }
 
 /// Generate a reverse patch for unstaking (addition becomes deletion)
@@ -802,6 +764,251 @@ fn re_stage_other_hunks(
     Ok(())
 }
 
+/// Build the actual unified-diff patch body (shared by stage and unstage
+/// generators).  `out_lines` is a list of `(origin_char, content)` pairs
+/// already filtered/counted by the caller.
+fn build_patch_string(
+    file_path: &Path,
+    hunk: &Hunk,
+    out_lines: &[(char, &str)],
+    old_count: u32,
+    new_count: u32,
+) -> String {
+    let path_str = file_path.to_string_lossy();
+    let mut patch = String::new();
+    patch.push_str(&format!("diff --git a/{path} b/{path}\n", path = path_str));
+    patch.push_str(&format!("--- a/{path}\n", path = path_str));
+    patch.push_str(&format!("+++ b/{path}\n", path = path_str));
+    patch.push_str(&format!(
+        "@@ -{},{} +{},{} @@\n",
+        hunk.old_start, old_count, hunk.new_start, new_count,
+    ));
+
+    for (origin, content) in out_lines {
+        patch.push(*origin);
+        patch.push_str(content);
+        if !content.ends_with('\n') {
+            patch.push('\n');
+        }
+    }
+
+    patch
+}
+
+/// Generate a unified-diff patch for **staging** selected lines from a
+/// workdir-vs-index hunk.
+///
+/// The index currently holds the *old* content.  Selected change lines are
+/// emitted as-is; opposite-side change lines are demoted to context (they
+/// still exist in the index); non-selected same-side change lines are
+/// dropped entirely (they do not exist in the index).
+fn generate_line_patch(
+    file_path: &Path,
+    hunk: &Hunk,
+    selected: &[usize],
+    side: LineSide,
+) -> Result<String, GitError> {
+    let selected_set: std::collections::HashSet<usize> = selected.iter().copied().collect();
+
+    let mut out_lines: Vec<(char, &str)> = Vec::with_capacity(hunk.lines.len());
+    let mut old_count: u32 = 0;
+    let mut new_count: u32 = 0;
+
+    for (idx, line) in hunk.lines.iter().enumerate() {
+        let emit: Option<char> = match line.origin {
+            ' ' => {
+                old_count += 1;
+                new_count += 1;
+                Some(' ')
+            }
+            '+' => {
+                if side == LineSide::New && selected_set.contains(&idx) {
+                    new_count += 1;
+                    Some('+')
+                } else if side == LineSide::New {
+                    // Non-selected addition — drop (not in index).
+                    None
+                } else {
+                    // Opposite side (addition when staging deletions) — drop.
+                    None
+                }
+            }
+            '-' => {
+                if side == LineSide::Old && selected_set.contains(&idx) {
+                    old_count += 1;
+                    Some('-')
+                } else if side == LineSide::Old {
+                    // Non-selected deletion — demote to context (still in index).
+                    old_count += 1;
+                    new_count += 1;
+                    Some(' ')
+                } else {
+                    // Opposite side (deletion when staging additions) — demote to context
+                    // because the line still exists in the index.
+                    old_count += 1;
+                    new_count += 1;
+                    Some(' ')
+                }
+            }
+            other => {
+                old_count += 1;
+                new_count += 1;
+                Some(other)
+            }
+        };
+        if let Some(origin) = emit {
+            out_lines.push((origin, &line.content));
+        }
+    }
+
+    if old_count == new_count && out_lines.iter().all(|(c, _)| *c == ' ') {
+        return Err(GitError::OperationFailed {
+            operation: "generate_line_patch".to_string(),
+            details: "Selected lines produce an empty diff".to_string(),
+        });
+    }
+
+    Ok(build_patch_string(file_path, hunk, &out_lines, old_count, new_count))
+}
+
+/// Generate a unified-diff patch for **unstaging** selected lines from an
+/// index-vs-HEAD hunk.
+///
+/// The index currently holds the *new* (staged) content.  Selected change
+/// lines become deletions (`-`); non-selected same-side change lines are
+/// demoted to context (they stay in the index); opposite-side change lines
+/// are dropped (they are not in the index).
+fn generate_line_unstage_patch(
+    file_path: &Path,
+    hunk: &Hunk,
+    selected: &[usize],
+    side: LineSide,
+) -> Result<String, GitError> {
+    let selected_set: std::collections::HashSet<usize> = selected.iter().copied().collect();
+
+    let mut out_lines: Vec<(char, &str)> = Vec::with_capacity(hunk.lines.len());
+    let mut old_count: u32 = 0;
+    let mut new_count: u32 = 0;
+
+    for (idx, line) in hunk.lines.iter().enumerate() {
+        let emit: Option<char> = match line.origin {
+            ' ' => {
+                old_count += 1;
+                new_count += 1;
+                Some(' ')
+            }
+            '+' => {
+                if side == LineSide::New && selected_set.contains(&idx) {
+                    // Selected staged addition — turn into deletion (remove from index).
+                    old_count += 1;
+                    Some('-')
+                } else if side == LineSide::New {
+                    // Non-selected staged addition — demote to context (stays in index).
+                    old_count += 1;
+                    new_count += 1;
+                    Some(' ')
+                } else {
+                    // Opposite side (addition when unstaging deletions) — drop
+                    // (these lines are not in the index).
+                    None
+                }
+            }
+            '-' => {
+                if side == LineSide::Old && selected_set.contains(&idx) {
+                    // Selected staged deletion — turn into addition (restore to index).
+                    new_count += 1;
+                    Some('+')
+                } else if side == LineSide::Old {
+                    // Non-selected staged deletion — drop (not in index, stays deleted).
+                    None
+                } else {
+                    // Opposite side (deletion when unstaging additions) — drop.
+                    None
+                }
+            }
+            other => {
+                old_count += 1;
+                new_count += 1;
+                Some(other)
+            }
+        };
+        if let Some(origin) = emit {
+            out_lines.push((origin, &line.content));
+        }
+    }
+
+    if old_count == new_count && out_lines.iter().all(|(c, _)| *c == ' ') {
+        return Err(GitError::OperationFailed {
+            operation: "generate_line_unstage_patch".to_string(),
+            details: "Selected lines produce an empty diff".to_string(),
+        });
+    }
+
+    Ok(build_patch_string(file_path, hunk, &out_lines, old_count, new_count))
+}
+
+/// Stage specific lines within a hunk of a file.
+///
+/// `line_indices` are indices into the hunk's `lines` vector.  Only lines
+/// whose `origin` matches `side` ('+' for `New`, '-' for `Old`) are acted
+/// upon; all other change lines in the hunk are demoted to context so that
+/// the resulting patch is a valid unified diff.
+pub fn stage_lines(
+    repo: &Repository,
+    file_path: &Path,
+    hunk_index: usize,
+    line_indices: &[usize],
+    side: LineSide,
+) -> Result<(), GitError> {
+    info!(
+        "Staging lines {:?} (side {:?}) from hunk {} of {:?}",
+        line_indices, side, hunk_index, file_path
+    );
+
+    let hunks = get_file_hunks(repo, file_path)?;
+    let hunk = hunks
+        .get(hunk_index)
+        .ok_or_else(|| GitError::OperationFailed {
+            operation: "stage_lines".to_string(),
+            details: format!("Hunk {} not found", hunk_index),
+        })?;
+
+    let patch = generate_line_patch(file_path, hunk, line_indices, side)?;
+    apply_patch_cached(repo, &patch)?;
+
+    Ok(())
+}
+
+/// Unstage specific lines within a staged hunk of a file.
+///
+/// Works the same as [`stage_lines`] but operates on the index-to-HEAD diff
+/// and applies a reverse patch (`git apply --cached --reverse`).
+pub fn unstage_lines(
+    repo: &Repository,
+    file_path: &Path,
+    hunk_index: usize,
+    line_indices: &[usize],
+    side: LineSide,
+) -> Result<(), GitError> {
+    info!(
+        "Unstaging lines {:?} (side {:?}) from hunk {} of {:?}",
+        line_indices, side, hunk_index, file_path
+    );
+
+    let hunks = get_index_hunks(repo, file_path)?;
+    let hunk = hunks
+        .get(hunk_index)
+        .ok_or_else(|| GitError::OperationFailed {
+            operation: "unstage_lines".to_string(),
+            details: format!("Hunk {} not found in index-to-HEAD diff", hunk_index),
+        })?;
+
+    let patch = generate_line_unstage_patch(file_path, hunk, line_indices, side)?;
+    apply_patch_cached(repo, &patch)?;
+
+    Ok(())
+}
+
 /// Discard changes for a file: reset both index and worktree to HEAD.
 /// For untracked files, removes the file from the working directory.
 pub fn discard_file(repo: &Repository, file_path: &Path) -> Result<(), GitError> {
@@ -857,4 +1064,15 @@ pub fn discard_file(repo: &Repository, file_path: &Path) -> Result<(), GitError>
     }
 
     Ok(())
+}
+
+/// Test-only wrapper that exposes `generate_line_patch` publicly.
+#[doc(hidden)]
+pub fn generate_line_patch_for_test(
+    file_path: &Path,
+    hunk: &Hunk,
+    selected: &[usize],
+    side: LineSide,
+) -> String {
+    generate_line_patch(file_path, hunk, selected, side).unwrap()
 }

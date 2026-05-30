@@ -61,7 +61,7 @@ impl GitThreadPool {
         }
     }
 
-    /// Execute a git operation in the background
+    /// Execute a git operation in the background, returning a receiver for the result.
     pub fn execute<F, T>(&self, task: F) -> Receiver<T>
     where
         F: FnOnce() -> T + Send + 'static,
@@ -69,17 +69,13 @@ impl GitThreadPool {
     {
         let (result_tx, result_rx) = channel::<T>();
 
-        let boxed_task = Box::new(move || {
+        let boxed_task: Box<dyn FnOnce() + Send> = Box::new(move || {
             let result = task();
             let _ = result_tx.send(result);
         });
 
-        // We use a simple wrapper since we can't easily send the result through the same channel
-        // This is a simplified implementation
         self.sender
-            .send(GitTask::Run(Box::new(|| {
-                // This is a placeholder - in real implementation we'd use a more sophisticated approach
-            })))
+            .send(GitTask::Run(boxed_task))
             .expect("Failed to send task to thread pool");
 
         result_rx

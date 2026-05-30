@@ -68,7 +68,7 @@ fn resolve_auth_username(
         })
 }
 
-fn build_remote_callbacks(
+pub(crate) fn build_remote_callbacks(
     config: Config,
     credentials: Option<(&str, &str)>,
 ) -> RemoteCallbacks<'static> {

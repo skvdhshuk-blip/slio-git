@@ -74,12 +74,13 @@ pub fn view<'a, Message>(
     i18n: &'a I18n,
     on_open: impl Fn(std::path::PathBuf) -> Message + 'a,
     on_open_folder: Message,
+    on_clone: Message,
 ) -> Element<'a, Message>
 where
     Message: Clone + 'a,
 {
     let left = build_recent_panel(recent, selected_idx, i18n, on_open);
-    let right = build_actions_panel(i18n, on_open_folder);
+    let right = build_actions_panel(i18n, on_open_folder, on_clone);
 
     let content = Row::new()
         .spacing(0)
@@ -273,18 +274,13 @@ fn version_display() -> &'static str {
     VERSION_STR.get_or_init(|| format!("v{}", env!("CARGO_PKG_VERSION")))
 }
 
-fn build_actions_panel<'a, Message>(i18n: &'a I18n, on_open_folder: Message) -> Element<'a, Message>
+fn build_actions_panel<'a, Message>(i18n: &'a I18n, on_open_folder: Message, on_clone: Message) -> Element<'a, Message>
 where
     Message: Clone + 'a,
 {
     let open_btn = button::primary(i18n.welcome_open_folder_btn, Some(on_open_folder));
 
-    // Clone disabled placeholder — AC-12
-    let clone_btn = button::secondary(i18n.welcome_clone_btn, None::<Message>);
-
-    let clone_hint = Text::new(i18n.welcome_clone_tooltip)
-        .size(11)
-        .color(theme::darcula::TEXT_DISABLED);
+    let clone_btn = button::secondary(i18n.welcome_clone_btn, Some(on_clone));
 
     let version_label = Text::new(version_display())
         .size(11)
@@ -293,8 +289,7 @@ where
     let actions = Column::new()
         .spacing(theme::spacing::SM)
         .push(open_btn)
-        .push(clone_btn)
-        .push(clone_hint);
+        .push(clone_btn);
 
     let right_content = Column::new()
         .spacing(theme::spacing::LG)

@@ -35,6 +35,11 @@ Thumbs.db
 
 # Screenshots
 e2e/screenshots/
+# Stray screenshots dropped at repo root (e.g. WeChat captures)
+/*.png
+
+# Clone test artifacts
+/.clone/
 
 # Tool config
 .obsidian/

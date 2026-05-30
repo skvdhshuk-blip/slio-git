@@ -3,14 +3,14 @@
 use crate::components::rail_icons::{self, RailIcon};
 use crate::i18n::I18n;
 use crate::state::{
-    AppState, AuxiliaryView, FeedbackLevel, GitToolWindowTab, ShellSection, StatusSeverity,
-    ToolbarRemoteAction, ToolbarRemoteMenuState,
+    AppState, AuxiliaryView, FeedbackLevel, GitToolWindowTab, ShellSection, StateAction,
+    StatusSeverity, ToolbarRemoteAction, ToolbarRemoteMenuState,
 };
 use crate::theme::{self, BadgeTone, ButtonTone, Surface};
 use crate::views;
 use crate::widgets::{self, OptionalPush, button, scrollable};
 use git_core::remote::RemoteInfo;
-use iced::widget::{Button, Column, Container, Row, Space, Text, rule, stack, text};
+use iced::widget::{Button, Column, Container, Row, Space, Text, container, rule, stack, text};
 use iced::{Alignment, Element, Length};
 use std::path::PathBuf;
 
@@ -62,6 +62,8 @@ pub struct MainWindow<'a, Message> {
     pub on_dismiss_toast: Message,
     pub on_show_settings: Message,
     pub on_show_gitignore: Message,
+    pub on_clone: Message,
+    pub on_state_action: Box<dyn Fn(StateAction) -> Message + 'a>,
 }
 
 impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
@@ -95,6 +97,8 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
         on_dismiss_toast: Message,
         on_show_settings: Message,
         on_show_gitignore: Message,
+        on_clone: Message,
+        on_state_action: impl Fn(StateAction) -> Message + 'a,
     ) -> Self {
         Self {
             i18n,
@@ -125,6 +129,8 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             on_dismiss_toast,
             on_show_settings,
             on_show_gitignore,
+            on_clone,
+            on_state_action: Box::new(on_state_action),
         }
     }
 
@@ -158,6 +164,8 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             on_dismiss_toast,
             on_show_settings,
             on_show_gitignore,
+            on_clone,
+            on_state_action,
         } = self;
 
         let banner = state
@@ -185,11 +193,15 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
                         .height(Length::Fill),
                 );
 
+            // State-aware banner (merge/rebase/cherry-pick/revert in progress)
+            let state_banner = Self::build_state_banner(i18n, state, on_state_action.as_ref());
+
             let workspace_column = Column::new()
                 .spacing(0)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .push_maybe(banner)
+                .push_maybe(state_banner)
                 .push(
                     Container::new(workspace_body)
                         .padding([0, 0])
@@ -238,6 +250,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
                     &on_open_repo,
                     &on_show_settings,
                     &on_show_gitignore,
+                    &on_clone,
                 ))
                 .push(rule::horizontal(1).style(theme::separator_rule_style()))
                 .push(workspace)
@@ -287,6 +300,102 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             )
     }
 
+    /// Build a state-aware banner when the repository is in a special state
+    /// (merging, rebasing, cherry-pick, revert).
+    /// Shows the state description and action buttons for available operations.
+    fn build_state_banner(
+        i18n: &I18n,
+        state: &AppState,
+        on_state_action: &dyn Fn(StateAction) -> Message,
+    ) -> Option<Element<'a, Message>> {
+        use git_core::repository::RepositoryState;
+
+        let repo = state.current_repository.as_ref()?;
+        let repo_state = repo.get_state();
+
+        let (label, tone) = match repo_state {
+            RepositoryState::Merging => (i18n.state_merging, BadgeTone::Warning),
+            RepositoryState::Rebasing => (i18n.state_rebasing, BadgeTone::Warning),
+            RepositoryState::CherryPick => (i18n.state_cherry_pick, BadgeTone::Warning),
+            RepositoryState::Revert => (i18n.state_revert, BadgeTone::Warning),
+            _ => return None,
+        };
+
+        let state_text = text(label).size(13);
+
+        // Build action buttons based on the current repository state
+        let actions = state.get_state_actions();
+        let action_buttons = actions.iter().fold(
+            Row::new().spacing(8).align_y(iced::Alignment::Center),
+            |row, action| {
+                let action_label = Self::state_action_label(i18n, *action);
+                let is_primary = Self::is_primary_state_action(*action);
+                let button = if is_primary {
+                    button::secondary(action_label, Some(on_state_action(*action)))
+                } else {
+                    button::compact_ghost(action_label, Some(on_state_action(*action)))
+                };
+                row.push(button)
+            },
+        );
+
+        let banner = Container::new(
+            Row::new()
+                .spacing(12)
+                .align_y(iced::Alignment::Center)
+                .push(state_text)
+                .push(Space::new().width(Length::Fill))
+                .push(action_buttons),
+        )
+        .width(Length::Fill)
+        .padding([8, 12])
+        .style(move |_theme| {
+            container::Style {
+                background: Some(iced::Background::Color(match tone {
+                    BadgeTone::Warning => iced::Color::from_rgba(0.9, 0.7, 0.2, 0.15),
+                    BadgeTone::Danger => iced::Color::from_rgba(0.9, 0.3, 0.3, 0.15),
+                    _ => iced::Color::from_rgba(0.3, 0.6, 0.9, 0.15),
+                })),
+                border: iced::Border {
+                    color: match tone {
+                        BadgeTone::Warning => iced::Color::from_rgba(0.9, 0.7, 0.2, 0.4),
+                        BadgeTone::Danger => iced::Color::from_rgba(0.9, 0.3, 0.3, 0.4),
+                        _ => iced::Color::from_rgba(0.3, 0.6, 0.9, 0.4),
+                    },
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            }
+        });
+
+        Some(banner.into())
+    }
+
+    fn state_action_label(i18n: &I18n, action: StateAction) -> &'a str {
+        match action {
+            StateAction::ContinueRebase | StateAction::ContinueCherryPick | StateAction::ContinueRevert => {
+                i18n.state_continue
+            }
+            StateAction::AbortRebase | StateAction::AbortCherryPick | StateAction::AbortRevert => {
+                i18n.state_abort
+            }
+            StateAction::SkipCommit => i18n.state_skip,
+            StateAction::QuitMerge => i18n.state_abort,
+            StateAction::ResolveConflicts => i18n.state_resolve_conflicts,
+        }
+    }
+
+    fn is_primary_state_action(action: StateAction) -> bool {
+        matches!(
+            action,
+            StateAction::ContinueRebase
+                | StateAction::ContinueCherryPick
+                | StateAction::ContinueRevert
+                | StateAction::QuitMerge
+        )
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "Top chrome wiring passes UI actions and callbacks explicitly"
@@ -305,6 +414,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
         on_open_repo: &Message,
         on_show_settings: &Message,
         on_show_gitignore: &Message,
+        on_clone: &Message,
     ) -> Element<'a, Message> {
         let context = &state.shell.context_switcher;
         let badges = Self::pick_branch_badges(
@@ -385,6 +495,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
                     .as_ref()
                     .is_some_and(|menu| menu.action == ToolbarRemoteAction::Push),
             ))
+            .push(button::ghost(i18n.clone_repo_btn, Some(on_clone.clone())))
             .push(button::primary(
                 i18n.commit,
                 state
@@ -976,6 +1087,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             AuxiliaryView::Worktrees => RailIcon::Repository,
             AuxiliaryView::Settings => RailIcon::Repository,
             AuxiliaryView::Gitignore => RailIcon::Settings,
+            AuxiliaryView::Clone => RailIcon::Repository,
         }
     }
 
