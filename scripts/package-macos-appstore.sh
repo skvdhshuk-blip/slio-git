@@ -58,6 +58,12 @@ fi
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 chmod 755 "$MACOS_DIR/$APP_NAME"
 
+if nm -u "$MACOS_DIR/$APP_NAME" 2>/dev/null | grep -q 'CGSSetWindowBackgroundBlurRadius' \
+  || strings "$MACOS_DIR/$APP_NAME" | grep -q 'CGSSetWindowBackgroundBlurRadius'; then
+  echo "Refusing to package: private CGSSetWindowBackgroundBlurRadius is still in the binary" >&2
+  exit 1
+fi
+
 ICON_SRC="$ROOT_DIR/src-ui/assets/AppIcon.icns"
 if [[ -f "$ICON_SRC" ]]; then
   cp "$ICON_SRC" "$RESOURCES_DIR/AppIcon.icns"
