@@ -1,7 +1,6 @@
 //! Repository management for git-core
 
 use crate::error::GitError;
-use crate::process::git_command;
 use crate::signature::SignatureCache;
 use chrono::{Local, LocalResult, TimeZone};
 use git2::Repository as Git2Repository;
@@ -234,26 +233,17 @@ impl Repository {
     /// Resolve the full upstream ref of the current branch, if configured.
     pub fn current_upstream_ref(&self) -> Option<String> {
         let branch_name = self.current_branch().ok().flatten()?;
-        let upstream_ref_spec = format!("{branch_name}@{{upstream}}");
-        let repo_path = self.command_cwd();
-        let output = git_command()
-            .args([
-                "rev-parse",
-                "--abbrev-ref",
-                "--symbolic-full-name",
-                &upstream_ref_spec,
-            ])
-            .current_dir(&repo_path)
-            .output()
+        let repo_lock = self.inner.read().ok()?;
+        let branch = repo_lock
+            .find_branch(&branch_name, git2::BranchType::Local)
             .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let upstream = String::from_utf8_lossy(&output.stdout);
-        let upstream = upstream.trim();
-        (!upstream.is_empty()).then(|| upstream.to_string())
+        let upstream = branch.upstream().ok()?;
+        let name = upstream.name().ok().flatten().map(str::to_string)?;
+        Some(
+            name.strip_prefix("refs/remotes/")
+                .unwrap_or(&name)
+                .to_string(),
+        )
     }
 
     /// Get a compact repository state hint for workspace chrome.
@@ -278,36 +268,32 @@ impl Repository {
             _ => return SyncStatus::NoUpstream,
         };
 
-        let upstream_ref = format!("{}@{{upstream}}", branch_name);
-        let revspec = format!("{branch_name}...{upstream_ref}");
-        let repo_path = self.command_cwd();
-        let output = git_command()
-            .args(["rev-list", "--left-right", "--count", &revspec])
-            .current_dir(&repo_path)
-            .output();
-
-        match output {
-            Ok(output) if output.status.success() => {
-                let output_str = String::from_utf8_lossy(&output.stdout);
-                let parts: Vec<&str> = output_str.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    let ahead: usize = parts[0].parse().unwrap_or(0);
-                    let behind: usize = parts[1].parse().unwrap_or(0);
-
-                    if ahead == 0 && behind == 0 {
-                        SyncStatus::Synced
-                    } else if ahead > 0 && behind == 0 {
-                        SyncStatus::Ahead(ahead)
-                    } else if ahead == 0 && behind > 0 {
-                        SyncStatus::Behind(behind)
-                    } else {
-                        SyncStatus::Diverged { ahead, behind }
-                    }
-                } else {
-                    SyncStatus::NoUpstream
-                }
-            }
-            _ => SyncStatus::NoUpstream,
+        let repo_lock = match self.inner.read() {
+            Ok(lock) => lock,
+            Err(_) => return SyncStatus::Unknown,
+        };
+        let branch = match repo_lock.find_branch(&branch_name, git2::BranchType::Local) {
+            Ok(branch) => branch,
+            Err(_) => return SyncStatus::NoUpstream,
+        };
+        let local_oid = match branch.get().target() {
+            Some(oid) => oid,
+            None => return SyncStatus::Unknown,
+        };
+        let upstream = match branch.upstream() {
+            Ok(upstream) => upstream,
+            Err(_) => return SyncStatus::NoUpstream,
+        };
+        let upstream_oid = match upstream.get().target() {
+            Some(oid) => oid,
+            None => return SyncStatus::Unknown,
+        };
+        match repo_lock.graph_ahead_behind(local_oid, upstream_oid) {
+            Ok((0, 0)) => SyncStatus::Synced,
+            Ok((ahead, 0)) => SyncStatus::Ahead(ahead),
+            Ok((0, behind)) => SyncStatus::Behind(behind),
+            Ok((ahead, behind)) => SyncStatus::Diverged { ahead, behind },
+            Err(_) => SyncStatus::Unknown,
         }
     }
 

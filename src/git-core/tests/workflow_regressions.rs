@@ -513,6 +513,7 @@ fn get_history_for_ref_returns_selected_branch_head_first() {
 }
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn export_commit_patch_writes_patch_file() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("tracked.txt", "base\n", "base commit")
@@ -530,6 +531,7 @@ fn export_commit_patch_writes_patch_file() {
 }
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn cherry_pick_commit_applies_selected_commit_on_current_branch() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("shared.txt", "base\n", "base commit")
@@ -565,6 +567,7 @@ fn cherry_pick_commit_applies_selected_commit_on_current_branch() {
 }
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn in_progress_cherry_pick_can_be_detected_continued_and_aborted() {
     let (repo, feature_commit) = create_cherry_pick_conflict_repository();
     let repository = Repository::open(repo.path()).expect("failed to reopen repository");
@@ -618,6 +621,7 @@ fn in_progress_cherry_pick_can_be_detected_continued_and_aborted() {
 }
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn revert_commit_creates_inverse_commit_and_restores_content() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("shared.txt", "base\n", "base commit")
@@ -643,6 +647,7 @@ fn revert_commit_creates_inverse_commit_and_restores_content() {
 }
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn reset_current_branch_to_commit_rewinds_head_to_selected_ancestor() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("tracked.txt", "base\n", "base commit")
@@ -674,6 +679,7 @@ fn reset_current_branch_to_commit_rewinds_head_to_selected_ancestor() {
 }
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn push_current_branch_to_commit_rewinds_upstream_with_force_with_lease() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("tracked.txt", "base\n", "base commit")
@@ -959,6 +965,7 @@ fn checkout_remote_branch_creates_local_tracking_branch() {
 }
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn rebase_start_rebases_current_branch_onto_target_branch() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("shared.txt", "base\n", "base commit")

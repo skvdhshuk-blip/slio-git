@@ -345,8 +345,11 @@ pub fn create_signature(
 
 /// Get the default signature (user's git config)
 pub fn get_default_signature(repo: &Repository) -> Result<git2::Signature<'static>, GitError> {
-    let repo_lock = repo.inner.read().unwrap();
+    if let Some((name, email)) = crate::auth::configured_identity() {
+        return create_signature(repo, &name, &email);
+    }
 
+    let repo_lock = repo.inner.read().unwrap();
     repo_lock
         .signature()
         .map_err(|e| GitError::OperationFailed {

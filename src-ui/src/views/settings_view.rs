@@ -3,7 +3,7 @@
 use crate::i18n::I18n;
 use crate::theme::{self, Surface};
 use crate::widgets;
-use crate::widgets::{button, scrollable, text_input};
+use crate::widgets::{OptionalPush, button, scrollable, text_input};
 use iced::widget::{Column, Container, Row, Space, Text};
 use iced::{Alignment, Element, Length};
 
@@ -34,6 +34,10 @@ pub enum SettingsMessage {
     ToggleLlmEnabled,
     // Language
     SetLanguage(Option<String>),
+    SetUserName(String),
+    SetUserEmail(String),
+    SetSshKeyPath(String),
+    ImportSshKey,
     // Actions
     Close,
     SaveAndClose,
@@ -101,6 +105,9 @@ pub struct GitSettings {
     pub language: Option<String>,
     /// Max commits loaded in history view (default 100)
     pub history_commit_limit: u32,
+    pub user_name: String,
+    pub user_email: String,
+    pub ssh_key_path: String,
 }
 
 impl Default for GitSettings {
@@ -125,6 +132,9 @@ impl Default for GitSettings {
             llm_model: "deepseek-chat".to_string(),
             language: None,
             history_commit_limit: 100,
+            user_name: String::new(),
+            user_email: String::new(),
+            ssh_key_path: String::new(),
         }
     }
 }
@@ -164,8 +174,25 @@ impl GitSettings {
             SettingsMessage::SetLlmApiKey(val) => self.llm_api_key = val.clone(),
             SettingsMessage::SetLlmModel(val) => self.llm_model = val.clone(),
             SettingsMessage::SetLanguage(val) => self.language = val.clone(),
+            SettingsMessage::SetUserName(val) => self.user_name = val.clone(),
+            SettingsMessage::SetUserEmail(val) => self.user_email = val.clone(),
+            SettingsMessage::SetSshKeyPath(val) => self.ssh_key_path = val.clone(),
+            SettingsMessage::ImportSshKey => {}
             SettingsMessage::Close | SettingsMessage::SaveAndClose => {}
         }
+    }
+
+    pub fn apply_auth(&self) {
+        git_core::set_auth_context(git_core::AuthContext {
+            imported_ssh_key: (!self.ssh_key_path.is_empty()).then(|| {
+                std::path::PathBuf::from(&self.ssh_key_path)
+            }),
+            imported_ssh_pub: (!self.ssh_key_path.is_empty()).then(|| {
+                std::path::PathBuf::from(format!("{}.pub", self.ssh_key_path))
+            }),
+            user_name: (!self.user_name.trim().is_empty()).then(|| self.user_name.clone()),
+            user_email: (!self.user_email.trim().is_empty()).then(|| self.user_email.clone()),
+        });
     }
 }
 
@@ -240,6 +267,9 @@ impl GitSettings {
                         s.history_commit_limit = n.max(1).min(50_000);
                     }
                 }
+                "user_name" => s.user_name = value.to_string(),
+                "user_email" => s.user_email = value.to_string(),
+                "ssh_key_path" => s.ssh_key_path = value.to_string(),
                 _ => {}
             }
         }
@@ -287,7 +317,10 @@ impl GitSettings {
              llm_api_key\t{}\n\
              llm_model\t{}\n\
              language\t{}\n\
-             history_commit_limit\t{}\n",
+             history_commit_limit\t{}\n\
+             user_name\t{}\n\
+             user_email\t{}\n\
+             ssh_key_path\t{}\n",
             self.auto_update_on_push_reject,
             self.pull_autocrlf_true,
             self.protected_branches,
@@ -305,6 +338,9 @@ impl GitSettings {
             self.llm_model,
             self.language.as_deref().unwrap_or("auto"),
             self.history_commit_limit,
+            self.user_name,
+            self.user_email,
+            self.ssh_key_path,
         )
     }
 
@@ -429,6 +465,94 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
                             .color(theme::darcula::TEXT_DISABLED),
                     ),
             ),
+    )
+    .padding([8, 14]);
+
+    let zh = settings.language.as_deref() == Some("zh-CN")
+        || (settings.language.is_none() && i18n.sv_title.contains("设置"));
+    let identity_title = if zh { "提交身份" } else { "Commit identity" };
+    let name_label = if zh { "姓名:" } else { "Name:" };
+    let email_label = if zh { "邮箱:" } else { "Email:" };
+    let ssh_label = if zh { "SSH 私钥:" } else { "SSH private key:" };
+    let ssh_import = if zh { "导入…" } else { "Import…" };
+    let store_note = if git_core::is_app_store_build() {
+        if zh {
+            "App Store 版在沙箱里运行：不读 ~/.ssh 和全局 gitconfig，不跑 hooks，也不检查 GitHub 更新。"
+        } else {
+            "The App Store build is sandboxed: it does not read ~/.ssh or global gitconfig, does not run hooks, and does not check GitHub for updates."
+        }
+    } else {
+        ""
+    };
+
+    let identity_section = Container::new(
+        Column::new()
+            .spacing(4)
+            .push(
+                Text::new(identity_title)
+                    .size(10)
+                    .color(theme::darcula::TEXT_DISABLED),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(name_label)
+                            .size(12)
+                            .color(theme::darcula::TEXT_SECONDARY),
+                    )
+                    .push(
+                        Container::new(text_input::styled(
+                            "Your Name",
+                            &settings.user_name,
+                            SettingsMessage::SetUserName,
+                        ))
+                        .width(Length::Fill),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(email_label)
+                            .size(12)
+                            .color(theme::darcula::TEXT_SECONDARY),
+                    )
+                    .push(
+                        Container::new(text_input::styled(
+                            "you@example.com",
+                            &settings.user_email,
+                            SettingsMessage::SetUserEmail,
+                        ))
+                        .width(Length::Fill),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(ssh_label)
+                            .size(12)
+                            .color(theme::darcula::TEXT_SECONDARY),
+                    )
+                    .push(
+                        Container::new(text_input::styled(
+                            "/path/to/id_ed25519",
+                            &settings.ssh_key_path,
+                            SettingsMessage::SetSshKeyPath,
+                        ))
+                        .width(Length::Fill),
+                    )
+                    .push(button::ghost(ssh_import, Some(SettingsMessage::ImportSshKey))),
+            )
+            .push_maybe((!store_note.is_empty()).then(|| {
+                Text::new(store_note)
+                    .size(11)
+                    .color(theme::darcula::TEXT_SECONDARY)
+            })),
     )
     .padding([8, 14]);
 
@@ -664,6 +788,8 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
         .width(Length::Fill)
         .push(header)
         .push(iced::widget::rule::horizontal(1))
+        .push(identity_section)
+        .push(iced::widget::rule::horizontal(1))
         .push(commit_section)
         .push(large_file_row)
         .push(iced::widget::rule::horizontal(1))
@@ -817,6 +943,20 @@ mod tests {
         assert_eq!(loaded.llm_api_key, "sk-test-key");
         assert_eq!(loaded.protected_branches, "main, develop");
         assert_eq!(loaded.large_file_limit_mb, "100");
+    }
+
+    #[test]
+    fn identity_fields_roundtrip() {
+        let s = GitSettings {
+            user_name: "Ada".to_string(),
+            user_email: "ada@example.com".to_string(),
+            ssh_key_path: "/tmp/id_ed25519".to_string(),
+            ..GitSettings::default()
+        };
+        let loaded = GitSettings::parse(&s.serialize());
+        assert_eq!(loaded.user_name, "Ada");
+        assert_eq!(loaded.user_email, "ada@example.com");
+        assert_eq!(loaded.ssh_key_path, "/tmp/id_ed25519");
     }
 
     #[test]

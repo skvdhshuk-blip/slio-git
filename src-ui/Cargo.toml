@@ -6,6 +6,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+app-store = ["git-core/app-store"]
+
 [dependencies]
 git-core = { path = "../src/git-core" }
 git2 = { workspace = true }

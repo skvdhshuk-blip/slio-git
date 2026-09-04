@@ -1,6 +1,7 @@
 //! Application state management
 
 use crate::i18n::I18n;
+use crate::sandbox_access::{self, FolderGrant};
 use crate::theme;
 use crate::views::{
     branch_popup::{BranchPopupState, CommitActionConfirmation},
@@ -332,6 +333,7 @@ struct PersistedWorkspaceMemory {
     last_open_repository: Option<PathBuf>,
     /// Paths with optional last-opened unix seconds (None = legacy 2-seg row, AC-15)
     recent_entries: Vec<(PathBuf, Option<u64>)>,
+    bookmarks: Vec<(PathBuf, Vec<u8>)>,
 }
 
 impl PersistedWorkspaceMemory {
@@ -372,6 +374,21 @@ impl PersistedWorkspaceMemory {
                 memory
                     .recent_entries
                     .push((PathBuf::from(path_str), last_opened));
+                continue;
+            }
+
+            if let Some(rest) = line.strip_prefix("bookmark\t") {
+                let mut parts = rest.splitn(2, '\t');
+                let path_str = parts.next().unwrap_or("").trim();
+                let hex = parts.next().unwrap_or("").trim();
+                if path_str.is_empty() {
+                    continue;
+                }
+                if let Some(blob) = sandbox_access::decode_bookmark(hex) {
+                    memory
+                        .bookmarks
+                        .push((PathBuf::from(path_str), blob));
+                }
             }
         }
 
@@ -404,6 +421,14 @@ impl PersistedWorkspaceMemory {
                 Some(ts) => lines.push(format!("recent\t{}\t{}\t{}", path.display(), name, ts)),
                 None => lines.push(format!("recent\t{}", path.display())),
             }
+        }
+
+        for (path, bookmark) in &self.bookmarks {
+            lines.push(format!(
+                "bookmark\t{}\t{}",
+                path.display(),
+                sandbox_access::encode_bookmark(bookmark)
+            ));
         }
 
         if lines.is_empty() {
@@ -692,6 +717,7 @@ pub struct AppState {
     pub view_mode: ViewMode,
     pub auxiliary_view: Option<AuxiliaryView>,
     pub project_history: Vec<ProjectEntry>,
+    pub folder_grants: Vec<FolderGrant>,
     pub shell: AppShellState,
     pub feedback: Option<FeedbackState>,
     pub toast_notification: Option<ToastNotificationState>,
@@ -857,6 +883,7 @@ impl AppState {
             view_mode: ViewMode::Welcome,
             auxiliary_view: None,
             project_history: Vec::new(),
+            folder_grants: Vec::new(),
             shell,
             feedback: None,
             toast_notification: None,
@@ -933,8 +960,39 @@ impl AppState {
             .cloned()
             .map(|(path, ts)| ProjectEntry::from_path_with_ts(path, ts))
             .collect();
+        state.folder_grants = persisted
+            .bookmarks
+            .iter()
+            .cloned()
+            .map(|(path, bookmark)| FolderGrant {
+                path,
+                bookmark: Some(bookmark),
+            })
+            .collect();
+
+        state.git_settings.apply_auth();
+        if !state.git_settings.ssh_key_path.is_empty() {
+            let key = PathBuf::from(&state.git_settings.ssh_key_path);
+            if let Err(error) = sandbox_access::restore_folder(&state.grant_for(&key)) {
+                warn!("SSH key access for {} failed: {}", key.display(), error);
+            }
+        }
 
         if let Some(last_path) = persisted.last_open_repository {
+            let grant = state.grant_for(&last_path);
+            if let Err(error) = sandbox_access::restore_folder(&grant) {
+                warn!(
+                    "Sandbox access for {} failed: {}",
+                    last_path.display(),
+                    error
+                );
+                state.set_info(
+                    i18n.cannot_open_repo,
+                    Some(error.to_string()),
+                    "repository.restore",
+                );
+                return state;
+            }
             match Repository::discover(&last_path) {
                 Ok(repo) => {
                     let repo_name = repo.name();
@@ -1079,6 +1137,10 @@ impl AppState {
             .map(|current| current.path().to_path_buf())
             != Some(repo.path().to_path_buf());
 
+        if let Some(previous) = self.current_repository.as_ref() {
+            sandbox_access::stop_accessing(previous.path());
+        }
+        let _ = sandbox_access::start_accessing(repo.path());
         self.current_repository = Some(repo);
         self.remember_project(project_entry);
         // Persist immediately so the project list survives crashes
@@ -1164,6 +1226,8 @@ impl AppState {
                 .replace("{}", &path.display().to_string()));
         }
 
+        let grant = self.grant_for(path);
+        sandbox_access::restore_folder(&grant).map_err(|error| error.to_string())?;
         let repo = Repository::discover(path).map_err(|error| {
             i18n.cannot_open_project_fmt
                 .replace("{}", &error.to_string())
@@ -1173,6 +1237,9 @@ impl AppState {
     }
 
     pub fn clear_repository(&mut self, i18n: &I18n) {
+        if let Some(previous) = self.current_repository.as_ref() {
+            sandbox_access::stop_accessing(previous.path());
+        }
         self.current_repository = None;
         self.staged_changes.clear();
         self.unstaged_changes.clear();
@@ -2578,6 +2645,53 @@ impl AppState {
         self.project_history.truncate(MAX_PROJECT_HISTORY);
     }
 
+    pub fn remember_folder_grant(&mut self, grant: FolderGrant) {
+        self.folder_grants.retain(|existing| existing.path != grant.path);
+        self.folder_grants.push(grant);
+        let last = self
+            .current_repository
+            .as_ref()
+            .map(|repo| repo.path().to_path_buf());
+        self.persist_workspace_memory(last.as_deref());
+    }
+
+    pub fn adopt_folder_access(&mut self, path: PathBuf) -> Result<PathBuf, String> {
+        self.adopt_access(sandbox_access::remember_folder(path))
+    }
+
+    pub fn adopt_file_access(&mut self, path: PathBuf) -> Result<PathBuf, String> {
+        self.adopt_access(sandbox_access::remember_file(path))
+    }
+
+    fn adopt_access(&mut self, grant: FolderGrant) -> Result<PathBuf, String> {
+        let path = sandbox_access::restore_folder(&grant).map_err(|error| error.to_string())?;
+        self.remember_folder_grant(grant);
+        Ok(path)
+    }
+
+    pub fn grant_for(&self, path: &Path) -> FolderGrant {
+        if let Some(grant) = self
+            .folder_grants
+            .iter()
+            .find(|grant| grant.path == path)
+            .cloned()
+        {
+            return grant;
+        }
+        if let Some(grant) = self
+            .folder_grants
+            .iter()
+            .find(|grant| path.starts_with(&grant.path))
+            .cloned()
+        {
+            return grant;
+        }
+        FolderGrant {
+            path: path.to_path_buf(),
+            bookmark: None,
+        }
+    }
+
     fn persist_workspace_memory(&self, last_open_repository: Option<&Path>) {
         let mut memory = PersistedWorkspaceMemory {
             last_open_repository: last_open_repository.map(Path::to_path_buf),
@@ -2585,6 +2699,16 @@ impl AppState {
                 .project_history
                 .iter()
                 .map(|entry| (entry.path.clone(), entry.last_opened))
+                .collect(),
+            bookmarks: self
+                .folder_grants
+                .iter()
+                .filter_map(|grant| {
+                    grant
+                        .bookmark
+                        .as_ref()
+                        .map(|bookmark| (grant.path.clone(), bookmark.clone()))
+                })
                 .collect(),
         };
         memory.normalize();
@@ -2824,6 +2948,7 @@ mod tests {
                 (PathBuf::from("/tmp/current"), Some(1700000000)),
                 (PathBuf::from("/tmp/other"), None),
             ],
+            bookmarks: vec![(PathBuf::from("/tmp/current"), vec![0xab, 0xcd])],
         };
 
         original.save_to_path(&state_path).expect("save memory");
@@ -2891,6 +3016,7 @@ mod tests {
                 (PathBuf::from("/tmp/other"), Some(1700000000)),
                 (PathBuf::from("/tmp/legacy"), None),
             ],
+            bookmarks: Vec::new(),
         };
         original.save_to_path(&state_path).expect("save");
         let loaded = PersistedWorkspaceMemory::load_from_path(&state_path);

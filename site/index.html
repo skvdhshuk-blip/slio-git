@@ -26,7 +26,7 @@ a{color:var(--accent);text-decoration:none}
 /* --- NAV --- */
 nav{position:fixed;top:0;left:0;right:0;z-index:100;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);background:rgba(9,9,11,.8);border-bottom:1px solid var(--border)}
 .nav-inner{max-width:1200px;margin:0 auto;padding:0 24px;height:64px;display:flex;align-items:center;justify-content:space-between}
-.nav-logo{font-weight:800;font-size:1.125rem;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
+.nav-logo{font-weight:800;font-size:1.125rem;letter-spacing:-.02em;display:flex;align-items:center;gap:8px;text-decoration:none}
 .nav-logo span{background:linear-gradient(135deg,var(--accent),#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .nav-links{display:flex;align-items:center;gap:24px}
 .nav-links a{color:var(--text-dim);font-size:.875rem;font-weight:500;transition:color .2s}
@@ -93,10 +93,18 @@ section{padding:100px 24px}
 .cta-section::before{content:'';position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:600px;height:400px;background:radial-gradient(ellipse,rgba(99,102,241,.06) 0%,transparent 70%);pointer-events:none}
 .cta-section h2{font-size:clamp(2rem,5vw,3.5rem);font-weight:900;letter-spacing:-.04em;margin-bottom:16px}
 .cta-section p{color:var(--text-dim);font-size:1.1rem;margin-bottom:40px}
+.cta-note{margin-top:16px;font-size:.9rem;color:var(--text-muted)}
+.cta-note a{color:var(--text-dim)}
+
+/* --- LIMITS --- */
+.limits{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:40px 36px}
+.limits ul{margin:0;padding-left:1.2em;color:var(--text-dim)}
+.limits li{margin:10px 0;font-size:.95rem;line-height:1.6}
 
 /* --- FOOTER --- */
 footer{border-top:1px solid var(--border);padding:40px 24px;text-align:center;color:var(--text-muted);font-size:.85rem}
 footer a{color:var(--text-dim)}
+footer .footer-links{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-top:12px}
 
 /* --- ANIMATIONS --- */
 .reveal{opacity:0;transform:translateY(30px);transition:opacity .6s ease,transform .6s ease}
@@ -120,16 +128,17 @@ footer a{color:var(--text-dim)}
 <!-- NAV -->
 <nav>
   <div class="nav-inner">
-    <div class="nav-logo"><span>slio-git</span></div>
+    <a class="nav-logo" href="index.html"><span>slio-git</span></a>
     <div class="nav-links">
       <a href="#features" data-i18n="nav_features">Features</a>
-      <a href="#tech" data-i18n="nav_tech">Tech Stack</a>
-      <a href="https://github.com/sk-wang/slio-git" target="_blank">GitHub</a>
+      <a href="#limits" data-i18n="nav_limits">Store limits</a>
+      <a href="privacy.html" data-i18n="nav_privacy">Privacy</a>
+      <a href="https://github.com/skvdhshuk-blip/slio-git" target="_blank">GitHub</a>
       <div class="lang-toggle">
         <button class="lang-btn active" onclick="setLang('en')">EN</button>
         <button class="lang-btn" onclick="setLang('zh')">CN</button>
       </div>
-      <a id="nav-dl" href="https://github.com/sk-wang/slio-git/releases/latest/download/slio-git.dmg" class="btn-download" data-i18n="nav_download">Download</a>
+      <a id="nav-mas" href="https://apps.apple.com/app/slio-git" class="btn-download" data-i18n="nav_mas">Mac App Store</a>
     </div>
   </div>
 </nav>
@@ -138,7 +147,7 @@ footer a{color:var(--text-dim)}
 <section class="hero">
   <div class="hero-badge">
     <span class="dot"></span>
-    <span data-i18n="hero_badge">v0.0.29 &middot; Open Source &middot; MIT / Apache-2.0</span>
+    <span data-i18n="hero_badge">v0.1.0 &middot; Open Source &middot; MIT / Apache-2.0</span>
   </div>
   <h1>
     <span data-i18n="hero_title_1">YOUR GIT.</span><br>
@@ -149,9 +158,10 @@ footer a{color:var(--text-dim)}
     <span class="hero-accent" data-i18n="hero_accent">No Electron. Pure Rust.</span>
   </p>
   <div class="hero-cta">
-    <a id="hero-dl" href="https://github.com/sk-wang/slio-git/releases/latest/download/slio-git.dmg"><button class="cta-primary" data-i18n="cta_download">Download for macOS, Windows &amp; Linux</button></a>
-    <a href="https://github.com/sk-wang/slio-git"><button class="cta-secondary" data-i18n="cta_source">View Source on GitHub</button></a>
+    <a id="hero-mas" href="https://apps.apple.com/app/slio-git"><button class="cta-primary" data-i18n="cta_mas">Get it free on the Mac App Store</button></a>
+    <a href="https://github.com/skvdhshuk-blip/slio-git"><button class="cta-secondary" data-i18n="cta_source">View Source on GitHub</button></a>
   </div>
+  <p class="cta-note"><a id="hero-dl" href="https://github.com/skvdhshuk-blip/slio-git/releases/latest" data-i18n="cta_desktop">Also available as a desktop build for macOS, Windows, and Linux</a></p>
   <div class="hero-screenshot reveal">
     <img src="img/changes-diff.png" alt="slio-git diff view">
   </div>
@@ -256,16 +266,39 @@ footer a{color:var(--text-dim)}
   </div>
 </section>
 
+<!-- LIMITS -->
+<section id="limits">
+  <div class="section-inner">
+    <div class="limits reveal">
+      <span class="section-label" data-i18n="lim_label">Mac App Store</span>
+      <h2 class="section-title" data-i18n="lim_title">What the sandbox build does not do</h2>
+      <p class="section-desc" data-i18n="lim_desc">The Mac App Store build runs in the App Sandbox. These limits are intentional so you are not surprised after install.</p>
+      <ul>
+        <li data-i18n="lim_1">It does not read ~/.ssh or your global Git config unless you import a key or fill in name and email in Settings.</li>
+        <li data-i18n="lim_2">It does not run Git hooks or spawn system git.</li>
+        <li data-i18n="lim_3">Interactive rebase, cherry-pick, and force-with-lease are unavailable in the store build.</li>
+        <li data-i18n="lim_4">Updates come from the App Store. The store build does not check GitHub Releases.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
 <!-- CTA BOTTOM -->
 <section class="cta-section">
   <h2 data-i18n="cta2_title">Ready to try?</h2>
-  <p data-i18n="cta2_desc">Download the latest macOS, Windows and Linux builds and start using slio-git today.</p>
-  <a id="bottom-dl" href="https://github.com/sk-wang/slio-git/releases/latest/download/slio-git.dmg"><button class="cta-primary" data-i18n="cta_download">Download for macOS, Windows &amp; Linux</button></a>
+  <p data-i18n="cta2_desc">Get slio-git on the Mac App Store. Desktop builds for macOS, Windows, and Linux stay on GitHub.</p>
+  <a id="bottom-mas" href="https://apps.apple.com/app/slio-git"><button class="cta-primary" data-i18n="cta_mas">Get it free on the Mac App Store</button></a>
+  <p class="cta-note"><a id="bottom-dl" href="https://github.com/skvdhshuk-blip/slio-git/releases/latest" data-i18n="cta_desktop">Also available as a desktop build for macOS, Windows, and Linux</a></p>
 </section>
 
 <!-- FOOTER -->
 <footer>
-  <p>slio-git &copy; 2026. <a href="https://github.com/sk-wang/slio-git">GitHub</a> &middot; MIT / Apache-2.0</p>
+  <p>slio-git &copy; 2026. MIT / Apache-2.0</p>
+  <div class="footer-links">
+    <a href="privacy.html" data-i18n="nav_privacy">Privacy</a>
+    <a href="https://github.com/skvdhshuk-blip/slio-git">GitHub</a>
+    <a id="footer-mas" href="https://apps.apple.com/app/slio-git">App Store</a>
+  </div>
 </footer>
 
 <script>
@@ -277,9 +310,11 @@ function detectOS() {
   return "mac"; // default to mac for macOS / unknown
 }
 
-const DL_MAC = "https://github.com/sk-wang/slio-git/releases/latest/download/slio-git.dmg";
-const DL_WIN = "https://github.com/sk-wang/slio-git/releases/latest/download/slio-git-windows-x86_64.zip";
-const DL_LINUX = "https://github.com/sk-wang/slio-git/releases/latest/download/slio-git-linux-x86_64.tar.gz";
+const REPO = "https://github.com/skvdhshuk-blip/slio-git";
+const MAS_URL = "https://apps.apple.com/app/slio-git";
+const DL_MAC = REPO + "/releases/latest/download/slio-git.dmg";
+const DL_WIN = REPO + "/releases/latest/download/slio-git-windows-x86_64.zip";
+const DL_LINUX = REPO + "/releases/latest/download/slio-git-linux-x86_64.tar.gz";
 const userOS = detectOS();
 
 // --- i18n ---
@@ -287,13 +322,16 @@ const translations = {
   en: {
     nav_features: "Features",
     nav_tech: "Tech Stack",
-    nav_download: "Download",
-    hero_badge: "v0.0.29 \u00b7 Open Source \u00b7 MIT / Apache-2.0",
+    nav_limits: "Store limits",
+    nav_privacy: "Privacy",
+    nav_mas: "Mac App Store",
+    hero_badge: "v0.1.0 \u00b7 Open Source \u00b7 MIT / Apache-2.0",
     hero_title_1: "YOUR GIT.",
     hero_title_2: "BEAUTIFULLY NATIVE.",
     hero_sub: "A fast Git GUI built with Rust + Iced. The workflow polish of IntelliJ IDEA\u2019s Git tool window, as a standalone app. ",
     hero_accent: "No Electron. Pure Rust.",
-    cta_download: "Download for macOS, Windows & Linux",
+    cta_mas: "Get it free on the Mac App Store",
+    cta_desktop: "Also available as a desktop build for macOS, Windows, and Linux",
     cta_source: "View Source on GitHub",
     feat_label: "Features",
     feat_title: "Everything you need,<br>nothing you don\u2019t.",
@@ -323,19 +361,29 @@ const translations = {
     tech_label: "Under the Hood",
     tech_title: "Pure Rust. GPU-accelerated.",
     tech_desc: "No Electron, no WebView, no runtime overhead. Native performance with a 60fps UI powered by wgpu.",
+    lim_label: "Mac App Store",
+    lim_title: "What the sandbox build does not do",
+    lim_desc: "The Mac App Store build runs in the App Sandbox. These limits are intentional so you are not surprised after install.",
+    lim_1: "It does not read ~/.ssh or your global Git config unless you import a key or fill in name and email in Settings.",
+    lim_2: "It does not run Git hooks or spawn system git.",
+    lim_3: "Interactive rebase, cherry-pick, and force-with-lease are unavailable in the store build.",
+    lim_4: "Updates come from the App Store. The store build does not check GitHub Releases.",
     cta2_title: "Ready to try?",
-    cta2_desc: "Download the latest macOS, Windows and Linux builds and start using slio-git today.",
+    cta2_desc: "Get slio-git on the Mac App Store. Desktop builds for macOS, Windows, and Linux stay on GitHub.",
   },
   zh: {
     nav_features: "\u529f\u80fd",
     nav_tech: "\u6280\u672f\u6808",
-    nav_download: "\u4e0b\u8f7d",
-    hero_badge: "v0.0.29 \u00b7 \u5f00\u6e90 \u00b7 MIT / Apache-2.0",
+    nav_limits: "\u5546\u5e97\u9650\u5236",
+    nav_privacy: "\u9690\u79c1",
+    nav_mas: "Mac App Store",
+    hero_badge: "v0.1.0 \u00b7 \u5f00\u6e90 \u00b7 MIT / Apache-2.0",
     hero_title_1: "\u4f60\u7684 GIT\u3002",
     hero_title_2: "\u539f\u751f\u4e4b\u7f8e\u3002",
     hero_sub: "\u57fa\u4e8e Rust + Iced \u6784\u5efa\u7684\u9ad8\u6027\u80fd Git GUI\u3002\u5c06 IntelliJ IDEA Git \u5de5\u5177\u7a97\u7684\u5de5\u4f5c\u6d41\u4f53\u9a8c\uff0c\u5e26\u5230\u72ec\u7acb\u5e94\u7528\u4e2d\u3002",
     hero_accent: "\u96f6 Electron\u3002\u7eaf Rust\u3002",
-    cta_download: "\u4e0b\u8f7d macOS / Windows / Linux \u7248\u672c",
+    cta_mas: "\u5728 Mac App Store \u514d\u8d39\u83b7\u53d6",
+    cta_desktop: "\u4e5f\u63d0\u4f9b macOS\u3001Windows \u548c Linux \u684c\u9762\u6784\u5efa",
     cta_source: "\u5728 GitHub \u67e5\u770b\u6e90\u7801",
     feat_label: "\u6838\u5fc3\u529f\u80fd",
     feat_title: "\u4f60\u9700\u8981\u7684\uff0c\u90fd\u5728\u8fd9\u91cc\u3002",
@@ -365,8 +413,15 @@ const translations = {
     tech_label: "\u6280\u672f\u5e95\u5c42",
     tech_title: "\u7eaf Rust\u3002GPU \u52a0\u901f\u3002",
     tech_desc: "\u96f6 Electron\u3001\u96f6 WebView\u3001\u96f6\u8fd0\u884c\u65f6\u5f00\u9500\u3002\u7531 wgpu \u9a71\u52a8\u7684 60fps \u539f\u751f\u754c\u9762\u3002",
+    lim_label: "Mac App Store",
+    lim_title: "\u6c99\u7bb1\u7248\u505a\u4e0d\u5230\u7684",
+    lim_desc: "Mac App Store \u7248\u8dd1\u5728 App Sandbox \u91cc\u3002\u4e0b\u9762\u8fd9\u4e9b\u9650\u5236\u662f\u6545\u610f\u7684\uff0c\u907f\u514d\u4f60\u88c5\u5b8c\u624d\u53d1\u73b0\u5bf9\u4e0d\u4e0a\u3002",
+    lim_1: "\u9664\u975e\u4f60\u5728\u8bbe\u7f6e\u91cc\u5bfc\u5165\u79c1\u94a5\u6216\u586b\u5199\u59d3\u540d\u548c\u90ae\u7bb1\uff0c\u5426\u5219\u4e0d\u8bfb ~/.ssh \u548c\u5168\u5c40 Git \u914d\u7f6e\u3002",
+    lim_2: "\u4e0d\u8dd1 Git hooks\uff0c\u4e5f\u4e0d spawn \u7cfb\u7edf git\u3002",
+    lim_3: "\u5546\u5e97\u7248\u4e0d\u652f\u6301\u4ea4\u4e92\u53d8\u57fa\u3001cherry-pick \u548c force-with-lease\u3002",
+    lim_4: "\u66f4\u65b0\u53ea\u8d70 App Store\u3002\u5546\u5e97\u7248\u4e0d\u68c0\u67e5 GitHub Releases\u3002",
     cta2_title: "\u51c6\u5907\u597d\u4e86\u5417\uff1f",
-    cta2_desc: "\u4e0b\u8f7d\u6700\u65b0\u7684 macOS\u3001Windows \u548c Linux \u53d1\u5e03\u7248\uff0c\u7acb\u5373\u5f00\u59cb\u4f7f\u7528 slio-git\u3002",
+    cta2_desc: "\u5728 Mac App Store \u83b7\u53d6 slio-git\u3002macOS\u3001Windows \u548c Linux \u684c\u9762\u6784\u5efa\u4ecd\u5728 GitHub\u3002",
   }
 };
 
@@ -384,21 +439,20 @@ function setLang(lang) {
   });
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
 
-  // Update download buttons based on OS
-  const dlUrl = userOS === "windows" ? DL_WIN : userOS === "linux" ? DL_LINUX : DL_MAC;
-  const navDl = document.getElementById("nav-dl");
-  const heroDl = document.getElementById("hero-dl");
-  const bottomDl = document.getElementById("bottom-dl");
-  if (navDl) navDl.href = dlUrl;
-  if (heroDl) heroDl.href = dlUrl;
-  if (bottomDl) bottomDl.href = dlUrl;
+  ["nav-mas", "hero-mas", "bottom-mas", "footer-mas"].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) el.href = MAS_URL;
+  });
 
-  // Update CTA button text to show detected OS
+  const dlUrl = userOS === "windows" ? DL_WIN : userOS === "linux" ? DL_LINUX : DL_MAC;
   const osName = userOS === "windows" ? "Windows" : userOS === "linux" ? "Linux" : "macOS";
-  document.querySelectorAll("[data-i18n='cta_download']").forEach(el => {
+  ["hero-dl", "bottom-dl"].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.href = dlUrl;
     el.textContent = lang === "zh"
-      ? `\u4E0B\u8F7D ${osName} \u7248\u672C`
-      : `Download for ${osName}`;
+      ? `\u4e5f\u63d0\u4f9b ${osName} \u684c\u9762\u6784\u5efa`
+      : `Also available as a ${osName} desktop build`;
   });
 }
 

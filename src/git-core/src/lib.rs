@@ -36,8 +36,10 @@ mod tests {
     }
 }
 
+pub mod auth;
 pub mod blame;
 pub mod branch;
+pub mod capability;
 pub mod clone;
 pub mod commit;
 pub mod commit_actions;
@@ -98,7 +100,11 @@ pub use index::{
     get_file_hunks, get_index_hunks, get_status, stage_file, stage_hunk, stage_lines, unstage_file,
     unstage_hunk, unstage_lines,
 };
-pub use process::{background_command, configure_background_command, git_command};
+pub use auth::{AuthContext, configured_identity, context as auth_context, set_context as set_auth_context};
+pub use capability::{
+    github_updater, implicit_home_ssh, is_app_store_build, requires_bookmarks, system_git,
+};
+pub use process::{background_command, configure_background_command, git_command, require_system_git};
 pub use rebase::{
     InteractiveRebasePlan, RebaseResult, RebaseStatus, RebaseTodoEntry, get_current_rebase_step,
     get_rebase_status, get_rebase_todo, has_rebase_conflicts, prepare_interactive_rebase_plan,

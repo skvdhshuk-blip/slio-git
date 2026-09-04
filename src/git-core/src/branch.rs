@@ -1,8 +1,6 @@
 //! Branch operations for git-core
 
 use crate::error::GitError;
-use crate::index;
-use crate::process::git_command;
 use crate::repository::{Repository, SyncStatus, compact_branch_sync_hint, compact_relative_time};
 use log::info;
 
@@ -321,40 +319,37 @@ impl Repository {
     pub fn find_merged_branches(&self, target: &str) -> Result<Vec<String>, GitError> {
         info!("Finding branches merged into '{}'", target);
 
-        let repo_path = self.command_cwd();
-        let output = git_command()
-            .args(["branch", "--merged", target])
-            .current_dir(&repo_path)
-            .output()
+        let repo_lock = self.inner.read().unwrap();
+        let target_oid = repo_lock
+            .revparse_single(target)
+            .and_then(|obj| obj.peel_to_commit())
+            .map(|commit| commit.id())
             .map_err(|e| GitError::OperationFailed {
                 operation: "find_merged_branches".to_string(),
-                details: format!("Failed to execute git branch --merged: {}", e),
+                details: e.to_string(),
             })?;
-
-        if !output.status.success() {
-            return Err(GitError::OperationFailed {
+        let iter = repo_lock
+            .branches(Some(git2::BranchType::Local))
+            .map_err(|e| GitError::OperationFailed {
                 operation: "find_merged_branches".to_string(),
-                details: format!(
-                    "git branch --merged failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
+                details: e.to_string(),
+            })?;
+        let mut branches = Vec::new();
+        for entry in iter {
+            let (branch, _) = entry.map_err(|e| GitError::OperationFailed {
+                operation: "find_merged_branches".to_string(),
+                details: e.to_string(),
+            })?;
+            let Some(name) = branch.name().ok().flatten().map(str::to_string) else {
+                continue;
+            };
+            let Some(oid) = branch.get().target() else {
+                continue;
+            };
+            if repo_lock.merge_base(oid, target_oid).ok() == Some(oid) {
+                branches.push(name);
+            }
         }
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let branches: Vec<String> = output_str
-            .lines()
-            .filter_map(|line| {
-                let trimmed = line.trim();
-                // Skip the current branch marker "* " prefix
-                let name = trimmed.strip_prefix("* ").unwrap_or(trimmed);
-                let name = name.trim();
-                if name.is_empty() {
-                    return None;
-                }
-                Some(name.to_string())
-            })
-            .collect();
 
         info!(
             "Found {} branches merged into '{}'",
@@ -376,31 +371,25 @@ impl Repository {
     ) -> Result<Branch, GitError> {
         info!("Creating branch '{}' from '{}'", name, start_point);
 
-        let repo_path = self.command_cwd();
-
-        // Use git branch command
-        let output = git_command()
-            .args(["branch", name, start_point])
-            .current_dir(&repo_path)
-            .output()
+        let repo_lock = self.inner.write().unwrap();
+        let commit = repo_lock
+            .revparse_single(start_point)
+            .and_then(|obj| obj.peel_to_commit())
             .map_err(|e| GitError::OperationFailed {
                 operation: "create_branch".to_string(),
-                details: format!("Failed to execute git branch: {}", e),
+                details: e.to_string(),
             })?;
-
-        if !output.status.success() {
-            return Err(GitError::OperationFailed {
+        let oid = commit.id().to_string();
+        repo_lock
+            .branch(name, &commit, false)
+            .map_err(|e| GitError::OperationFailed {
                 operation: "create_branch".to_string(),
-                details: format!(
-                    "git branch failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
-        }
+                details: e.to_string(),
+            })?;
 
         Ok(Branch {
             name: name.to_string(),
-            oid: String::new(),
+            oid,
             is_remote: false,
             is_head: false,
             upstream: None,
@@ -415,57 +404,45 @@ impl Repository {
     /// Delete a branch
     pub fn delete_branch(&self, name: &str) -> Result<(), GitError> {
         info!("Deleting branch '{}'", name);
-
-        let repo_path = self.command_cwd();
-
-        // Use git branch -d command
-        let output = git_command()
-            .args(["branch", "-d", name])
-            .current_dir(&repo_path)
-            .output()
-            .map_err(|e| GitError::OperationFailed {
-                operation: "delete_branch".to_string(),
-                details: format!("Failed to execute git branch: {}", e),
-            })?;
-
-        if !output.status.success() {
+        if !self.is_branch_merged(name).unwrap_or(false) {
             return Err(GitError::OperationFailed {
                 operation: "delete_branch".to_string(),
-                details: format!(
-                    "git branch -d failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
+                details: format!("branch '{name}' is not fully merged"),
             });
         }
-
-        Ok(())
+        let repo_lock = self.inner.write().unwrap();
+        let mut branch = repo_lock
+            .find_branch(name, git2::BranchType::Local)
+            .map_err(|_| GitError::BranchNotFound {
+                name: name.to_string(),
+            })?;
+        if branch.is_head() {
+            return Err(GitError::OperationFailed {
+                operation: "delete_branch".to_string(),
+                details: format!("cannot delete the checked-out branch '{name}'"),
+            });
+        }
+        branch.delete().map_err(|e| GitError::OperationFailed {
+            operation: "delete_branch".to_string(),
+            details: e.to_string(),
+        })
     }
 
     /// Rename a branch
     pub fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<Branch, GitError> {
         info!("Renaming branch '{}' to '{}'", old_name, new_name);
-
-        let repo_path = self.command_cwd();
-
-        // Use git branch -m command
-        let output = git_command()
-            .args(["branch", "-m", old_name, new_name])
-            .current_dir(&repo_path)
-            .output()
+        let repo_lock = self.inner.write().unwrap();
+        let mut branch = repo_lock
+            .find_branch(old_name, git2::BranchType::Local)
+            .map_err(|_| GitError::BranchNotFound {
+                name: old_name.to_string(),
+            })?;
+        branch
+            .rename(new_name, false)
             .map_err(|e| GitError::OperationFailed {
                 operation: "rename_branch".to_string(),
-                details: format!("Failed to execute git branch: {}", e),
+                details: e.to_string(),
             })?;
-
-        if !output.status.success() {
-            return Err(GitError::OperationFailed {
-                operation: "rename_branch".to_string(),
-                details: format!(
-                    "git branch -m failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
-        }
 
         Ok(Branch {
             name: new_name.to_string(),
@@ -487,60 +464,43 @@ impl Repository {
             "Setting upstream of branch '{}' to '{}'",
             branch_name, upstream
         );
-
-        let repo_path = self.command_cwd();
-
-        let output = git_command()
-            .args(["branch", "--set-upstream-to", upstream, branch_name])
-            .current_dir(&repo_path)
-            .output()
+        let repo_lock = self.inner.write().unwrap();
+        let mut branch = repo_lock
+            .find_branch(branch_name, git2::BranchType::Local)
+            .map_err(|_| GitError::BranchNotFound {
+                name: branch_name.to_string(),
+            })?;
+        branch
+            .set_upstream(Some(upstream))
             .map_err(|e| GitError::OperationFailed {
                 operation: "set_branch_upstream".to_string(),
-                details: format!("Failed to execute git branch: {}", e),
-            })?;
-
-        if !output.status.success() {
-            return Err(GitError::OperationFailed {
-                operation: "set_branch_upstream".to_string(),
-                details: format!(
-                    "git branch --set-upstream-to failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
-        }
-
-        Ok(())
+                details: e.to_string(),
+            })
     }
 
     /// List uncommitted changed file paths (staged + unstaged).
     pub fn list_uncommitted_files(&self) -> Vec<String> {
-        let repo_path = self.command_cwd();
-        git_command()
-            .args(["status", "--porcelain"])
-            .current_dir(&repo_path)
-            .output()
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .filter_map(|line| {
-                        // porcelain format: "XY filename" — skip first 3 chars
-                        line.get(3..).map(|s| s.to_string())
-                    })
-                    .collect()
+        let Ok(repo_lock) = self.inner.read() else {
+            return Vec::new();
+        };
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true);
+        let Ok(statuses) = repo_lock.statuses(Some(&mut opts)) else {
+            return Vec::new();
+        };
+        statuses
+            .iter()
+            .filter(|entry| {
+                let flags = entry.status();
+                flags != git2::Status::CURRENT && !flags.contains(git2::Status::IGNORED)
             })
-            .unwrap_or_default()
+            .filter_map(|entry| entry.path().map(str::to_string))
+            .collect()
     }
 
     /// Check if the working tree has uncommitted changes (staged or unstaged).
     pub fn has_uncommitted_changes(&self) -> bool {
-        let repo_path = self.command_cwd();
-        // `git status --porcelain` outputs nothing when clean
-        git_command()
-            .args(["status", "--porcelain"])
-            .current_dir(&repo_path)
-            .output()
-            .map(|o| !o.stdout.is_empty())
-            .unwrap_or(false)
+        !self.list_uncommitted_files().is_empty()
     }
 
     /// Check if a checkout error is due to uncommitted changes that would be overwritten.
@@ -554,26 +514,7 @@ impl Repository {
     /// Force checkout — discards all local changes.
     pub fn force_checkout_branch(&self, name: &str) -> Result<(), GitError> {
         info!("Force checking out branch '{}' (discarding changes)", name);
-        let repo_path = self.command_cwd();
-        let output = git_command()
-            .args(["checkout", "--force", name])
-            .current_dir(&repo_path)
-            .output()
-            .map_err(|e| GitError::OperationFailed {
-                operation: "force_checkout_branch".to_string(),
-                details: format!("Failed to execute git checkout --force: {}", e),
-            })?;
-
-        if !output.status.success() {
-            return Err(GitError::OperationFailed {
-                operation: "force_checkout_branch".to_string(),
-                details: format!(
-                    "git checkout --force failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
-        }
-        Ok(())
+        checkout_local_branch(self, name, true)
     }
 
     /// Smart checkout — stash changes, checkout, then pop stash.
@@ -582,78 +523,26 @@ impl Repository {
             "Smart checking out branch '{}' (stash → checkout → unstash)",
             name
         );
-        let repo_path = self.command_cwd();
-
-        // Step 1: stash including untracked files
-        let stash_output = git_command()
-            .args([
-                "stash",
-                "push",
-                "-m",
-                "slio-git: smart checkout auto-stash",
-                "--include-untracked",
-            ])
-            .current_dir(&repo_path)
-            .output()
-            .map_err(|e| GitError::OperationFailed {
-                operation: "smart_checkout_branch.stash".to_string(),
-                details: format!("Failed to stash: {}", e),
-            })?;
-
-        let stash_created = stash_output.status.success()
-            && !String::from_utf8_lossy(&stash_output.stdout).contains("No local changes");
-
-        // Step 2: checkout
+        let stash_created = crate::stash::stash_save_with_options(
+            self,
+            Some("slio-git: smart checkout auto-stash"),
+            true,
+            false,
+        )
+        .is_ok();
         let checkout_result = self.checkout_branch(name);
-
-        // Step 3: if stash was created, pop it regardless of checkout result
         if stash_created {
-            let pop_output = git_command()
-                .args(["stash", "pop"])
-                .current_dir(&repo_path)
-                .output();
-
-            if let Err(e) = &pop_output {
-                info!("Warning: stash pop failed after smart checkout: {}", e);
-            } else if let Ok(output) = &pop_output {
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    info!("Warning: stash pop had conflicts: {}", stderr);
-                    // Conflicts from stash pop are expected — user will see them in the UI
-                }
+            if let Err(error) = crate::stash::stash_pop(self, 0) {
+                info!("Warning: stash pop failed after smart checkout: {error}");
             }
         }
-
         checkout_result
     }
 
     /// Checkout a branch
     pub fn checkout_branch(&self, name: &str) -> Result<(), GitError> {
         info!("Checking out branch '{}'", name);
-
-        let repo_path = self.command_cwd();
-
-        // Use git checkout command
-        let output = git_command()
-            .args(["checkout", name])
-            .current_dir(&repo_path)
-            .output()
-            .map_err(|e| GitError::OperationFailed {
-                operation: "checkout_branch".to_string(),
-                details: format!("Failed to execute git checkout: {}", e),
-            })?;
-
-        if !output.status.success() {
-            return Err(GitError::OperationFailed {
-                operation: "checkout_branch".to_string(),
-                details: format!(
-                    "git checkout failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
-        }
-
-        Ok(())
+        checkout_local_branch(self, name, false)
     }
 
     /// Checkout a remote branch by creating or reusing a local tracking branch.
@@ -667,227 +556,237 @@ impl Repository {
             });
         };
 
-        let repo_path = self.command_cwd();
-        let local_ref = format!("refs/heads/{local_branch_name}");
-        let local_branch_exists = git_command()
-            .args(["show-ref", "--verify", "--quiet", &local_ref])
-            .current_dir(&repo_path)
-            .status()
-            .map_err(|e| GitError::OperationFailed {
-                operation: "checkout_remote_branch".to_string(),
-                details: format!("Failed to inspect local branch refs: {}", e),
-            })?
-            .success();
-
-        let args = if local_branch_exists {
-            vec!["checkout", local_branch_name]
-        } else {
-            vec!["checkout", "--track", remote_ref]
+        let local_exists = {
+            let repo_lock = self.inner.read().unwrap();
+            repo_lock
+                .find_branch(local_branch_name, git2::BranchType::Local)
+                .is_ok()
         };
-
-        let output = git_command()
-            .args(&args)
-            .current_dir(&repo_path)
-            .output()
-            .map_err(|e| GitError::OperationFailed {
-                operation: "checkout_remote_branch".to_string(),
-                details: format!("Failed to execute git checkout: {}", e),
-            })?;
-
-        if !output.status.success() {
-            return Err(GitError::OperationFailed {
-                operation: "checkout_remote_branch".to_string(),
-                details: format!(
-                    "git checkout failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
+        if !local_exists {
+            self.create_branch_from_start_point(local_branch_name, remote_ref)?;
+            self.set_branch_upstream(local_branch_name, remote_ref)?;
         }
-
+        self.checkout_branch(local_branch_name)?;
         Ok(local_branch_name.to_string())
     }
 
     /// Merge a branch into current branch
     pub fn merge_branch(&self, branch_name: &str) -> Result<(), GitError> {
         info!("Merging branch '{}' into current branch", branch_name);
-
-        let repo_path = self.command_cwd();
-
-        // Use git merge command
-        let output = git_command()
-            .args(["merge", branch_name])
-            .current_dir(&repo_path)
-            .output()
-            .map_err(|e| GitError::OperationFailed {
-                operation: "merge_branch".to_string(),
-                details: format!("Failed to execute git merge: {}", e),
-            })?;
-
-        if !output.status.success() {
-            if index::has_conflicts(self) {
-                return Err(GitError::MergeConflict);
-            }
-
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let details = if !stderr.is_empty() {
-                stderr
-            } else if !stdout.is_empty() {
-                stdout
-            } else {
-                "git merge 返回失败，但没有输出可读错误详情".to_string()
-            };
-
-            return Err(GitError::OperationFailed {
-                operation: "merge_branch".to_string(),
-                details: format!("git merge failed: {details}"),
-            });
-        }
-
-        Ok(())
+        merge_named_ref(self, branch_name, "merge_branch")
     }
 
     /// Get list of all branches
     pub fn list_branches(&self) -> Result<Vec<Branch>, GitError> {
         info!("Listing all branches");
 
-        let repo_path = self.command_cwd();
-
-        let output = git_command()
-            .args([
-                "for-each-ref",
-                "--sort=-committerdate",
-                "--format=%(refname:short)\t%(objectname:short)\t%(upstream:short)\t%(upstream:trackshort)\t%(committerdate:unix)\t%(HEAD)",
-                "refs/heads",
-            ])
-            .current_dir(&repo_path)
-            .output()
+        let repo_lock = self.inner.read().unwrap();
+        let current_branch = self.current_branch().ok().flatten().unwrap_or_default();
+        let iter = repo_lock
+            .branches(None)
             .map_err(|e| GitError::OperationFailed {
                 operation: "list_branches".to_string(),
-                details: format!("Failed to execute git branch: {}", e),
+                details: e.to_string(),
             })?;
-
-        if !output.status.success() {
-            return Err(GitError::OperationFailed {
-                operation: "list_branches".to_string(),
-                details: format!(
-                    "git branch failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
-        }
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
         let mut branches = Vec::new();
-        let current_branch = self.current_branch().ok().flatten().unwrap_or_default();
-
-        for line in output_str.lines() {
-            let line = line.trim();
-            if line.is_empty() {
+        for entry in iter {
+            let (branch, branch_type) = entry.map_err(|e| GitError::OperationFailed {
+                operation: "list_branches".to_string(),
+                details: e.to_string(),
+            })?;
+            let Some(name) = branch.name().ok().flatten().map(str::to_string) else {
+                continue;
+            };
+            if name.ends_with("/HEAD") {
                 continue;
             }
-
-            let parts: Vec<&str> = line.split('\t').collect();
-            let name = parts.first().copied().unwrap_or("").trim().to_string();
-            let oid = parts.get(1).copied().unwrap_or("").trim().to_string();
-            let upstream = parts
-                .get(2)
-                .copied()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
-            let tracking_status = normalize_tracking_status(parts.get(3).copied().unwrap_or(""));
-            let last_commit_timestamp = parts
-                .get(4)
-                .copied()
-                .and_then(|value| value.trim().parse::<i64>().ok());
-            let is_head = parts
-                .get(5)
-                .copied()
-                .map(str::trim)
-                .is_some_and(|value| value == "*")
-                || name == current_branch;
-
-            if name.is_empty() {
-                continue;
-            }
-
+            let is_remote = branch_type == git2::BranchType::Remote;
+            let commit = branch.get().peel_to_commit().ok();
+            let oid = commit
+                .as_ref()
+                .map(|commit| commit.id().to_string())
+                .unwrap_or_default();
+            let last_commit_timestamp = commit.as_ref().map(|commit| commit.time().seconds());
+            let is_head = branch.is_head() || (!is_remote && name == current_branch);
+            let upstream = branch.upstream().ok().and_then(|upstream| {
+                upstream.name().ok().flatten().map(|name| {
+                    name.strip_prefix("refs/remotes/")
+                        .unwrap_or(name)
+                        .to_string()
+                })
+            });
             let tracking_status = if is_head {
                 current_branch_tracking(self)
             } else {
-                tracking_status
+                None
             };
             let sync_hint =
                 compact_branch_sync_hint(upstream.as_deref(), tracking_status.as_deref());
-
-            let mut branch = Branch {
-                name: name.clone(),
+            let mut item = Branch {
+                name,
                 oid,
-                is_remote: false,
+                is_remote,
                 is_head,
                 upstream,
+                tracking_status,
                 sync_hint,
                 recency_hint: compact_relative_time(last_commit_timestamp),
-                tracking_status,
                 last_commit_timestamp,
                 group_path: None,
             };
-            branch.compute_group_path();
-            branches.push(branch);
+            item.compute_group_path();
+            branches.push(item);
         }
-
-        let remote_output = git_command()
-            .args([
-                "for-each-ref",
-                "--sort=-committerdate",
-                "--format=%(refname:short)\t%(symref)\t%(objectname:short)\t%(committerdate:unix)",
-                "refs/remotes",
-            ])
-            .current_dir(&repo_path)
-            .output()
-            .map_err(|e| GitError::OperationFailed {
-                operation: "list_branches".to_string(),
-                details: format!("Failed to execute git branch -r: {}", e),
-            })?;
-
-        if remote_output.status.success() {
-            let remote_str = String::from_utf8_lossy(&remote_output.stdout);
-            for line in remote_str.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.contains("->") {
-                    continue;
-                }
-
-                let parts: Vec<&str> = line.split('\t').collect();
-                let name = parts.first().copied().unwrap_or("").trim().to_string();
-                let symref = parts.get(1).copied().unwrap_or("").trim();
-                let oid = parts.get(2).copied().unwrap_or("").trim().to_string();
-                let last_commit_timestamp = parts
-                    .get(3)
-                    .copied()
-                    .and_then(|value| value.trim().parse::<i64>().ok());
-
-                if !name.is_empty() && symref.is_empty() && !name.ends_with("/HEAD") {
-                    let mut branch = Branch {
-                        name,
-                        oid,
-                        is_remote: true,
-                        is_head: false,
-                        upstream: None,
-                        tracking_status: None,
-                        sync_hint: None,
-                        recency_hint: compact_relative_time(last_commit_timestamp),
-                        last_commit_timestamp,
-                        group_path: None,
-                    };
-                    branch.compute_group_path();
-                    branches.push(branch);
-                }
-            }
-        }
-
+        branches.sort_by(|a, b| b.last_commit_timestamp.cmp(&a.last_commit_timestamp));
         Ok(branches)
     }
+}
+
+fn checkout_local_branch(repo: &Repository, name: &str, force: bool) -> Result<(), GitError> {
+    let repo_lock = repo.inner.write().unwrap();
+    let branch = repo_lock
+        .find_branch(name, git2::BranchType::Local)
+        .map_err(|_| GitError::BranchNotFound {
+            name: name.to_string(),
+        })?;
+    let commit = branch
+        .get()
+        .peel_to_commit()
+        .map_err(|e| GitError::OperationFailed {
+            operation: "checkout_branch".to_string(),
+            details: e.to_string(),
+        })?;
+    let mut opts = git2::build::CheckoutBuilder::new();
+    if force {
+        opts.force();
+    }
+    repo_lock
+        .checkout_tree(commit.as_object(), Some(&mut opts))
+        .map_err(|e| GitError::OperationFailed {
+            operation: "checkout_branch".to_string(),
+            details: e.to_string(),
+        })?;
+    repo_lock
+        .set_head(&format!("refs/heads/{name}"))
+        .map_err(|e| GitError::OperationFailed {
+            operation: "checkout_branch".to_string(),
+            details: e.to_string(),
+        })?;
+    Ok(())
+}
+
+fn merge_named_ref(repo: &Repository, name: &str, operation: &str) -> Result<(), GitError> {
+    let signature = crate::commit::get_default_signature(repo)?;
+    let repo_lock = repo.inner.write().unwrap();
+    let oid = repo_lock
+        .revparse_single(name)
+        .and_then(|obj| obj.peel_to_commit())
+        .map(|commit| commit.id())
+        .map_err(|e| GitError::OperationFailed {
+            operation: operation.to_string(),
+            details: e.to_string(),
+        })?;
+    let annotated = repo_lock
+        .find_annotated_commit(oid)
+        .map_err(|e| GitError::OperationFailed {
+            operation: operation.to_string(),
+            details: e.to_string(),
+        })?;
+    finish_libgit2_merge(&repo_lock, &annotated, &signature, name, operation)
+}
+
+pub(crate) fn finish_libgit2_merge(
+    repo: &git2::Repository,
+    annotated: &git2::AnnotatedCommit<'_>,
+    signature: &git2::Signature<'_>,
+    name: &str,
+    operation: &str,
+) -> Result<(), GitError> {
+    let (analysis, _) = repo
+        .merge_analysis(&[annotated])
+        .map_err(|e| GitError::OperationFailed {
+            operation: operation.to_string(),
+            details: e.to_string(),
+        })?;
+    if analysis.is_up_to_date() {
+        return Ok(());
+    }
+    if analysis.is_fast_forward() {
+        let mut reference = repo
+            .head()
+            .map_err(|e| GitError::OperationFailed {
+                operation: operation.to_string(),
+                details: e.to_string(),
+            })?;
+        reference
+            .set_target(annotated.id(), "slio-git fast-forward merge")
+            .map_err(|e| GitError::OperationFailed {
+                operation: operation.to_string(),
+                details: e.to_string(),
+            })?;
+        repo.set_head(reference.name().unwrap_or("HEAD"))
+            .map_err(|e| GitError::OperationFailed {
+                operation: operation.to_string(),
+                details: e.to_string(),
+            })?;
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
+            .map_err(|e| GitError::OperationFailed {
+                operation: operation.to_string(),
+                details: e.to_string(),
+            })?;
+        return Ok(());
+    }
+
+    repo.merge(&[annotated], None, None)
+        .map_err(|e| GitError::OperationFailed {
+            operation: operation.to_string(),
+            details: e.to_string(),
+        })?;
+    if repo.index().map(|index| index.has_conflicts()).unwrap_or(false) {
+        return Err(GitError::MergeConflict);
+    }
+    let mut index = repo.index().map_err(|e| GitError::OperationFailed {
+        operation: operation.to_string(),
+        details: e.to_string(),
+    })?;
+    let tree_id = index.write_tree().map_err(|e| GitError::OperationFailed {
+        operation: operation.to_string(),
+        details: e.to_string(),
+    })?;
+    let tree = repo.find_tree(tree_id).map_err(|e| GitError::OperationFailed {
+        operation: operation.to_string(),
+        details: e.to_string(),
+    })?;
+    let head = repo
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .map_err(|e| GitError::OperationFailed {
+            operation: operation.to_string(),
+            details: e.to_string(),
+        })?;
+    let theirs = repo
+        .find_commit(annotated.id())
+        .map_err(|e| GitError::OperationFailed {
+            operation: operation.to_string(),
+            details: e.to_string(),
+        })?;
+    repo.commit(
+        Some("HEAD"),
+        signature,
+        signature,
+        &format!("Merge {name}"),
+        &tree,
+        &[&head, &theirs],
+    )
+    .map_err(|e| GitError::OperationFailed {
+        operation: operation.to_string(),
+        details: e.to_string(),
+    })?;
+    repo.cleanup_state().map_err(|e| GitError::OperationFailed {
+        operation: operation.to_string(),
+        details: e.to_string(),
+    })?;
+    Ok(())
 }
 
 fn current_branch_tracking(repo: &Repository) -> Option<String> {
@@ -901,13 +800,3 @@ fn current_branch_tracking(repo: &Repository) -> Option<String> {
     }
 }
 
-fn normalize_tracking_status(raw: &str) -> Option<String> {
-    match raw.trim() {
-        ">" => Some("↑".to_string()),
-        "<" => Some("↓".to_string()),
-        "<>" => Some("↕".to_string()),
-        "=" => Some("✓".to_string()),
-        "" => None,
-        other => Some(other.to_string()),
-    }
-}

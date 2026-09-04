@@ -1,7 +1,6 @@
 //! Working tree management for git-core
 
 use crate::error::GitError;
-use crate::process::git_command;
 use crate::repository::Repository;
 use log::info;
 use std::path::{Path, PathBuf};
@@ -26,96 +25,48 @@ pub struct WorkingTree {
 /// List all worktrees for the repository
 pub fn list_worktrees(repo: &Repository) -> Result<Vec<WorkingTree>, GitError> {
     info!("Listing worktrees");
-
-    let repo_path = repo.command_cwd();
-
-    let output = git_command()
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "list_worktrees".to_string(),
-            details: format!("Failed to execute git worktree list: {}", e),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "list_worktrees".to_string(),
-            details: format!(
-                "git worktree list failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
-    let output_str = String::from_utf8_lossy(&output.stdout);
+    let repo_lock = repo.inner.read().unwrap();
     let mut worktrees = Vec::new();
-    let mut current_path: Option<PathBuf> = None;
-    let mut current_branch: Option<String> = None;
-    let mut is_bare = false;
-    let mut is_locked = false;
-    let mut is_first = true;
 
-    for line in output_str.lines() {
-        if line.starts_with("worktree ") {
-            // Save previous worktree if any
-            if let Some(path) = current_path.take() {
-                let name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                let is_valid = path.exists();
-                worktrees.push(WorkingTree {
-                    name,
-                    path,
-                    branch: current_branch.take(),
-                    is_main: is_first,
-                    is_locked,
-                    is_valid,
-                });
-                is_first = false;
-            }
-            current_path = Some(PathBuf::from(line.trim_start_matches("worktree ")));
-            current_branch = None;
-            is_bare = false;
-            is_locked = false;
-        } else if line.starts_with("branch ") {
-            let ref_name = line.trim_start_matches("branch ");
-            current_branch = Some(
-                ref_name
-                    .strip_prefix("refs/heads/")
-                    .unwrap_or(ref_name)
-                    .to_string(),
-            );
-        } else if line == "bare" {
-            is_bare = true;
-        } else if line == "locked" {
-            is_locked = true;
-        }
-    }
-
-    // Push last worktree
-    if let Some(path) = current_path {
-        let name = path
+    let main_path = repo_lock
+        .workdir()
+        .unwrap_or_else(|| repo_lock.path())
+        .to_path_buf();
+    let main_branch = repo_lock
+        .head()
+        .ok()
+        .and_then(|head| head.shorthand().map(str::to_string));
+    worktrees.push(WorkingTree {
+        name: main_path
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        let is_valid = path.exists();
-        worktrees.push(WorkingTree {
-            name,
-            path,
-            branch: current_branch,
-            is_main: is_first,
-            is_locked,
-            is_valid,
-        });
-    }
+            .unwrap_or("main")
+            .to_string(),
+        path: main_path,
+        branch: main_branch,
+        is_main: true,
+        is_locked: false,
+        is_valid: true,
+    });
 
-    // Filter out bare worktrees
-    if is_bare {
-        // bare flag applies to main worktree only in edge cases
+    if let Ok(list) = repo_lock.worktrees() {
+        for name in list.iter().flatten() {
+            let Ok(worktree) = repo_lock.find_worktree(name) else {
+                continue;
+            };
+            let path = worktree.path().to_path_buf();
+            worktrees.push(WorkingTree {
+                name: name.to_string(),
+                path: path.clone(),
+                branch: None,
+                is_main: false,
+                is_locked: matches!(
+                    worktree.is_locked(),
+                    Ok(git2::WorktreeLockStatus::Locked(_))
+                ),
+                is_valid: path.exists(),
+            });
+        }
     }
 
     info!("Found {} worktrees", worktrees.len());
@@ -129,46 +80,34 @@ pub fn create_worktree(
     branch: Option<&str>,
 ) -> Result<WorkingTree, GitError> {
     info!("Creating worktree at {:?} with branch {:?}", path, branch);
-
-    let repo_path = repo.command_cwd();
-    let path_str = path.to_string_lossy();
-
-    let mut args = vec!["worktree", "add"];
-    args.push(&path_str);
-    if let Some(b) = branch {
-        args.push(b);
-    }
-
-    let output = git_command()
-        .args(&args)
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "create_worktree".to_string(),
-            details: format!("Failed to execute git worktree add: {}", e),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "create_worktree".to_string(),
-            details: format!(
-                "git worktree add failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
+    let repo_lock = repo.inner.write().unwrap();
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("")
+        .unwrap_or("worktree")
         .to_string();
 
-    info!("Worktree created at {:?}", path);
+    let mut opts = git2::WorktreeAddOptions::new();
+    let checkout_ref = branch.and_then(|branch_name| {
+        repo_lock
+            .find_reference(&format!("refs/heads/{branch_name}"))
+            .ok()
+    });
+    if let Some(reference) = checkout_ref.as_ref() {
+        opts.reference(Some(reference));
+    }
+
+    repo_lock
+        .worktree(&name, path, Some(&opts))
+        .map_err(|e| GitError::OperationFailed {
+            operation: "create_worktree".to_string(),
+            details: e.to_string(),
+        })?;
+
     Ok(WorkingTree {
         name,
         path: path.to_path_buf(),
-        branch: branch.map(|b| b.to_string()),
+        branch: branch.map(str::to_string),
         is_main: false,
         is_locked: false,
         is_valid: true,
@@ -178,29 +117,40 @@ pub fn create_worktree(
 /// Remove a worktree
 pub fn remove_worktree(repo: &Repository, path: &Path) -> Result<(), GitError> {
     info!("Removing worktree at {:?}", path);
-
-    let repo_path = repo.command_cwd();
-    let path_str = path.to_string_lossy();
-
-    let output = git_command()
-        .args(["worktree", "remove", &path_str])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "remove_worktree".to_string(),
-            details: format!("Failed to execute git worktree remove: {}", e),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "remove_worktree".to_string(),
-            details: format!(
-                "git worktree remove failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
+    let repo_lock = repo.inner.write().unwrap();
+    let list = repo_lock.worktrees().map_err(|e| GitError::OperationFailed {
+        operation: "remove_worktree".to_string(),
+        details: e.to_string(),
+    })?;
+    for name in list.iter().flatten() {
+        let Ok(worktree) = repo_lock.find_worktree(name) else {
+            continue;
+        };
+        if same_worktree_path(worktree.path(), path) {
+            let mut opts = git2::WorktreePruneOptions::new();
+            opts.valid(true);
+            opts.working_tree(true);
+            worktree
+                .prune(Some(&mut opts))
+                .map_err(|e| GitError::OperationFailed {
+                    operation: "remove_worktree".to_string(),
+                    details: e.to_string(),
+                })?;
+            return Ok(());
+        }
     }
+    Err(GitError::OperationFailed {
+        operation: "remove_worktree".to_string(),
+        details: format!("worktree not found: {}", path.display()),
+    })
+}
 
-    info!("Worktree removed at {:?}", path);
-    Ok(())
+fn same_worktree_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left.file_name() == right.file_name(),
+    }
 }

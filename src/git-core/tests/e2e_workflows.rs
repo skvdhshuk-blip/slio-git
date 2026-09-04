@@ -56,6 +56,7 @@ fn commit_ids_oldest_first(repo_path: &Path) -> Vec<String> {
 // ─── 1. Interactive rebase: squash + drop ──────────────────────────────────
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn test_e2e_interactive_rebase_squash_and_drop() {
     let tr = TestRepo::new().unwrap();
     let p = tr.path();
@@ -439,6 +440,7 @@ fn test_e2e_worktree_parallel_commit_remove() {
 // ─── 8. Amend + fixup + squash chain ─────────────────────────────────────
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn test_e2e_amend_fixup_squash_chain() {
     let tr = TestRepo::new().unwrap();
     let p = tr.path();
@@ -535,6 +537,7 @@ fn test_e2e_history_combined_filters() {
 // ─── 10. Repository state machine transitions ─────────────────────────────
 
 #[test]
+#[cfg(not(feature = "app-store"))]
 fn test_e2e_repo_state_transitions() {
     let tr = TestRepo::new().unwrap();
     let p = tr.path();

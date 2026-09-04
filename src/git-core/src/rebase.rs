@@ -332,7 +332,7 @@ pub fn rebase_start(repo: &Repository, onto: &str) -> Result<String, GitError> {
 
     let repo_path = repo.command_cwd();
 
-    let output = git_command()
+    let output = git_command()?
         .args(["rebase", onto])
         .current_dir(&repo_path)
         .output()
@@ -462,7 +462,7 @@ pub fn start_interactive_rebase(
     fs::write(&todo_path, todo_contents).map_err(GitError::Io)?;
     write_sequence_editor_script(&todo_path, &script_path)?;
 
-    let mut command = git_command();
+    let mut command = git_command()?;
     command.current_dir(repo.command_cwd());
     command.env("GIT_SEQUENCE_EDITOR", &script_path);
     if entries
@@ -522,7 +522,7 @@ pub fn rebase_continue(repo: &Repository) -> Result<RebaseResult, GitError> {
     let repo_path = repo.command_cwd();
 
     // First add the resolved files
-    let add_output = git_command()
+    let add_output = git_command()?
         .args(["add", "-A"])
         .current_dir(&repo_path)
         .output()
@@ -542,7 +542,7 @@ pub fn rebase_continue(repo: &Repository) -> Result<RebaseResult, GitError> {
     }
 
     // Then continue the rebase
-    let output = git_command()
+    let output = git_command()?
         .args(["rebase", "--continue"])
         .current_dir(&repo_path)
         .output()
@@ -571,7 +571,7 @@ pub fn rebase_abort(repo: &Repository) -> Result<(), GitError> {
 
     let repo_path = repo.command_cwd();
 
-    let output = git_command()
+    let output = git_command()?
         .args(["rebase", "--abort"])
         .current_dir(&repo_path)
         .output()
@@ -600,7 +600,7 @@ pub fn rebase_skip(repo: &Repository) -> Result<RebaseResult, GitError> {
 
     let repo_path = repo.command_cwd();
 
-    let output = git_command()
+    let output = git_command()?
         .args(["rebase", "--skip"])
         .current_dir(&repo_path)
         .output()
@@ -697,7 +697,7 @@ pub fn has_rebase_conflicts(repo: &Repository) -> Result<bool, GitError> {
     let repo_path = repo.command_cwd();
 
     // Check for conflict markers in the index
-    let output = git_command()
+    let output = git_command()?
         .args(["diff", "--name-only", "--diff-filter=U"])
         .current_dir(&repo_path)
         .output()
@@ -835,6 +835,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "app-store"))]
     fn start_interactive_rebase_exposes_current_step_and_remaining_todo() {
         let (repo, _temp_dir, commits) = create_linear_history_repo();
         let entries = vec![

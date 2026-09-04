@@ -72,10 +72,16 @@ pub fn verify_commit_signature(
 ) -> Result<SignatureStatus, GitError> {
     info!("Verifying signature for commit: {}", oid);
 
+    if !crate::capability::system_git() {
+        return Ok(SignatureStatus::NotVerified {
+            reason: VerificationFailureReason::CannotVerify,
+        });
+    }
+
     let repo_path = repo.command_cwd();
     let commit_id = oid.to_string();
 
-    let output = git_command()
+    let output = git_command()?
         .args(["log", "-1", "--format=%G?%n%GS%n%GF", &commit_id])
         .current_dir(&repo_path)
         .output()

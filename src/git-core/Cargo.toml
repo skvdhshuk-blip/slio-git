@@ -6,6 +6,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+app-store = []
+
 [dependencies]
 git2 = { workspace = true }
 notify = { workspace = true }

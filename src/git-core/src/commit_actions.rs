@@ -112,7 +112,7 @@ fn ensure_clean_worktree(repo: &Repository, operation: &str) -> Result<(), GitEr
 }
 
 fn run_git_command(repo: &Repository, operation: &str, args: &[String]) -> Result<(), GitError> {
-    let output = git_command()
+    let output = git_command()?
         .args(args)
         .current_dir(repo.command_cwd())
         .output()
@@ -367,7 +367,7 @@ fn run_scripted_interactive_rebase(
     fs::write(&todo_path, todo_contents).map_err(GitError::Io)?;
     write_sequence_editor_script(operation, &todo_path, &script_path)?;
 
-    let mut command = git_command();
+    let mut command = git_command()?;
     command.current_dir(repo.command_cwd());
     command.env("GIT_SEQUENCE_EDITOR", &script_path);
     if auto_accept_editor {
@@ -428,7 +428,7 @@ pub fn export_commit_patch(
         output_path.display()
     );
 
-    let output = git_command()
+    let output = git_command()?
         .args(["format-patch", "--stdout", "-1", commit_id])
         .current_dir(repo.command_cwd())
         .output()
@@ -565,7 +565,7 @@ pub fn continue_in_progress_commit_action(
         InProgressCommitActionKind::Revert => "revert",
     };
 
-    let add_output = git_command()
+    let add_output = git_command()?
         .args(["add", "-A"])
         .current_dir(repo.command_cwd())
         .output()
@@ -784,29 +784,24 @@ pub fn uncommit_to_commit(repo: &Repository, commit_id: &str) -> Result<(), GitE
         commit_id
     );
 
-    let repo_path = repo.command_cwd();
-
-    // Resolve the target commit's parent
-    let parent_ref = format!("{}^", commit_id);
-
-    let output = git_command()
-        .args(["reset", "--soft", &parent_ref])
-        .current_dir(&repo_path)
-        .output()
+    let repo_lock = repo.inner.write().unwrap();
+    let commit = repo_lock
+        .revparse_single(commit_id)
+        .and_then(|obj| obj.peel_to_commit())
         .map_err(|e| GitError::OperationFailed {
             operation: "uncommit_to_commit".to_string(),
-            details: format!("Failed to execute git reset --soft: {}", e),
+            details: e.to_string(),
         })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
+    let parent = commit.parent(0).map_err(|e| GitError::OperationFailed {
+        operation: "uncommit_to_commit".to_string(),
+        details: e.to_string(),
+    })?;
+    repo_lock
+        .reset(parent.as_object(), git2::ResetType::Soft, None)
+        .map_err(|e| GitError::OperationFailed {
             operation: "uncommit_to_commit".to_string(),
-            details: format!(
-                "git reset --soft failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
+            details: e.to_string(),
+        })?;
 
     info!("Uncommit completed — changes returned to staging area");
     Ok(())

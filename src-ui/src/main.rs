@@ -5,6 +5,7 @@
 mod file_watcher;
 mod git_dispatch;
 mod i18n;
+mod sandbox_access;
 mod i18n_smoke;
 mod keyboard;
 mod log_filter;
@@ -103,10 +104,14 @@ pub fn main() -> iced::Result {
 
     iced::application(
         move || {
-            let startup_task = Task::perform(
-                git_core::updater::check_for_update(env!("CARGO_PKG_VERSION").to_string()),
-                |result| Message::UpdateCheckResult(result.ok().flatten()),
-            );
+            let startup_task = if git_core::github_updater() {
+                Task::perform(
+                    git_core::updater::check_for_update(env!("CARGO_PKG_VERSION").to_string()),
+                    |result| Message::UpdateCheckResult(result.ok().flatten()),
+                )
+            } else {
+                Task::none()
+            };
             let init_i18n = i18n::locale(None);
             let mut app_state = AppState::restore(init_i18n);
             if perf_hud_on_start {
@@ -245,8 +250,8 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 "repository.open",
             );
 
-            if let Some(path) = file_picker::pick_folder() {
-                match Repository::discover(&path) {
+            match pick_granted_folder(state) {
+                Ok(Some(path)) => match Repository::discover(&path) {
                     Ok(repo) => {
                         logging::LogManager::log_repo_operation(
                             "open",
@@ -270,13 +275,24 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             i18n,
                         );
                     }
+                },
+                Ok(None) => {
+                    state.set_empty(
+                        i18n.no_repo_selected,
+                        Some(i18n.no_repo_selected_detail.to_string()),
+                        "repository.open",
+                    );
                 }
-            } else {
-                state.set_empty(
-                    i18n.no_repo_selected,
-                    Some(i18n.no_repo_selected_detail.to_string()),
-                    "repository.open",
-                );
+                Err(error) => {
+                    report_async_failure(
+                        state,
+                        i18n.cannot_open_repo,
+                        error,
+                        "repository.open",
+                        "repository.open",
+                        i18n,
+                    );
+                }
             }
         }
         Message::InitRepository => {
@@ -286,8 +302,8 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 "repository.init",
             );
 
-            if let Some(path) = file_picker::pick_folder() {
-                match Repository::init(&path) {
+            match pick_granted_folder(state) {
+                Ok(Some(path)) => match Repository::init(&path) {
                     Ok(repo) => {
                         logging::LogManager::log_repo_operation(
                             "init",
@@ -311,13 +327,24 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             i18n,
                         );
                     }
+                },
+                Ok(None) => {
+                    state.set_empty(
+                        i18n.no_init_dir_selected,
+                        Some(i18n.no_init_dir_selected_detail.to_string()),
+                        "repository.init",
+                    );
                 }
-            } else {
-                state.set_empty(
-                    i18n.no_init_dir_selected,
-                    Some(i18n.no_init_dir_selected_detail.to_string()),
-                    "repository.init",
-                );
+                Err(error) => {
+                    report_async_failure(
+                        state,
+                        i18n.cannot_init_repo,
+                        error,
+                        "repository.init",
+                        "repository.init",
+                        i18n,
+                    );
+                }
             }
         }
         Message::Refresh => {
@@ -780,7 +807,13 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             };
             let success_msg = i18n.file_staged.to_string();
             let path_clone = path.clone();
-            let repo_path = state.current_repository.as_ref().unwrap().path().to_path_buf();
+            let Some(repo_path) = state
+                .current_repository
+                .as_ref()
+                .map(|repo| repo.path().to_path_buf())
+            else {
+                return Task::none();
+            };
             let task = git_dispatch::run(
                 move || run_git_op_then_refresh(repo_path, move |repo| {
                     git_core::index::stage_file(repo, std::path::Path::new(&path_clone))
@@ -801,7 +834,13 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             let next_path = state.compute_next_selection(&path, &state.staged_changes);
             let success_msg = i18n.file_unstaged.to_string();
             let path_clone = path.clone();
-            let repo_path = state.current_repository.as_ref().unwrap().path().to_path_buf();
+            let Some(repo_path) = state
+                .current_repository
+                .as_ref()
+                .map(|repo| repo.path().to_path_buf())
+            else {
+                return Task::none();
+            };
             let task = git_dispatch::run(
                 move || run_git_op_then_refresh(repo_path, move |repo| {
                     git_core::index::unstage_file(repo, std::path::Path::new(&path_clone))
@@ -909,11 +948,43 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 SettingsMessage::Close => state.close_auxiliary_view(i18n),
                 SettingsMessage::SaveAndClose => {
                     state.git_settings.apply_message(&msg);
+                    state.git_settings.apply_auth();
                     if let Err(e) = state.git_settings.save() {
                         log::warn!("Failed to persist git settings: {}", e);
                     }
                     state.close_auxiliary_view(i18n);
                     state.set_success(i18n.settings_saved, None, "settings.save");
+                }
+                SettingsMessage::ImportSshKey => {
+                    match pick_granted_ssh_key(state) {
+                        Ok(Some(path)) => {
+                            state.git_settings.ssh_key_path = path.display().to_string();
+                            state.git_settings.apply_auth();
+                            if let Err(e) = state.git_settings.save() {
+                                log::warn!("Failed to persist git settings: {}", e);
+                            }
+                            state.set_success(
+                                if i18n.sv_title.contains("设置") {
+                                    "已导入 SSH 私钥"
+                                } else {
+                                    "Imported SSH private key"
+                                },
+                                Some(path.display().to_string()),
+                                "settings.ssh",
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            report_async_failure(
+                                state,
+                                i18n.settings_saved,
+                                error,
+                                "settings.ssh",
+                                "settings.ssh",
+                                i18n,
+                            );
+                        }
+                    }
                 }
                 SettingsMessage::SetLanguage(_) => {
                     state.git_settings.apply_message(&msg);
@@ -5528,6 +5599,36 @@ fn open_gitignore_view(state: &mut AppState) -> Result<(), String> {
     Ok(())
 }
 
+fn pick_granted_folder(state: &mut AppState) -> Result<Option<PathBuf>, String> {
+    let Some(path) = file_picker::pick_folder() else {
+        return Ok(None);
+    };
+    Ok(Some(state.adopt_folder_access(path)?))
+}
+
+fn pick_granted_ssh_key(state: &mut AppState) -> Result<Option<PathBuf>, String> {
+    let Some(path) = file_picker::pick_ssh_key() else {
+        return Ok(None);
+    };
+    Ok(Some(state.adopt_file_access(path)?))
+}
+
+fn ensure_clone_destination_access(state: &mut AppState, dest: &Path) -> Result<(), String> {
+    let parent = dest.parent().unwrap_or(dest);
+    let grant = state.grant_for(parent);
+    if grant.bookmark.is_some() || !git_core::requires_bookmarks() {
+        sandbox_access::restore_folder(&grant).map(|_| ())
+            .map_err(|error| error.to_string())
+    } else {
+        Err(if state.git_settings.language.as_deref() == Some("zh-CN") {
+            "请先选择克隆目标文件夹"
+        } else {
+            "Select a destination folder first"
+        }
+        .to_string())
+    }
+}
+
 fn handle_clone_message(
     state: &mut AppState,
     msg: CloneMessage,
@@ -5545,8 +5646,15 @@ fn handle_clone_message(
             Task::none()
         }
         CloneMessage::BrowseParent => {
-            if let Some(path) = file_picker::pick_folder() {
-                state.clone_dialog.parent_dir = path.display().to_string();
+            match pick_granted_folder(state) {
+                Ok(Some(path)) => {
+                    state.clone_dialog.parent_dir = path.display().to_string();
+                    state.clone_dialog.error = None;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    state.clone_dialog.error = Some(error);
+                }
             }
             Task::none()
         }
@@ -5565,6 +5673,10 @@ fn handle_clone_message(
             };
             // Check if destination already exists
             let dest = state.clone_dialog.destination_path();
+            if let Err(error) = ensure_clone_destination_access(state, &dest) {
+                state.clone_dialog.error = Some(error);
+                return Task::none();
+            }
             if dest.exists() {
                 state.clone_dialog.error =
                     Some(i18n.clone_error_dir_exists.to_string());

@@ -33,6 +33,9 @@ struct GitHubAsset {
 /// Check GitHub for a newer release than `current_version`.
 /// Returns `Some(UpdateInfo)` if a newer version exists.
 pub async fn check_for_update(current_version: String) -> Result<Option<UpdateInfo>, String> {
+    if !crate::capability::github_updater() {
+        return Ok(None);
+    }
     let current_version = current_version.as_str();
     let url = format!("{}/repos/{}/releases/latest", GITHUB_API, GITHUB_REPO);
 
