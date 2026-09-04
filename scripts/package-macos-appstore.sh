@@ -91,8 +91,12 @@ cat > "$INFO_PLIST" <<EOF
   <key>CFBundleVersion</key>
   <string>${BUILD_NUMBER}</string>
 ${ICON_KEY}
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSDocumentsFolderUsageDescription</key>
