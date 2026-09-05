@@ -6,7 +6,7 @@ fn open(url: &objc2_foundation::NSURL) -> Result<(), String> {
     if objc2_app_kit::NSWorkspace::sharedWorkspace().openURL(url) {
         Ok(())
     } else {
-        Err("macOS 无法打开此文件或链接".into())
+        Err("macOS could not open this file or URL".into())
     }
 }
 
@@ -28,7 +28,7 @@ pub fn open_url(value: &str) -> Result<(), String> {
     {
         let url =
             objc2_foundation::NSURL::URLWithString(&objc2_foundation::NSString::from_str(value))
-                .ok_or("无效链接")?;
+                .ok_or("Invalid URL")?;
         open(&url)
     }
     #[cfg(not(target_os = "macos"))]

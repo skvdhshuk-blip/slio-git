@@ -1134,6 +1134,15 @@ pub struct I18n {
 
     // ── Settings view ──
     pub sv_title: &'static str,
+    pub sv_identity_title: &'static str,
+    pub sv_name_label: &'static str,
+    pub sv_email_label: &'static str,
+    pub sv_ssh_key_label: &'static str,
+    pub sv_import_key: &'static str,
+    pub sv_store_note: &'static str,
+    pub sv_key_imported: &'static str,
+    pub access_reauthorize_fmt: &'static str,
+    pub access_clone_destination: &'static str,
     pub sv_section_commit: &'static str,
     pub sv_sign_off: &'static str,
     pub sv_enable_staging: &'static str,
@@ -2590,6 +2599,15 @@ impl I18n {
 
             // ── Settings view ──
             sv_title: "Git 设置",
+            sv_identity_title: "提交身份",
+            sv_name_label: "姓名:",
+            sv_email_label: "邮箱:",
+            sv_ssh_key_label: "SSH 私钥:",
+            sv_import_key: "导入…",
+            sv_store_note: "App Store 版在沙箱里运行：不读 ~/.ssh 和全局 gitconfig，不跑 hooks，也不检查 GitHub 更新。",
+            sv_key_imported: "已导入 SSH 私钥",
+            access_reauthorize_fmt: "重新授权 Git 目录：{}",
+            access_clone_destination: "请先选择克隆目标文件夹",
             sv_section_commit: "提交",
             sv_sign_off: "签署提交 (--sign-off)",
             sv_enable_staging: "启用暂存区",
@@ -4036,6 +4054,15 @@ pub static ZH_CN: I18n = I18n {
 
     // ── Settings view ──
     sv_title: "Git 设置",
+    sv_identity_title: "提交身份",
+    sv_name_label: "姓名:",
+    sv_email_label: "邮箱:",
+    sv_ssh_key_label: "SSH 私钥:",
+    sv_import_key: "导入…",
+    sv_store_note: "App Store 版在沙箱里运行：不读 ~/.ssh 和全局 gitconfig，不跑 hooks，也不检查 GitHub 更新。",
+    sv_key_imported: "已导入 SSH 私钥",
+    access_reauthorize_fmt: "重新授权 Git 目录：{}",
+    access_clone_destination: "请先选择克隆目标文件夹",
     sv_section_commit: "提交",
     sv_sign_off: "签署提交 (--sign-off)",
     sv_enable_staging: "启用暂存区",
@@ -5481,6 +5508,15 @@ pub static EN: I18n = I18n {
 
     // ── Settings view ──
     sv_title: "Git Settings",
+    sv_identity_title: "Commit identity",
+    sv_name_label: "Name:",
+    sv_email_label: "Email:",
+    sv_ssh_key_label: "SSH private key:",
+    sv_import_key: "Import…",
+    sv_store_note: "The App Store build is sandboxed: it does not read ~/.ssh or global gitconfig, does not run hooks, and does not check GitHub for updates.",
+    sv_key_imported: "Imported SSH private key",
+    access_reauthorize_fmt: "Authorize Git directory again: {}",
+    access_clone_destination: "Select a destination folder first",
     sv_section_commit: "Commit",
     sv_sign_off: "Sign Off Commits (--sign-off)",
     sv_enable_staging: "Enable Staging Area",

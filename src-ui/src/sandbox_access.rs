@@ -20,8 +20,8 @@ pub enum AccessError {
 impl std::fmt::Display for AccessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NeedsReselect { path } => write!(f, "请重新选择并授权：{}", path.display()),
-            Self::Failed { path, details } => write!(f, "无法访问 {}：{details}", path.display()),
+            Self::NeedsReselect { path } => write!(f, "Select and authorize this path again: {}", path.display()),
+            Self::Failed { path, details } => write!(f, "Cannot access {}: {details}", path.display()),
         }
     }
 }

@@ -471,27 +471,8 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
     )
     .padding([8, 14]);
 
-    let zh = settings.language.as_deref() == Some("zh-CN")
-        || (settings.language.is_none() && i18n.sv_title.contains("设置"));
-    let identity_title = if zh {
-        "提交身份"
-    } else {
-        "Commit identity"
-    };
-    let name_label = if zh { "姓名:" } else { "Name:" };
-    let email_label = if zh { "邮箱:" } else { "Email:" };
-    let ssh_label = if zh {
-        "SSH 私钥:"
-    } else {
-        "SSH private key:"
-    };
-    let ssh_import = if zh { "导入…" } else { "Import…" };
     let store_note = if git_core::is_app_store_build() {
-        if zh {
-            "App Store 版在沙箱里运行：不读 ~/.ssh 和全局 gitconfig，不跑 hooks，也不检查 GitHub 更新。"
-        } else {
-            "The App Store build is sandboxed: it does not read ~/.ssh or global gitconfig, does not run hooks, and does not check GitHub for updates."
-        }
+        i18n.sv_store_note
     } else {
         ""
     };
@@ -500,7 +481,7 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
         Column::new()
             .spacing(4)
             .push(
-                Text::new(identity_title)
+                Text::new(i18n.sv_identity_title)
                     .size(10)
                     .color(theme::darcula::TEXT_DISABLED),
             )
@@ -509,7 +490,7 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
                     .spacing(8)
                     .align_y(Alignment::Center)
                     .push(
-                        Text::new(name_label)
+                        Text::new(i18n.sv_name_label)
                             .size(12)
                             .color(theme::darcula::TEXT_SECONDARY),
                     )
@@ -527,7 +508,7 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
                     .spacing(8)
                     .align_y(Alignment::Center)
                     .push(
-                        Text::new(email_label)
+                        Text::new(i18n.sv_email_label)
                             .size(12)
                             .color(theme::darcula::TEXT_SECONDARY),
                     )
@@ -545,7 +526,7 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
                     .spacing(8)
                     .align_y(Alignment::Center)
                     .push(
-                        Text::new(ssh_label)
+                        Text::new(i18n.sv_ssh_key_label)
                             .size(12)
                             .color(theme::darcula::TEXT_SECONDARY),
                     )
@@ -558,7 +539,7 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
                         .width(Length::Fill),
                     )
                     .push(button::ghost(
-                        ssh_import,
+                        i18n.sv_import_key,
                         Some(SettingsMessage::ImportSshKey),
                     )),
             )

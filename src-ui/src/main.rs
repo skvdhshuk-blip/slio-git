@@ -1049,11 +1049,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             log::warn!("Failed to persist git settings: {}", e);
                         }
                         state.set_success(
-                            if i18n.sv_title.contains("设置") {
-                                "已导入 SSH 私钥"
-                            } else {
-                                "Imported SSH private key"
-                            },
+                            i18n.sv_key_imported,
                             Some(path.display().to_string()),
                             "settings.ssh",
                         );
@@ -5383,7 +5379,11 @@ fn prepare_repository_with_access(state: &mut AppState, path: &Path) -> Result<P
                     return Err(error);
                 };
                 let Some(selected) = rfd::FileDialog::new()
-                    .set_title(format!("重新授权 Git 目录：{}", missing.display()))
+                    .set_title(
+                        i18n::locale(state.git_settings.language.as_deref())
+                            .access_reauthorize_fmt
+                            .replace("{}", &missing.display().to_string()),
+                    )
                     .pick_folder()
                 else {
                     return Err(error);
@@ -5422,12 +5422,9 @@ fn ensure_clone_destination_access(state: &mut AppState, dest: &Path) -> Result<
         state.pending_access = vec![lease];
         Ok(parent)
     } else {
-        Err(if state.git_settings.language.as_deref() == Some("zh-CN") {
-            "请先选择克隆目标文件夹"
-        } else {
-            "Select a destination folder first"
-        }
-        .to_string())
+        Err(i18n::locale(state.git_settings.language.as_deref())
+            .access_clone_destination
+            .to_string())
     }
 }
 
