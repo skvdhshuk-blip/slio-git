@@ -22,8 +22,10 @@ fn watch_repository(
     repo_path: &Path,
 ) -> impl iced::futures::Stream<Item = RepositoryWatchEvent> + use<> {
     let repo_path = repo_path.to_path_buf();
+    let access = crate::sandbox_access::snapshot();
 
     stream::channel(32, async move |mut output| {
+        let _access = access;
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut watcher = match RecommendedWatcher::new(
             move |result| {
@@ -128,7 +130,15 @@ fn watch_paths(repo_path: &Path) -> Vec<PathBuf> {
 
     if let Some(git_dir) = resolve_git_dir(repo_path) {
         if !git_dir.starts_with(repo_path) && !paths.iter().any(|candidate| candidate == &git_dir) {
-            paths.push(git_dir);
+            paths.push(git_dir.clone());
+        }
+        if let Ok(common) = std::fs::read_to_string(git_dir.join("commondir")) {
+            let common = git_dir.join(common.trim());
+            if let Ok(common) = common.canonicalize() {
+                if !paths.iter().any(|path| common.starts_with(path)) {
+                    paths.push(common);
+                }
+            }
         }
     }
 

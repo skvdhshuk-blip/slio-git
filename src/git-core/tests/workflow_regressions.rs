@@ -61,14 +61,14 @@ fn create_conflicted_repository() -> (TestRepo, String) {
     git(repo.path(), &["add", "shared.txt"]).expect("failed to stage main version");
     git(repo.path(), &["commit", "-m", "main change"]).expect("failed to commit main");
 
-    let output = Command::new("git")
-        .args(["merge", "feature"])
-        .current_dir(repo.path())
-        .output()
-        .expect("failed to merge feature branch");
+    #[cfg(not(feature = "app-store"))]
+    assert!(git(repo.path(), &["merge", "feature"]).is_err());
+    #[cfg(feature = "app-store")]
     assert!(
-        !output.status.success(),
-        "expected merge to create a conflict"
+        Repository::open(repo.path())
+            .unwrap()
+            .merge_branch("feature")
+            .is_err()
     );
 
     (repo, main_branch)
@@ -237,14 +237,14 @@ fn linked_worktree_refresh_clears_merge_state_after_merge_commit() {
     git(&worktree_path, &["commit", "-m", "worktree change"])
         .expect("failed to commit worktree change");
 
-    let merge_output = Command::new("git")
-        .args(["merge", "master", "--no-edit"])
-        .current_dir(&worktree_path)
-        .output()
-        .expect("failed to start merge");
+    #[cfg(not(feature = "app-store"))]
+    assert!(git(&worktree_path, &["merge", "master", "--no-edit"]).is_err());
+    #[cfg(feature = "app-store")]
     assert!(
-        !merge_output.status.success(),
-        "merge should stop on conflict"
+        Repository::open(&worktree_path)
+            .unwrap()
+            .merge_branch("master")
+            .is_err()
     );
 
     let mut worktree_repo =

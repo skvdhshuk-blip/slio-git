@@ -8,7 +8,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-Edition%202024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Iced](https://img.shields.io/badge/Iced-0.14-blue?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIvPjwvc3ZnPg==)](https://iced.rs)
-[![Release](https://img.shields.io/badge/release-v0.0.29-brightgreen)](https://github.com/sk-wang/slio-git/releases/latest)
+[![Release](https://img.shields.io/badge/release-v0.1.0-brightgreen)](https://github.com/skvdhshuk-blip/slio-git/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)](LICENSE-MIT)
 
 </div>
@@ -33,16 +33,16 @@ Most Git GUIs are either Electron-heavy or missing the workflow polish that make
 
 ### macOS
 
-Download **slio-git.dmg** from the [latest release](https://github.com/sk-wang/slio-git/releases/latest).
+Download **slio-git.dmg** from the [latest release](https://github.com/skvdhshuk-blip/slio-git/releases/latest).
 
 ### Windows
 
-Download **slio-git-windows-x86_64.zip** from the [latest release](https://github.com/sk-wang/slio-git/releases/latest), extract it, and run `slio-git.exe`.
+Download **slio-git-windows-x86_64.zip** from the [latest release](https://github.com/skvdhshuk-blip/slio-git/releases/latest), extract it, and run `slio-git.exe`.
 
 ### Build from source
 
 ```bash
-git clone https://github.com/sk-wang/slio-git.git
+git clone https://github.com/skvdhshuk-blip/slio-git.git
 cd slio-git
 cargo build --release -p src-ui
 # Binary: target/release/src-ui
@@ -53,6 +53,27 @@ bash scripts/package-macos-dmg.sh
 # Or cross-compile a Windows ZIP release:
 bash scripts/package-windows-zip.sh
 ```
+
+### Mac App Store
+
+The App Store build is sandboxed (`cargo build -p src-ui --features app-store`). It can open repositories you pick, commit locally, and push/pull over HTTPS or an imported SSH key. It does **not** read `~/.ssh` or global `~/.gitconfig`, run Git hooks, spawn system `git`, or check GitHub Releases. Updates come from the App Store. Set `user.name` / `user.email` in Settings; import an SSH private key if you use SSH remotes.
+
+Both channels are built from `main`. MAS also supports native rebase/history editing, cherry-pick/revert, conflict recovery, patch export and force-with-lease. Ordinary builds keep their existing system Git workflows. Either channel can recover a slio native operation; MAS asks you to finish externally started operations in their original tool.
+
+```bash
+# Requires valid app + installer identities and a matching provisioning profile:
+bash scripts/package-macos-appstore.sh
+# Explicit local sandbox test; never produces an App Store distribution package:
+bash scripts/package-macos-appstore.sh --mode sandbox-test
+# Validate signing inputs without building:
+bash scripts/package-macos-appstore.sh --preflight-only
+```
+
+Packages live in `dist/desktop/<arch>/` and `dist/mas/<arch>/<mode>/`. Each output includes a manifest with its source revision, features, version, build number, architecture, signing metadata and SHA-256 hashes. Cargo caches are isolated under `$CARGO_TARGET_DIR/package/<channel>/<arch>/` (default `target/package/`). Set `MACOS_TARGET` to select `aarch64-apple-darwin` or `x86_64-apple-darwin`.
+
+Developer `cargo run` builds keep the full desktop capabilities, including system Git. See [distribution and recovery contracts](docs/architecture/distribution.md).
+
+See the hosted [privacy policy](https://skvdhshuk-blip.github.io/slio-git/privacy.html) or [docs/privacy.md](docs/privacy.md).
 
 Requires Rust 1.85+ (Edition 2024) and macOS 12+ / Linux / Windows 10+.
 

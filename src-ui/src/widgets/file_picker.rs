@@ -23,6 +23,13 @@ pub fn pick_file() -> Option<PathBuf> {
     FileDialog::new().set_title("Select File").pick_file()
 }
 
+/// Open a private-key selection dialog
+pub fn pick_ssh_key() -> Option<PathBuf> {
+    FileDialog::new()
+        .set_title("Select SSH private key")
+        .pick_file()
+}
+
 /// Save file dialog
 pub fn save_file(default_name: &str) -> Option<PathBuf> {
     FileDialog::new()

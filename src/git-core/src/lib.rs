@@ -36,8 +36,10 @@ mod tests {
     }
 }
 
+pub mod auth;
 pub mod blame;
 pub mod branch;
+pub mod capability;
 pub mod clone;
 pub mod commit;
 pub mod commit_actions;
@@ -49,6 +51,8 @@ pub mod graph;
 pub mod history;
 pub mod index;
 pub mod llm;
+mod native;
+#[cfg(not(feature = "app-store"))]
 pub mod process;
 pub mod rebase;
 pub mod reflog;
@@ -61,8 +65,14 @@ pub mod tag;
 pub mod updater;
 pub mod worktree;
 
+pub use auth::{
+    AuthContext, configured_identity, context as auth_context, set_context as set_auth_context,
+};
 pub use branch::{
     Branch, BranchRef, CheckoutOutcome, RefKind, branches_containing_commit, checkout_ref,
+};
+pub use capability::{
+    github_updater, implicit_home_ssh, is_app_store_build, requires_bookmarks, system_git,
 };
 pub use commit::{
     CommitChangeStatus, CommitChangedFile, CommitInfo, amend_commit, create_commit,
@@ -98,6 +108,7 @@ pub use index::{
     get_file_hunks, get_index_hunks, get_status, stage_file, stage_hunk, stage_lines, unstage_file,
     unstage_hunk, unstage_lines,
 };
+#[cfg(not(feature = "app-store"))]
 pub use process::{background_command, configure_background_command, git_command};
 pub use rebase::{
     InteractiveRebasePlan, RebaseResult, RebaseStatus, RebaseTodoEntry, get_current_rebase_step,

@@ -6,6 +6,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+app-store = ["dep:ssh2"]
+
 [dependencies]
 git2 = { workspace = true }
 notify = { workspace = true }
@@ -22,5 +26,6 @@ dirs-next = { workspace = true }
 similar = "3.0.0"
 reqwest = { workspace = true }
 
-[dev-dependencies]
 tempfile = { workspace = true }
+fs2 = "0.4.3"
+ssh2 = { version = "0.9.6", optional = true }

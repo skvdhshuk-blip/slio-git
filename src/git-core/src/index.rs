@@ -1,7 +1,9 @@
 //! Index (staging area) operations for git-core
 
 use crate::error::GitError;
-use crate::process::git_command;
+#[cfg_attr(feature = "app-store", path = "index/native.rs")]
+#[cfg_attr(not(feature = "app-store"), path = "index/desktop.rs")]
+mod backend;
 use crate::repository::Repository;
 use git2::{DiffOptions, StatusOptions};
 use log::info;
@@ -56,6 +58,7 @@ pub fn get_index(repo: &Repository) -> Result<Index, GitError> {
 
 /// Stage a file
 pub fn stage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
+    crate::native::allow_edit(repo)?;
     info!("Staging file: {:?}", path);
 
     let repo_lock = repo.inner.write().unwrap();
@@ -81,6 +84,7 @@ pub fn stage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
 
 /// Unstage a file by resetting HEAD to the given path
 pub fn unstage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
+    crate::native::allow_edit(repo)?;
     info!("Unstaging file: {:?}", path);
 
     let repo_lock = repo.inner.read().unwrap();
@@ -164,6 +168,7 @@ pub fn unstage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
 
 /// Stage all files
 pub fn stage_all(repo: &Repository) -> Result<(), GitError> {
+    crate::native::allow_edit(repo)?;
     info!("Staging all files");
 
     let repo_lock = repo.inner.write().unwrap();
@@ -189,28 +194,10 @@ pub fn stage_all(repo: &Repository) -> Result<(), GitError> {
 
 /// Unstage all files
 pub fn unstage_all(repo: &Repository) -> Result<(), GitError> {
-    let repo_path = repo.command_cwd();
-
-    // Run git reset HEAD -- .
-    let output = git_command()
-        .args(["reset", "HEAD", "--", "."])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "unstage_all".to_string(),
-            details: format!("Failed to execute git reset: {}", e),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "unstage_all".to_string(),
-            details: format!(
-                "git reset failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
+    crate::native::allow_edit(repo)?;
+    let repo_lock = repo.inner.write().unwrap();
+    let obj = repo_lock.head()?.peel_to_commit()?;
+    repo_lock.reset(obj.as_object(), git2::ResetType::Mixed, None)?;
     Ok(())
 }
 
@@ -475,6 +462,7 @@ fn parse_range_part(part: &str) -> (u32, u32) {
 
 /// Stage a specific hunk of a file
 pub fn stage_hunk(repo: &Repository, file_path: &Path, hunk_index: usize) -> Result<(), GitError> {
+    crate::native::allow_edit(repo)?;
     info!("Staging hunk {} of file: {:?}", hunk_index, file_path);
 
     // Get the diff for this file
@@ -509,7 +497,9 @@ fn generate_hunk_patch(file_path: &Path, hunk: &Hunk) -> Result<String, GitError
     patch.push_str(&format!("--- a/{}\n", file_path.to_string_lossy()));
     patch.push_str(&format!("+++ b/{}\n", file_path.to_string_lossy()));
     patch.push_str(&hunk.header);
-    patch.push('\n');
+    if !hunk.header.ends_with('\n') {
+        patch.push('\n');
+    }
 
     // Add the hunk lines
     for line in &hunk.lines {
@@ -525,49 +515,7 @@ fn generate_hunk_patch(file_path: &Path, hunk: &Hunk) -> Result<String, GitError
 
 /// Apply a patch to the index using git apply --cached
 fn apply_patch_cached(repo: &Repository, patch: &str) -> Result<(), GitError> {
-    let repo_path = repo.command_cwd();
-
-    // Write patch to a temporary file
-    let mut temp_path = std::env::temp_dir();
-    temp_path.push(format!(
-        "patch_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-
-    std::fs::write(&temp_path, patch).map_err(|e| GitError::OperationFailed {
-        operation: "apply_patch_cached".to_string(),
-        details: format!("Failed to write patch file: {}", e),
-    })?;
-
-    // Run git apply --cached
-    let output = git_command()
-        .args(["apply", "--cached", "--unidiff-zero", "--whitespace=nowarn"])
-        .arg(temp_path.as_path())
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "apply_patch_cached".to_string(),
-            details: format!("Failed to execute git apply: {}", e),
-        })?;
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_path);
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "apply_patch_cached".to_string(),
-            details: format!(
-                "git apply failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
-    Ok(())
+    backend::apply_patch_cached(repo, patch)
 }
 
 /// Unstage a hunk (move changes back to workdir)
@@ -577,6 +525,7 @@ pub fn unstage_hunk(
     file_path: &Path,
     hunk_index: usize,
 ) -> Result<(), GitError> {
+    crate::native::allow_edit(repo)?;
     info!("Unstaging hunk {} of file: {:?}", hunk_index, file_path);
 
     // Get the diff between index and HEAD for this file
@@ -672,76 +621,28 @@ fn generate_reverse_hunk_patch(file_path: &Path, hunk: &Hunk) -> Result<String, 
 
 /// Apply a patch to the workdir using git apply
 fn apply_patch_workdir(repo: &Repository, patch: &str) -> Result<(), GitError> {
-    let repo_path = repo.command_cwd();
-
-    // Write patch to a temporary file
-    let mut temp_path = std::env::temp_dir();
-    temp_path.push(format!(
-        "patch_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-
-    std::fs::write(&temp_path, patch).map_err(|e| GitError::OperationFailed {
-        operation: "apply_patch_workdir".to_string(),
-        details: format!("Failed to write patch file: {}", e),
-    })?;
-
-    // Run git apply (not --cached, applies to workdir)
-    let output = git_command()
-        .args(["apply", "--unidiff-zero", "--whitespace=nowarn"])
-        .arg(temp_path.as_path())
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "apply_patch_workdir".to_string(),
-            details: format!("Failed to execute git apply: {}", e),
-        })?;
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_path);
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "apply_patch_workdir".to_string(),
-            details: format!(
-                "git apply failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
-    Ok(())
+    backend::apply_patch_workdir(repo, patch)
 }
 
 /// Reset a file in the index to HEAD state
 fn reset_file_in_index(repo: &Repository, file_path: &Path) -> Result<(), GitError> {
-    let repo_path = repo.command_cwd();
-
-    // Run git reset HEAD -- file_path
-    let output = git_command()
-        .args(["reset", "HEAD", "--"])
-        .arg(file_path)
-        .current_dir(&repo_path)
-        .output()
+    let repo_lock = repo.inner.write().unwrap();
+    let head = repo_lock.head().map_err(|e| GitError::OperationFailed {
+        operation: "reset_file_in_index".to_string(),
+        details: e.to_string(),
+    })?;
+    let object = head
+        .peel(git2::ObjectType::Commit)
         .map_err(|e| GitError::OperationFailed {
             operation: "reset_file_in_index".to_string(),
-            details: format!("Failed to execute git reset: {}", e),
+            details: e.to_string(),
         })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
+    repo_lock
+        .reset_default(Some(&object), [file_path])
+        .map_err(|e| GitError::OperationFailed {
             operation: "reset_file_in_index".to_string(),
-            details: format!(
-                "git reset failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
+            details: e.to_string(),
+        })?;
     Ok(())
 }
 
@@ -960,6 +861,7 @@ pub fn stage_lines(
     line_indices: &[usize],
     side: LineSide,
 ) -> Result<(), GitError> {
+    crate::native::allow_edit(repo)?;
     info!(
         "Staging lines {:?} (side {:?}) from hunk {} of {:?}",
         line_indices, side, hunk_index, file_path
@@ -990,6 +892,7 @@ pub fn unstage_lines(
     line_indices: &[usize],
     side: LineSide,
 ) -> Result<(), GitError> {
+    crate::native::allow_edit(repo)?;
     info!(
         "Unstaging lines {:?} (side {:?}) from hunk {} of {:?}",
         line_indices, side, hunk_index, file_path
@@ -1012,6 +915,7 @@ pub fn unstage_lines(
 /// Discard changes for a file: reset both index and worktree to HEAD.
 /// For untracked files, removes the file from the working directory.
 pub fn discard_file(repo: &Repository, file_path: &Path) -> Result<(), GitError> {
+    crate::native::allow_edit(repo)?;
     let repo_path = repo.command_cwd();
     let full_path = repo_path.join(file_path);
 
@@ -1028,26 +932,29 @@ pub fn discard_file(repo: &Repository, file_path: &Path) -> Result<(), GitError>
     };
 
     if tracked {
-        // git checkout HEAD -- file_path (restore to HEAD in both index and worktree)
-        let output = git_command()
-            .args(["checkout", "HEAD", "--"])
-            .arg(file_path)
-            .current_dir(&repo_path)
-            .output()
+        let repo_lock = repo.inner.write().unwrap();
+        let head = repo_lock
+            .head()
+            .and_then(|head| head.peel_to_commit())
             .map_err(|e| GitError::OperationFailed {
                 operation: "discard_file".to_string(),
-                details: format!("Failed to execute git checkout: {}", e),
+                details: e.to_string(),
             })?;
-
-        if !output.status.success() {
-            return Err(GitError::OperationFailed {
+        repo_lock
+            .reset_default(Some(head.as_object()), [file_path])
+            .map_err(|e| GitError::OperationFailed {
                 operation: "discard_file".to_string(),
-                details: format!(
-                    "git checkout failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
-        }
+                details: e.to_string(),
+            })?;
+        let mut opts = git2::build::CheckoutBuilder::new();
+        opts.force();
+        opts.path(file_path);
+        repo_lock
+            .checkout_tree(head.as_object(), Some(&mut opts))
+            .map_err(|e| GitError::OperationFailed {
+                operation: "discard_file".to_string(),
+                details: e.to_string(),
+            })?;
     } else {
         // Untracked: remove file/directory
         if full_path.is_dir() {

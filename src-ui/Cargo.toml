@@ -6,6 +6,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+app-store = ["git-core/app-store"]
+
 [dependencies]
 git-core = { path = "../src/git-core" }
 git2 = { workspace = true }
@@ -26,7 +30,6 @@ unicode-width = "0.2"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-open = "5"
 sys-locale = "0.3"
 
 [dev-dependencies]
@@ -34,3 +37,10 @@ tempfile = { workspace = true }
 
 [build-dependencies]
 winresource = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+open = "5"

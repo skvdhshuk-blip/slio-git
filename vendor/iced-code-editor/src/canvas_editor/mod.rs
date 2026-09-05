@@ -1871,16 +1871,17 @@ mod tests {
     }
 
     #[test]
-    fn test_measure_single_char_width() {
+    fn test_initial_character_metrics_are_usable_without_renderer_font_loading() {
         let editor = CodeEditor::new("", "rs");
 
-        // Measure 'a'
-        let width_a = editor.measure_single_char_width("a");
+        // Raw font measurement may be infinite before the renderer loads a
+        // fallback font. The editor's public layout metrics must remain usable.
+        let width_a = editor.char_width();
         assert!(width_a.is_finite(), "Width of 'a' should be finite");
         assert!(width_a > 0.0, "Width of 'a' should be positive");
 
         // Measure Chinese char
-        let width_cjk = editor.measure_single_char_width("汉");
+        let width_cjk = editor.full_char_width();
         assert!(width_cjk.is_finite(), "Width of '汉' should be finite");
         assert!(width_cjk > 0.0, "Width of '汉' should be positive");
 

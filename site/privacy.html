@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>slio-git Privacy Policy</title>
+<meta name="description" content="slio-git does not collect personal data. Settings stay on your computer.">
+<link rel="canonical" href="https://skvdhshuk-blip.github.io/slio-git/privacy.html">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#09090b;--bg-card:#111114;
+  --border:#222228;--border-hover:#333340;
+  --text:#e4e4e7;--text-dim:#71717a;--text-muted:#52525b;
+  --accent:#6366f1;
+  --radius:16px;--radius-pill:9999px;
+  --font:'Inter',system-ui,-apple-system,sans-serif;
+}
+html{scroll-behavior:smooth;font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.6}
+a{color:var(--accent);text-decoration:none}
+nav{position:fixed;top:0;left:0;right:0;z-index:100;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);background:rgba(9,9,11,.8);border-bottom:1px solid var(--border)}
+.nav-inner{max-width:1200px;margin:0 auto;padding:0 24px;height:64px;display:flex;align-items:center;justify-content:space-between}
+.nav-logo{font-weight:800;font-size:1.125rem;letter-spacing:-.02em;text-decoration:none}
+.nav-logo span{background:linear-gradient(135deg,var(--accent),#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.nav-links{display:flex;align-items:center;gap:24px}
+.nav-links a{color:var(--text-dim);font-size:.875rem;font-weight:500}
+.nav-links a:hover,.nav-links a[aria-current="page"]{color:var(--text)}
+.lang-toggle{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-pill);padding:4px;display:flex;gap:2px}
+.lang-btn{padding:4px 12px;border-radius:var(--radius-pill);font-size:.75rem;font-weight:600;border:none;cursor:pointer;background:transparent;color:var(--text-dim)}
+.lang-btn.active{background:var(--accent);color:#fff}
+.btn-download{display:inline-flex;align-items:center;background:var(--accent);color:#fff!important;padding:8px 20px;border-radius:var(--radius-pill);font-size:.875rem;font-weight:600}
+.legal{max-width:760px;margin:0 auto;padding:120px 24px 80px}
+.legal h1{font-size:clamp(1.75rem,4vw,2.5rem);font-weight:800;letter-spacing:-.03em;margin-bottom:16px}
+.legal h2{font-size:1.15rem;font-weight:700;margin:36px 0 12px}
+.legal p,.legal li{color:var(--text-dim);margin-bottom:12px}
+.legal ul{padding-left:1.2em}
+footer{border-top:1px solid var(--border);padding:40px 24px;text-align:center;color:var(--text-muted);font-size:.85rem}
+footer a{color:var(--text-dim)}
+footer .footer-links{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-top:12px}
+@media(max-width:768px){
+  .nav-links a:not(.btn-download){display:none}
+}
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="index.html"><span>slio-git</span></a>
+    <div class="nav-links">
+      <a href="index.html#features" data-i18n="nav_features">Features</a>
+      <a href="index.html#limits" data-i18n="nav_limits">Store limits</a>
+      <a href="privacy.html" aria-current="page" data-i18n="nav_privacy">Privacy</a>
+      <a href="https://github.com/skvdhshuk-blip/slio-git" target="_blank">GitHub</a>
+      <div class="lang-toggle">
+        <button class="lang-btn" onclick="setLang('en')">EN</button>
+        <button class="lang-btn" onclick="setLang('zh')">CN</button>
+      </div>
+      <a id="nav-mas" href="https://apps.apple.com/app/id6808674281" class="btn-download" data-i18n="nav_mas">Mac App Store</a>
+    </div>
+  </div>
+</nav>
+
+<main class="legal">
+  <h1 data-i18n="title">slio-git Privacy Policy</h1>
+  <p data-i18n="intro">slio-git is a Git client that runs on your computer.</p>
+
+  <h2 data-i18n="h_collect">What we collect</h2>
+  <p data-i18n="p_collect">Nothing. slio-git does not create an account and does not send repository contents, paths, or identifiers to a slio-git server.</p>
+
+  <h2 data-i18n="h_local">What stays on this computer</h2>
+  <p data-i18n="p_local">Settings, recent-project bookmarks, an optional imported SSH key bookmark, and commit identity fields are stored in the app container.</p>
+
+  <h2 data-i18n="h_network">Network</h2>
+  <ul>
+    <li data-i18n="n1">Git fetch, pull, and push talk only to remotes you configure.</li>
+    <li data-i18n="n2">AI commit messages are off by default. If you enable them, slio-git sends the staged diff and recent log to the API URL you enter.</li>
+    <li data-i18n="n3">The Mac App Store build does not check GitHub Releases. Updates come from the App Store.</li>
+  </ul>
+
+  <h2 data-i18n="h_perm">Permissions</h2>
+  <p data-i18n="p_perm">macOS folder access is used only for repositories and files you select. The App Store build does not read ~/.ssh or your global Git config unless you import a key or fill in name and email in Settings.</p>
+
+  <h2 data-i18n="h_contact">Contact</h2>
+  <p><a href="https://github.com/skvdhshuk-blip/slio-git">github.com/skvdhshuk-blip/slio-git</a></p>
+</main>
+
+<footer>
+  <p>slio-git &copy; 2026. MIT / Apache-2.0</p>
+  <div class="footer-links">
+    <a href="privacy.html" data-i18n="nav_privacy">Privacy</a>
+    <a href="https://github.com/skvdhshuk-blip/slio-git">GitHub</a>
+    <a id="footer-mas" href="https://apps.apple.com/app/id6808674281">App Store</a>
+  </div>
+</footer>
+
+<script>
+const MAS_URL = "https://apps.apple.com/app/id6808674281";
+const translations = {
+  en: {
+    nav_features: "Features",
+    nav_limits: "Store limits",
+    nav_privacy: "Privacy",
+    nav_mas: "Mac App Store",
+    title: "slio-git Privacy Policy",
+    intro: "slio-git is a Git client that runs on your computer.",
+    h_collect: "What we collect",
+    p_collect: "Nothing. slio-git does not create an account and does not send repository contents, paths, or identifiers to a slio-git server.",
+    h_local: "What stays on this computer",
+    p_local: "Settings, recent-project bookmarks, an optional imported SSH key bookmark, and commit identity fields are stored in the app container.",
+    h_network: "Network",
+    n1: "Git fetch, pull, and push talk only to remotes you configure.",
+    n2: "AI commit messages are off by default. If you enable them, slio-git sends the staged diff and recent log to the API URL you enter.",
+    n3: "The Mac App Store build does not check GitHub Releases. Updates come from the App Store.",
+    h_perm: "Permissions",
+    p_perm: "macOS folder access is used only for repositories and files you select. The App Store build does not read ~/.ssh or your global Git config unless you import a key or fill in name and email in Settings.",
+    h_contact: "Contact"
+  },
+  zh: {
+    nav_features: "功能",
+    nav_limits: "商店限制",
+    nav_privacy: "隐私",
+    nav_mas: "Mac App Store",
+    title: "slio-git 隐私政策",
+    intro: "slio-git 是运行在你电脑上的 Git 客户端。",
+    h_collect: "我们收集什么",
+    p_collect: "什么都不收集。slio-git 不创建账号，也不把仓库内容、路径或标识符发到 slio-git 服务器。",
+    h_local: "什么留在这台电脑",
+    p_local: "设置、最近项目书签、可选导入的 SSH 私钥书签，以及提交身份字段，都存在应用容器里。",
+    h_network: "网络",
+    n1: "Git 的 fetch、pull、push 只连接你配置的远端。",
+    n2: "AI 提交信息默认关闭。若你打开，slio-git 会把暂存差异和最近日志发到你填写的 API 地址。",
+    n3: "Mac App Store 版不检查 GitHub Releases。更新只走 App Store。",
+    h_perm: "权限",
+    p_perm: "macOS 文件夹权限只用于你选中的仓库和文件。商店版不会读取 ~/.ssh 或全局 Git 配置，除非你导入私钥或在设置里填写姓名和邮箱。",
+    h_contact: "联系"
+  }
+};
+
+function setLang(lang) {
+  document.querySelectorAll(".lang-btn").forEach(function (b) { b.classList.remove("active"); });
+  var btn = document.querySelector('.lang-btn[onclick="setLang(\'' + lang + '\')"]');
+  if (btn) btn.classList.add("active");
+  document.querySelectorAll("[data-i18n]").forEach(function (el) {
+    var key = el.getAttribute("data-i18n");
+    if (translations[lang] && translations[lang][key]) el.innerHTML = translations[lang][key];
+  });
+  document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+  ["nav-mas", "footer-mas"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.href = MAS_URL;
+  });
+}
+
+setLang((navigator.language || "en").startsWith("zh") ? "zh" : "en");
+</script>
+</body>
+</html>

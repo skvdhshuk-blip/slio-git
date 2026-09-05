@@ -3,7 +3,7 @@
 use crate::i18n::I18n;
 use crate::theme::{self, Surface};
 use crate::widgets;
-use crate::widgets::{button, scrollable, text_input};
+use crate::widgets::{OptionalPush, button, scrollable, text_input};
 use iced::widget::{Column, Container, Row, Space, Text};
 use iced::{Alignment, Element, Length};
 
@@ -34,6 +34,11 @@ pub enum SettingsMessage {
     ToggleLlmEnabled,
     // Language
     SetLanguage(Option<String>),
+    SetUserName(String),
+    SetUserEmail(String),
+    SetSshKeyPath(String),
+    ImportSshKey,
+    ImportKnownHosts,
     // Actions
     Close,
     SaveAndClose,
@@ -101,6 +106,10 @@ pub struct GitSettings {
     pub language: Option<String>,
     /// Max commits loaded in history view (default 100)
     pub history_commit_limit: u32,
+    pub user_name: String,
+    pub user_email: String,
+    pub ssh_key_path: String,
+    pub known_hosts_path: String,
 }
 
 impl Default for GitSettings {
@@ -125,6 +134,10 @@ impl Default for GitSettings {
             llm_model: "deepseek-chat".to_string(),
             language: None,
             history_commit_limit: 100,
+            user_name: String::new(),
+            user_email: String::new(),
+            ssh_key_path: String::new(),
+            known_hosts_path: String::new(),
         }
     }
 }
@@ -164,8 +177,37 @@ impl GitSettings {
             SettingsMessage::SetLlmApiKey(val) => self.llm_api_key = val.clone(),
             SettingsMessage::SetLlmModel(val) => self.llm_model = val.clone(),
             SettingsMessage::SetLanguage(val) => self.language = val.clone(),
+            SettingsMessage::SetUserName(val) => self.user_name = val.clone(),
+            SettingsMessage::SetUserEmail(val) => self.user_email = val.clone(),
+            SettingsMessage::SetSshKeyPath(val) => self.ssh_key_path = val.clone(),
+            SettingsMessage::ImportSshKey | SettingsMessage::ImportKnownHosts => {}
             SettingsMessage::Close | SettingsMessage::SaveAndClose => {}
         }
+    }
+
+    pub fn apply_auth(
+        &self,
+        access: Option<crate::sandbox_access::AccessLease>,
+        hosts_access: Option<crate::sandbox_access::AccessLease>,
+    ) {
+        let access =
+            access.filter(|lease| lease.path() == std::path::Path::new(&self.ssh_key_path));
+        let hosts_access = hosts_access
+            .filter(|lease| lease.path() == std::path::Path::new(&self.known_hosts_path));
+        let access =
+            Some(std::sync::Arc::new((access, hosts_access)) as std::sync::Arc<dyn Send + Sync>);
+        git_core::auth::set_context_with_access(
+            git_core::AuthContext {
+                imported_ssh_key: (!self.ssh_key_path.is_empty())
+                    .then(|| std::path::PathBuf::from(&self.ssh_key_path)),
+                imported_ssh_pub: None,
+                imported_known_hosts: (!self.known_hosts_path.is_empty())
+                    .then(|| self.known_hosts_path.clone().into()),
+                user_name: (!self.user_name.trim().is_empty()).then(|| self.user_name.clone()),
+                user_email: (!self.user_email.trim().is_empty()).then(|| self.user_email.clone()),
+            },
+            access,
+        );
     }
 }
 
@@ -240,6 +282,10 @@ impl GitSettings {
                         s.history_commit_limit = n.max(1).min(50_000);
                     }
                 }
+                "user_name" => s.user_name = value.to_string(),
+                "user_email" => s.user_email = value.to_string(),
+                "ssh_key_path" => s.ssh_key_path = value.to_string(),
+                "known_hosts_path" => s.known_hosts_path = value.to_string(),
                 _ => {}
             }
         }
@@ -287,7 +333,11 @@ impl GitSettings {
              llm_api_key\t{}\n\
              llm_model\t{}\n\
              language\t{}\n\
-             history_commit_limit\t{}\n",
+             history_commit_limit\t{}\n\
+             user_name\t{}\n\
+             user_email\t{}\n\
+             ssh_key_path\t{}\n\
+             known_hosts_path\t{}\n",
             self.auto_update_on_push_reject,
             self.pull_autocrlf_true,
             self.protected_branches,
@@ -305,6 +355,10 @@ impl GitSettings {
             self.llm_model,
             self.language.as_deref().unwrap_or("auto"),
             self.history_commit_limit,
+            self.user_name,
+            self.user_email,
+            self.ssh_key_path,
+            self.known_hosts_path,
         )
     }
 
@@ -429,6 +483,109 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
                             .color(theme::darcula::TEXT_DISABLED),
                     ),
             ),
+    )
+    .padding([8, 14]);
+
+    let store_note = if git_core::is_app_store_build() {
+        i18n.sv_store_note
+    } else {
+        ""
+    };
+
+    let identity_section = Container::new(
+        Column::new()
+            .spacing(4)
+            .push(
+                Text::new(i18n.sv_identity_title)
+                    .size(10)
+                    .color(theme::darcula::TEXT_DISABLED),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(i18n.sv_name_label)
+                            .size(12)
+                            .color(theme::darcula::TEXT_SECONDARY),
+                    )
+                    .push(
+                        Container::new(text_input::styled(
+                            "Your Name",
+                            &settings.user_name,
+                            SettingsMessage::SetUserName,
+                        ))
+                        .width(Length::Fill),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(i18n.sv_email_label)
+                            .size(12)
+                            .color(theme::darcula::TEXT_SECONDARY),
+                    )
+                    .push(
+                        Container::new(text_input::styled(
+                            "you@example.com",
+                            &settings.user_email,
+                            SettingsMessage::SetUserEmail,
+                        ))
+                        .width(Length::Fill),
+                    ),
+            )
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(i18n.sv_ssh_key_label)
+                            .size(12)
+                            .color(theme::darcula::TEXT_SECONDARY),
+                    )
+                    .push(
+                        Container::new(text_input::styled(
+                            "/path/to/id_ed25519",
+                            &settings.ssh_key_path,
+                            SettingsMessage::SetSshKeyPath,
+                        ))
+                        .width(Length::Fill),
+                    )
+                    .push(button::ghost(
+                        i18n.sv_import_key,
+                        Some(SettingsMessage::ImportSshKey),
+                    )),
+            )
+            .push_maybe(git_core::is_app_store_build().then(|| {
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(i18n.sv_known_hosts_label)
+                            .size(12)
+                            .color(theme::darcula::TEXT_SECONDARY),
+                    )
+                    .push(
+                        Text::new(if settings.known_hosts_path.is_empty() {
+                            i18n.sv_known_hosts_missing
+                        } else {
+                            &settings.known_hosts_path
+                        })
+                        .size(12)
+                        .width(Length::Fill),
+                    )
+                    .push(button::ghost(
+                        i18n.sv_import_known_hosts,
+                        Some(SettingsMessage::ImportKnownHosts),
+                    ))
+            }))
+            .push_maybe((!store_note.is_empty()).then(|| {
+                Text::new(store_note)
+                    .size(11)
+                    .color(theme::darcula::TEXT_SECONDARY)
+            })),
     )
     .padding([8, 14]);
 
@@ -664,6 +821,8 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
         .width(Length::Fill)
         .push(header)
         .push(iced::widget::rule::horizontal(1))
+        .push(identity_section)
+        .push(iced::widget::rule::horizontal(1))
         .push(commit_section)
         .push(large_file_row)
         .push(iced::widget::rule::horizontal(1))
@@ -817,6 +976,22 @@ mod tests {
         assert_eq!(loaded.llm_api_key, "sk-test-key");
         assert_eq!(loaded.protected_branches, "main, develop");
         assert_eq!(loaded.large_file_limit_mb, "100");
+    }
+
+    #[test]
+    fn identity_fields_roundtrip() {
+        let s = GitSettings {
+            user_name: "Ada".to_string(),
+            user_email: "ada@example.com".to_string(),
+            ssh_key_path: "/tmp/id_ed25519".to_string(),
+            known_hosts_path: "/tmp/known_hosts".to_string(),
+            ..GitSettings::default()
+        };
+        let loaded = GitSettings::parse(&s.serialize());
+        assert_eq!(loaded.user_name, "Ada");
+        assert_eq!(loaded.user_email, "ada@example.com");
+        assert_eq!(loaded.ssh_key_path, "/tmp/id_ed25519");
+        assert_eq!(loaded.known_hosts_path, "/tmp/known_hosts");
     }
 
     #[test]

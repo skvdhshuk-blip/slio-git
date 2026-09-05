@@ -128,8 +128,11 @@ fn test_e2e_merge_conflict_detect_resolve_commit() {
         .unwrap();
 
     // Attempt merge (will conflict)
-    let merge_ok = try_run_git(p, &["merge", "branch-a", "--no-edit"]);
-    assert!(!merge_ok, "merge should conflict");
+    let repo = Repository::discover(p).unwrap();
+    assert!(
+        repo.merge_branch("branch-a").is_err(),
+        "merge should conflict"
+    );
 
     let repo = Repository::discover(p).unwrap();
 
@@ -141,8 +144,8 @@ fn test_e2e_merge_conflict_detect_resolve_commit() {
     resolve_conflict(&repo, Path::new("shared.txt"), ConflictResolution::Ours).unwrap();
     assert!(!index::has_conflicts(&repo));
 
-    // Complete the merge commit via git (git2 create_commit doesn't finalize merge state)
-    run_git(p, &["commit", "-m", "merge resolved"]);
+    // Complete through the shared app entry point in either channel.
+    create_commit(&repo, "merge resolved", "", "").unwrap();
 
     // Verify clean state and merge commit exists
     let repo = Repository::discover(p).unwrap();
@@ -579,8 +582,17 @@ fn test_e2e_repo_state_transitions() {
     // Use get_rebase_status() which checks for rebase-merge/rebase-apply dirs
     // (more reliable than get_state() which only maps some git2 rebase variants)
     run_git(p, &["checkout", "conflict-branch"]);
-    let rebase_ok = try_run_git(p, &["rebase", "master"]);
-    if !rebase_ok {
+    #[cfg(not(feature = "app-store"))]
+    let _ = try_run_git(p, &["rebase", "master"]);
+    #[cfg(feature = "app-store")]
+    {
+        let repo = Repository::discover(p).unwrap();
+        rebase_start(&repo, "master").unwrap();
+    }
+    if get_rebase_status(&Repository::discover(p).unwrap())
+        .unwrap()
+        .is_some()
+    {
         let repo = Repository::discover(p).unwrap();
         let rebase_status = get_rebase_status(&repo).unwrap();
         assert!(rebase_status.is_some(), "should detect rebase in progress");

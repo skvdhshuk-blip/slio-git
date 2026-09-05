@@ -220,3 +220,30 @@ fn partial_staging_preserves_existing_content() {
     assert!(idx.contains("X\n"), "Index should contain X, got:\n{}", idx);
     assert!(!idx.contains("Y\n"), "Index should NOT contain Y, got:\n{}", idx);
 }
+
+#[test]
+fn concurrent_repository_patches_keep_their_own_contents() {
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let workers: Vec<_> = (0..8)
+        .map(|worker| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let (repo, temp) = setup_repo();
+                let path = format!("worker-{worker}.txt");
+                initial_commit(&temp, &path, "base\n");
+                barrier.wait();
+                for round in 0..4 {
+                    let contents = format!("base\nworker-{worker}-round-{round}\n");
+                    write_workdir(&temp, &path, &contents);
+                    let staged = index::stage_hunk(&repo, std::path::Path::new(&path), 0);
+                    let actual = read_index_blob(&temp, &path);
+                    assert!(staged.is_ok(), "{staged:?}");
+                    assert_eq!(actual, contents);
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+}

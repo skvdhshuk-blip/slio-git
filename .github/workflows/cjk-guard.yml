@@ -11,24 +11,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Clippy (workspace)
-        run: |
-          # collapsible_if / let_and_return / single_match: 系统性风格历史债，全局豁免
-          # rationale: 2026-04-23 T7落地时确认，见yunxiao #4902b9c1dc7b7da87af70bcd0a
-          cargo clippy --workspace --all-targets --locked -- \
-            -D warnings \
-            -A clippy::collapsible_if \
-            -A clippy::let_and_return \
-            -A clippy::single_match
+      # Compile and lint each distribution in build.yml; this job owns i18n/ops.
       - name: No raw CJK string literals outside i18n.rs
-        run: |
-          if grep -rn '"[^"]*[一-龥][^"]*"' src-ui/src/ \
-              --include='*.rs' \
-              --exclude='i18n.rs' \
-              --exclude-dir='tests'; then
-            echo "Raw CJK string literals found outside i18n.rs"
-            exit 1
-          fi
+        run: python3 scripts/check-ui-i18n.py
+      - name: Guard contract tests
+        run: python3 -m unittest discover -s scripts/tests
       - name: N3 ops tests (yx.sh fence + verify-config)
         run: bash .autonomous-team/tests/n3/run.sh

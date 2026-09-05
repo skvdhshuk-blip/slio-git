@@ -194,7 +194,7 @@ fn verify_commit_signature_returns_unsigned_for_normal_commit() {
     assert_eq!(
         status,
         git_core::SignatureStatus::NoSignature,
-        "normal commit should be NoSignature"
+        "normal commit should be NoSignature in either channel"
     );
 }
 

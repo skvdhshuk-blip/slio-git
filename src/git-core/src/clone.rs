@@ -54,18 +54,17 @@ pub fn clone(
     credentials: Option<(&str, &str)>,
 ) -> Result<PathBuf, GitError> {
     let dest = options.parent_dir.join(&options.directory_name);
-    info!(
-        "Cloning '{}' into '{}'",
-        options.url,
-        dest.display()
-    );
+    info!("Cloning '{}' into '{}'", options.url, dest.display());
 
+    #[cfg(feature = "app-store")]
+    let config = Config::new()?;
+    #[cfg(not(feature = "app-store"))]
     let config = Config::open_default().map_err(|e| GitError::CloneFailed {
         url: options.url.clone(),
         details: format!("failed to open git config: {e}"),
     })?;
 
-    let mut callbacks = build_remote_callbacks(config, credentials);
+    let mut callbacks = build_remote_callbacks(config, credentials, &options.url);
 
     // Wrap the progress callback in Arc<Mutex<..>> so closures can share it
     // while satisfying the 'static lifetime required by RemoteCallbacks.
@@ -119,12 +118,12 @@ pub fn clone(
         builder.branch(branch);
     }
 
-    let repo = builder.clone(&options.url, &dest).map_err(|e| {
-        GitError::CloneFailed {
+    let repo = builder
+        .clone(&options.url, &dest)
+        .map_err(|e| GitError::CloneFailed {
             url: options.url.clone(),
-            details: e.to_string(),
-        }
-    })?;
+            details: crate::remote::transport_error(&e),
+        })?;
 
     // Drop the repo handle to release the lock before returning the path.
     drop(repo);
@@ -161,6 +160,11 @@ pub fn validate_clone_url(url: &str) -> Result<(), GitError> {
     }
 
     // Local path that exists on disk
+    #[cfg(feature = "app-store")]
+    if Path::new(trimmed).is_absolute() {
+        // Existence cannot be checked until the user grants sandbox access.
+        return Ok(());
+    }
     if Path::new(trimmed).exists() {
         return Ok(());
     }
@@ -236,8 +240,20 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_nonexistent_local_path() {
-        assert!(validate_clone_url("/no/such/path/at/all").is_err());
+    fn local_path_existence_is_deferred_only_for_sandbox_authorization() {
+        assert_eq!(
+            validate_clone_url("/no/such/path/at/all").is_ok(),
+            cfg!(feature = "app-store")
+        );
+        let parent = tempfile::tempdir().unwrap();
+        let options = CloneOptions {
+            url: "/no/such/path/at/all".into(),
+            parent_dir: parent.path().into(),
+            directory_name: "clone".into(),
+            depth: None,
+            branch: None,
+        };
+        assert!(clone(&options, None, None).is_err());
     }
 
     // ── SSH pattern detection tests ───────────────────────────────────

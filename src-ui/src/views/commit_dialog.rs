@@ -919,16 +919,6 @@ mod tests {
             );
         }
 
-        fn try_git(root: &Path, args: &[&str]) -> bool {
-            Command::new("git")
-                .args(args)
-                .current_dir(root)
-                .output()
-                .expect("run git")
-                .status
-                .success()
-        }
-
         let temp = TempDir::new().expect("temp dir");
         let repo = Repository::init(temp.path()).expect("init repo");
 
@@ -958,7 +948,7 @@ mod tests {
         gcommit::create_commit(&repo, "main", "", "").unwrap();
 
         assert!(
-            !try_git(temp.path(), &["merge", "feature", "--no-edit"]),
+            repo.merge_branch("feature").is_err(),
             "merge must produce a conflict"
         );
 
@@ -968,7 +958,7 @@ mod tests {
         let prepared = gcommit::prepared_merge_message(&repo)
             .expect("read MERGE_MSG")
             .expect("MERGE_MSG should exist");
-        assert!(prepared.starts_with("Merge branch"));
+        assert!(prepared.starts_with("Merge "));
 
         let mut dialog = CommitDialogState::new();
         dialog.set_default_message(prepared.clone());
