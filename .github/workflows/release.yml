@@ -97,14 +97,14 @@ jobs:
             rust_target: x86_64-apple-darwin
             platform: macos
             arch: x86_64
-            output_file: slio-git-macos-x86_64.dmg
+            output_file: desktop/x86_64/slio-git-macos-x86_64.dmg
           - label: macOS aarch64 DMG
             artifact_name: release-macos-aarch64
             runner: macos-15
             rust_target: aarch64-apple-darwin
             platform: macos
             arch: aarch64
-            output_file: slio-git-macos-aarch64.dmg
+            output_file: desktop/aarch64/slio-git-macos-aarch64.dmg
           - label: Linux x86_64 tarball
             artifact_name: release-linux-x86_64
             runner: ubuntu-24.04
@@ -177,7 +177,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/${{ matrix.output_file }}
+          path: |
+            dist/${{ matrix.output_file }}
+            dist/desktop/${{ matrix.arch }}/*.manifest.json
           if-no-files-found: error
 
   publish:
@@ -239,6 +241,7 @@ jobs:
             dist/publish/slio-git-*.dmg
             dist/publish/slio-git-*.zip
             dist/publish/slio-git-*.tar.gz
+            dist/publish/slio-git-*.manifest.json
             dist/publish/SHA256SUMS.txt
           fail_on_unmatched_files: true
           generate_release_notes: false

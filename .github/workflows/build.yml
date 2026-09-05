@@ -1,0 +1,49 @@
+name: Desktop and MAS
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  channel:
+    name: ${{ matrix.channel }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: desktop
+            features: ''
+          - channel: mas
+            features: '--features app-store'
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/${{ matrix.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.channel }}
+      - name: Workspace tests for this channel
+        run: cargo test --workspace --locked ${{ matrix.features }}
+      - name: Static analysis for this channel
+        run: cargo clippy --workspace --all-targets --locked ${{ matrix.features }}
+      - name: Packaging contract tests
+        run: python3 -m unittest discover -s scripts/tests
+      - name: Build desktop DMG
+        if: matrix.channel == 'desktop'
+        run: bash scripts/package-macos-dmg.sh
+      - name: Build explicit sandbox test bundle
+        if: matrix.channel == 'mas'
+        run: bash scripts/package-macos-appstore.sh --mode sandbox-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.channel }}
+          path: dist/${{ matrix.channel }}/
+          if-no-files-found: error

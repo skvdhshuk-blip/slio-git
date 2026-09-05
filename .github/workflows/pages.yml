@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - mas-sandbox
     paths:
       - "site/**"
       - ".github/workflows/pages.yml"
@@ -21,6 +20,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     name: Deploy site/
     environment:
       name: github-pages

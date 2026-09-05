@@ -45,3 +45,6 @@ e2e/screenshots/
 .obsidian/
 .codex/
 .specify/
+
+# Packaging helper bytecode
+scripts/**/__pycache__/

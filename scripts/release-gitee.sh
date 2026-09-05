@@ -146,8 +146,10 @@ build_macos() {
   local target="$1" arch="$2" file="slio-git-macos-$2.dmg"
   echo "==> Building $file"
   MACOS_TARGET="$target" MACOS_ARCH="$arch" bash scripts/package-macos-dmg.sh
-  cp "$DIST_DIR/$file" "$PUBLISH_DIR/"
-  ARTIFACTS+=("$file")
+  cp "$DIST_DIR/desktop/$arch/$file" "$PUBLISH_DIR/"
+  local manifest="slio-git-desktop-$arch.manifest.json"
+  cp "$DIST_DIR/desktop/$arch/$manifest" "$PUBLISH_DIR/"
+  ARTIFACTS+=("$file" "$manifest")
 }
 
 build_linux() {
