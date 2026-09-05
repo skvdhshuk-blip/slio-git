@@ -58,7 +58,20 @@ bash scripts/package-windows-zip.sh
 
 The App Store build is sandboxed (`cargo build -p src-ui --features app-store`). It can open repositories you pick, commit locally, and push/pull over HTTPS or an imported SSH key. It does **not** read `~/.ssh` or global `~/.gitconfig`, run Git hooks, spawn system `git`, or check GitHub Releases. Updates come from the App Store. Set `user.name` / `user.email` in Settings; import an SSH private key if you use SSH remotes.
 
-Developer `cargo run` builds keep the full desktop capabilities, including system Git.
+Both channels are built from `main`. MAS also supports native rebase/history editing, cherry-pick/revert, conflict recovery, patch export and force-with-lease. Ordinary builds keep their existing system Git workflows. Either channel can recover a slio native operation; MAS asks you to finish externally started operations in their original tool.
+
+```bash
+# Requires valid app + installer identities and a matching provisioning profile:
+bash scripts/package-macos-appstore.sh
+# Explicit local sandbox test; never produces an App Store distribution package:
+bash scripts/package-macos-appstore.sh --mode sandbox-test
+# Validate signing inputs without building:
+bash scripts/package-macos-appstore.sh --preflight-only
+```
+
+Packages live in `dist/desktop/<arch>/` and `dist/mas/<arch>/<mode>/`. Each output includes a manifest with its source revision, features, version, build number, architecture, signing metadata and SHA-256 hashes. Cargo caches are isolated under `$CARGO_TARGET_DIR/package/<channel>/<arch>/` (default `target/package/`). Set `MACOS_TARGET` to select `aarch64-apple-darwin` or `x86_64-apple-darwin`.
+
+Developer `cargo run` builds keep the full desktop capabilities, including system Git. See [distribution and recovery contracts](docs/architecture/distribution.md).
 
 See the hosted [privacy policy](https://skvdhshuk-blip.github.io/slio-git/privacy.html) or [docs/privacy.md](docs/privacy.md).
 
