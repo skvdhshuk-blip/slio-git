@@ -36,8 +36,13 @@ where
     M: Send + 'static,
     G: FnOnce(Result<T, String>) -> M + Send + 'static,
 {
+    let access = crate::sandbox_access::snapshot();
     Task::perform(
         async move {
+            let f = move || {
+                let _access = access;
+                f()
+            };
             tokio::task::spawn_blocking(f)
                 .await
                 .unwrap_or_else(|join_err| Err(format!("git worker panicked: {join_err}")))
@@ -55,8 +60,15 @@ where
     M: Send + 'static,
     G: FnOnce(T) -> M + Send + 'static,
 {
+    let access = crate::sandbox_access::snapshot();
     Task::perform(
-        async move { tokio::task::spawn_blocking(f).await.unwrap() },
+        async move {
+            let f = move || {
+                let _access = access;
+                f()
+            };
+            tokio::task::spawn_blocking(f).await.unwrap()
+        },
         to_message,
     )
 }

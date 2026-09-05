@@ -1,13 +1,9 @@
-//! Folder access for the App Store sandbox.
-//!
-//! Persistence (path + bookmark blob) is the truth. On desktop builds the
-//! bookmark is optional and restore falls back to the raw path.
-
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
-
+//! Security-scoped access is an owned lease. The bookmark-resolved URL stays
+//! alive until the last repository, watcher or background task releases it.
+#[cfg(test)]
 use git_core::requires_bookmarks;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderGrant {
@@ -18,140 +14,177 @@ pub struct FolderGrant {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessError {
     NeedsReselect { path: PathBuf },
+    #[cfg_attr(not(all(target_os = "macos", feature = "app-store")), allow(dead_code))]
     Failed { path: PathBuf, details: String },
 }
-
 impl std::fmt::Display for AccessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AccessError::NeedsReselect { path } => {
-                write!(f, "reselect the folder to open {}", path.display())
-            }
-            AccessError::Failed { path, details } => {
-                write!(f, "cannot open {}: {details}", path.display())
-            }
+            Self::NeedsReselect { path } => write!(f, "请重新选择并授权：{}", path.display()),
+            Self::Failed { path, details } => write!(f, "无法访问 {}：{details}", path.display()),
         }
     }
 }
 
-static ACTIVE: LazyLock<Mutex<HashMap<PathBuf, ActiveAccess>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
+#[derive(Debug, Clone)]
+pub struct AccessLease(Arc<Access>);
 #[derive(Debug)]
-struct ActiveAccess {
+struct Access {
+    requested: PathBuf,
+    grant: FolderGrant,
     #[cfg(all(target_os = "macos", feature = "app-store"))]
-    url: macos::ScopedUrl,
+    url: Option<macos::ScopedUrl>,
+}
+impl Drop for Access {
+    fn drop(&mut self) {
+        #[cfg(all(target_os = "macos", feature = "app-store"))]
+        if let Some(url) = &self.url {
+            macos::stop(url);
+        }
+    }
+}
+impl AccessLease {
+    pub fn path(&self) -> &Path {
+        &self.0.requested
+    }
+    pub fn grant(&self) -> &FolderGrant {
+        &self.0.grant
+    }
 }
 
-pub fn remember_folder(path: PathBuf) -> FolderGrant {
+// This weak registry owns no permissions. Dispatch captures strong leases before
+// queueing work, so navigation cannot release the URL while a worker uses it.
+static ACTIVE: LazyLock<Mutex<Vec<Weak<Access>>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+pub fn snapshot() -> Vec<AccessLease> {
+    let mut active = ACTIVE.lock().unwrap();
+    active.retain(|lease| lease.strong_count() > 0);
+    active
+        .iter()
+        .filter_map(Weak::upgrade)
+        .map(AccessLease)
+        .collect()
+}
+
+pub fn remember_folder(path: PathBuf) -> Result<FolderGrant, AccessError> {
     remember_path(path, true)
 }
-
-pub fn remember_file(path: PathBuf) -> FolderGrant {
+pub fn remember_file(path: PathBuf) -> Result<FolderGrant, AccessError> {
     remember_path(path, false)
 }
 
-fn remember_path(path: PathBuf, is_directory: bool) -> FolderGrant {
-    let bookmark = create_bookmark(&path, is_directory);
-    FolderGrant { path, bookmark }
-}
-
-pub fn restore_folder(grant: &FolderGrant) -> Result<PathBuf, AccessError> {
-    if !requires_bookmarks() {
-        return Ok(grant.path.clone());
-    }
-
-    let Some(blob) = grant.bookmark.as_deref() else {
-        return Err(AccessError::NeedsReselect {
-            path: grant.path.clone(),
-        });
-    };
-
-    match resolve_bookmark(blob) {
-        Ok(path) => {
-            start_accessing(&path)?;
-            Ok(path)
-        }
-        Err(details) => Err(AccessError::Failed {
-            path: grant.path.clone(),
-            details,
-        }),
+pub fn prepare_output(path: &Path) -> Result<(), String> {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error.to_string()),
     }
 }
 
-pub fn start_accessing(path: &Path) -> Result<(), AccessError> {
-    if !requires_bookmarks() {
-        return Ok(());
-    }
+fn remember_path(path: PathBuf, is_directory: bool) -> Result<FolderGrant, AccessError> {
     #[cfg(all(target_os = "macos", feature = "app-store"))]
-    {
-        if let Ok(guard) = ACTIVE.lock() {
-            if guard.contains_key(path) {
-                return Ok(());
-            }
-        }
-        let url = macos::url_from_path(path, path.is_dir()).map_err(|details| AccessError::Failed {
-            path: path.to_path_buf(),
+    let bookmark = Some(
+        macos::create_bookmark(&path, is_directory).map_err(|details| AccessError::Failed {
+            path: path.clone(),
             details,
-        })?;
-        macos::start(&url).map_err(|details| AccessError::Failed {
-            path: path.to_path_buf(),
-            details,
-        })?;
-        if let Ok(mut guard) = ACTIVE.lock() {
-            guard.insert(path.to_path_buf(), ActiveAccess { url });
-        }
-        return Ok(());
-    }
+        })?,
+    );
     #[cfg(not(all(target_os = "macos", feature = "app-store")))]
-    {
-        let _ = path;
-        Ok(())
-    }
-}
-
-pub fn stop_accessing(path: &Path) {
-    if let Ok(mut guard) = ACTIVE.lock() {
-        if let Some(access) = guard.remove(path) {
-            #[cfg(all(target_os = "macos", feature = "app-store"))]
-            macos::stop(&access.url);
-            let _ = access;
-        }
-    }
-}
-
-fn create_bookmark(path: &Path, is_directory: bool) -> Option<Vec<u8>> {
-    if !requires_bookmarks() {
-        return None;
-    }
-    #[cfg(all(target_os = "macos", feature = "app-store"))]
-    {
-        return macos::create_bookmark(path, is_directory).ok();
-    }
-    #[cfg(not(all(target_os = "macos", feature = "app-store")))]
-    {
-        let _ = (path, is_directory);
+    let bookmark = {
+        let _ = is_directory;
         None
-    }
+    };
+    Ok(FolderGrant { path, bookmark })
 }
 
-fn resolve_bookmark(blob: &[u8]) -> Result<PathBuf, String> {
+pub fn absolute_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn requested_under_root(
+    grant: &FolderGrant,
+    requested: &Path,
+    resolved_root: &Path,
+) -> Result<PathBuf, AccessError> {
+    let suffix = requested
+        .strip_prefix(&grant.path)
+        .map_err(|_| AccessError::NeedsReselect {
+            path: requested.into(),
+        })?;
+    if suffix
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(AccessError::NeedsReselect {
+            path: requested.into(),
+        });
+    }
+    Ok(resolved_root.join(suffix))
+}
+
+pub fn acquire(grant: &FolderGrant, requested: &Path) -> Result<AccessLease, AccessError> {
     #[cfg(all(target_os = "macos", feature = "app-store"))]
-    {
-        return macos::resolve_bookmark(blob);
-    }
+    let access = {
+        let blob = grant
+            .bookmark
+            .as_deref()
+            .ok_or_else(|| AccessError::NeedsReselect {
+                path: requested.into(),
+            })?;
+        let (url, root, stale) =
+            macos::resolve_bookmark(blob).map_err(|_| AccessError::NeedsReselect {
+                path: requested.into(),
+            })?;
+        let path = requested_under_root(grant, requested, &root)?;
+        macos::start(&url).map_err(|_| AccessError::NeedsReselect {
+            path: requested.into(),
+        })?;
+        // Construct the owner before refreshing, so errors also stop access.
+        let mut access = Access {
+            requested: path,
+            grant: FolderGrant {
+                path: root,
+                bookmark: grant.bookmark.clone(),
+            },
+            url: Some(url),
+        };
+        if stale {
+            access.grant.bookmark = Some(
+                macos::bookmark_for_url(access.url.as_ref().unwrap()).map_err(|details| {
+                    AccessError::Failed {
+                        path: requested.into(),
+                        details,
+                    }
+                })?,
+            );
+        }
+        access
+    };
     #[cfg(not(all(target_os = "macos", feature = "app-store")))]
-    {
-        let _ = blob;
-        Err("bookmarks are only available in the Mac App Store build".to_string())
-    }
+    let access = Access {
+        requested: requested_under_root(grant, requested, &grant.path)?,
+        grant: grant.clone(),
+    };
+    let lease = Arc::new(access);
+    ACTIVE.lock().unwrap().push(Arc::downgrade(&lease));
+    Ok(AccessLease(lease))
 }
 
 pub fn encode_bookmark(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub fn decode_bookmark(text: &str) -> Option<Vec<u8>> {
@@ -261,7 +294,10 @@ mod macos {
     }
 
     pub fn create_bookmark(path: &Path, is_directory: bool) -> Result<Vec<u8>, String> {
-        let url = url_from_path(path, is_directory)?;
+        bookmark_for_url(&url_from_path(path, is_directory)?)
+    }
+
+    pub fn bookmark_for_url(url: &ScopedUrl) -> Result<Vec<u8>, String> {
         let mut error: CFErrorRef = std::ptr::null_mut();
         let data = unsafe {
             CFURLCreateBookmarkData(
@@ -273,6 +309,9 @@ mod macos {
                 &mut error,
             )
         };
+        if !error.is_null() {
+            unsafe { CFRelease(error) };
+        }
         if data.is_null() {
             return Err("failed to create security-scoped bookmark".to_string());
         }
@@ -283,14 +322,8 @@ mod macos {
         Ok(bytes)
     }
 
-    pub fn resolve_bookmark(blob: &[u8]) -> Result<PathBuf, String> {
-        let data = unsafe {
-            CFDataCreate(
-                std::ptr::null(),
-                blob.as_ptr(),
-                blob.len() as CFIndex,
-            )
-        };
+    pub fn resolve_bookmark(blob: &[u8]) -> Result<(ScopedUrl, PathBuf, bool), String> {
+        let data = unsafe { CFDataCreate(std::ptr::null(), blob.as_ptr(), blob.len() as CFIndex) };
         if data.is_null() {
             return Err("invalid bookmark data".to_string());
         }
@@ -308,6 +341,9 @@ mod macos {
             )
         };
         unsafe { CFRelease(data) };
+        if !error.is_null() {
+            unsafe { CFRelease(error) };
+        }
         if url.is_null() {
             return Err("bookmark is stale; reselect the folder".to_string());
         }
@@ -315,12 +351,16 @@ mod macos {
         let ok = unsafe {
             CFURLGetFileSystemRepresentation(url, 1, buffer.as_mut_ptr(), buffer.len() as CFIndex)
         };
-        unsafe { CFRelease(url as *const c_void) };
+        let scoped = ScopedUrl(url);
         if ok == 0 {
             return Err("failed to resolve bookmark path".to_string());
         }
         let cstr = unsafe { CStr::from_ptr(buffer.as_ptr() as *const i8) };
-        Ok(PathBuf::from(cstr.to_string_lossy().into_owned()))
+        Ok((
+            scoped,
+            PathBuf::from(cstr.to_string_lossy().into_owned()),
+            stale != 0,
+        ))
     }
 
     pub fn start(url: &ScopedUrl) -> Result<(), String> {
@@ -343,40 +383,66 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn bookmark_hex_roundtrip() {
-        let raw = vec![0xde, 0xad, 0xbe, 0xef];
-        let encoded = encode_bookmark(&raw);
-        assert_eq!(encoded, "deadbeef");
-        assert_eq!(decode_bookmark(&encoded), Some(raw));
+        let data = vec![0xde, 0xad, 0xbe, 0xef];
+        assert_eq!(decode_bookmark(&encode_bookmark(&data)), Some(data));
         assert_eq!(decode_bookmark("zz"), None);
     }
-
     #[test]
-    fn desktop_restore_uses_raw_path() {
-        if requires_bookmarks() {
-            return;
-        }
+    fn ancestor_grant_preserves_requested_child_after_moving_the_root() {
         let grant = FolderGrant {
-            path: PathBuf::from("/tmp/repo"),
+            path: "/old/projects".into(),
             bookmark: None,
         };
-        assert_eq!(restore_folder(&grant).unwrap(), PathBuf::from("/tmp/repo"));
+        assert_eq!(
+            requested_under_root(
+                &grant,
+                Path::new("/old/projects/repo"),
+                Path::new("/new/projects")
+            )
+            .unwrap(),
+            PathBuf::from("/new/projects/repo")
+        );
+        assert!(
+            requested_under_root(
+                &grant,
+                Path::new("/old/projects/../private"),
+                Path::new("/new/projects")
+            )
+            .is_err()
+        );
     }
-
     #[test]
-    fn store_restore_without_bookmark_asks_to_reselect() {
-        if !requires_bookmarks() {
-            return;
+    fn missing_bookmark_requires_reselection_in_mas() {
+        if requires_bookmarks() {
+            let grant = FolderGrant {
+                path: "/tmp/repo".into(),
+                bookmark: None,
+            };
+            assert!(matches!(
+                acquire(&grant, &grant.path),
+                Err(AccessError::NeedsReselect { .. })
+            ));
         }
-        let grant = FolderGrant {
-            path: PathBuf::from("/tmp/repo"),
-            bookmark: None,
-        };
-        assert!(matches!(
-            restore_folder(&grant),
-            Err(AccessError::NeedsReselect { .. })
-        ));
+    }
+    #[test]
+    fn lease_is_retained_until_the_last_task_finishes() {
+        let access = Arc::new(Access {
+            requested: "/test".into(),
+            grant: FolderGrant {
+                path: "/test".into(),
+                bookmark: None,
+            },
+            #[cfg(all(target_os = "macos", feature = "app-store"))]
+            url: None,
+        });
+        let weak = Arc::downgrade(&access);
+        let session = AccessLease(access);
+        let worker = session.clone();
+        drop(session);
+        assert!(weak.upgrade().is_some());
+        drop(worker);
+        assert!(weak.upgrade().is_none());
     }
 }

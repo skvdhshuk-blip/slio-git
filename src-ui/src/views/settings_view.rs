@@ -182,17 +182,20 @@ impl GitSettings {
         }
     }
 
-    pub fn apply_auth(&self) {
-        git_core::set_auth_context(git_core::AuthContext {
-            imported_ssh_key: (!self.ssh_key_path.is_empty()).then(|| {
-                std::path::PathBuf::from(&self.ssh_key_path)
-            }),
-            imported_ssh_pub: (!self.ssh_key_path.is_empty()).then(|| {
-                std::path::PathBuf::from(format!("{}.pub", self.ssh_key_path))
-            }),
-            user_name: (!self.user_name.trim().is_empty()).then(|| self.user_name.clone()),
-            user_email: (!self.user_email.trim().is_empty()).then(|| self.user_email.clone()),
-        });
+    pub fn apply_auth(&self, access: Option<crate::sandbox_access::AccessLease>) {
+        let access = access
+            .filter(|lease| lease.path() == std::path::Path::new(&self.ssh_key_path))
+            .map(|lease| std::sync::Arc::new(lease) as std::sync::Arc<dyn Send + Sync>);
+        git_core::auth::set_context_with_access(
+            git_core::AuthContext {
+                imported_ssh_key: (!self.ssh_key_path.is_empty())
+                    .then(|| std::path::PathBuf::from(&self.ssh_key_path)),
+                imported_ssh_pub: None,
+                user_name: (!self.user_name.trim().is_empty()).then(|| self.user_name.clone()),
+                user_email: (!self.user_email.trim().is_empty()).then(|| self.user_email.clone()),
+            },
+            access,
+        );
     }
 }
 
@@ -470,10 +473,18 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
 
     let zh = settings.language.as_deref() == Some("zh-CN")
         || (settings.language.is_none() && i18n.sv_title.contains("设置"));
-    let identity_title = if zh { "提交身份" } else { "Commit identity" };
+    let identity_title = if zh {
+        "提交身份"
+    } else {
+        "Commit identity"
+    };
     let name_label = if zh { "姓名:" } else { "Name:" };
     let email_label = if zh { "邮箱:" } else { "Email:" };
-    let ssh_label = if zh { "SSH 私钥:" } else { "SSH private key:" };
+    let ssh_label = if zh {
+        "SSH 私钥:"
+    } else {
+        "SSH private key:"
+    };
     let ssh_import = if zh { "导入…" } else { "Import…" };
     let store_note = if git_core::is_app_store_build() {
         if zh {
@@ -546,7 +557,10 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
                         ))
                         .width(Length::Fill),
                     )
-                    .push(button::ghost(ssh_import, Some(SettingsMessage::ImportSshKey))),
+                    .push(button::ghost(
+                        ssh_import,
+                        Some(SettingsMessage::ImportSshKey),
+                    )),
             )
             .push_maybe((!store_note.is_empty()).then(|| {
                 Text::new(store_note)

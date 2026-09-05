@@ -718,6 +718,9 @@ pub struct AppState {
     pub auxiliary_view: Option<AuxiliaryView>,
     pub project_history: Vec<ProjectEntry>,
     pub folder_grants: Vec<FolderGrant>,
+    pub pending_access: Vec<sandbox_access::AccessLease>,
+    pub ssh_access: Option<sandbox_access::AccessLease>,
+    pub access_request: Option<PathBuf>,
     pub shell: AppShellState,
     pub feedback: Option<FeedbackState>,
     pub toast_notification: Option<ToastNotificationState>,
@@ -884,6 +887,9 @@ impl AppState {
             auxiliary_view: None,
             project_history: Vec::new(),
             folder_grants: Vec::new(),
+            pending_access: Vec::new(),
+            ssh_access: None,
+            access_request: None,
             shell,
             feedback: None,
             toast_notification: None,
@@ -970,29 +976,27 @@ impl AppState {
             })
             .collect();
 
-        state.git_settings.apply_auth();
+        state.git_settings.apply_auth(state.ssh_access.clone());
         if !state.git_settings.ssh_key_path.is_empty() {
             let key = PathBuf::from(&state.git_settings.ssh_key_path);
-            if let Err(error) = sandbox_access::restore_folder(&state.grant_for(&key)) {
-                warn!("SSH key access for {} failed: {}", key.display(), error);
+            match state.restore_access(&key) {
+                Ok(lease) => {
+                    state.git_settings.ssh_key_path = lease.path().display().to_string();
+                    state.ssh_access = Some(lease);
+                    state.git_settings.apply_auth(state.ssh_access.clone());
+                }
+                Err(error) => warn!("SSH key access for {} failed: {}", key.display(), error),
             }
         }
 
         if let Some(last_path) = persisted.last_open_repository {
-            let grant = state.grant_for(&last_path);
-            if let Err(error) = sandbox_access::restore_folder(&grant) {
-                warn!(
-                    "Sandbox access for {} failed: {}",
-                    last_path.display(),
-                    error
-                );
-                state.set_info(
-                    i18n.cannot_open_repo,
-                    Some(error.to_string()),
-                    "repository.restore",
-                );
-                return state;
-            }
+            let last_path = match state.prepare_repository_access(&last_path) {
+                Ok(path) => path,
+                Err(error) => {
+                    state.set_info(i18n.cannot_open_repo, Some(error), "repository.restore");
+                    return state;
+                }
+            };
             match Repository::discover(&last_path) {
                 Ok(repo) => {
                     let repo_name = repo.name();
@@ -1129,7 +1133,7 @@ impl AppState {
         self.current_repository.as_ref().map(|repo| repo.path())
     }
 
-    pub fn set_repository(&mut self, repo: Repository, i18n: &I18n) {
+    pub fn set_repository(&mut self, mut repo: Repository, i18n: &I18n) {
         let project_entry = ProjectEntry::from_repository(&repo);
         let repository_changed = self
             .current_repository
@@ -1137,10 +1141,9 @@ impl AppState {
             .map(|current| current.path().to_path_buf())
             != Some(repo.path().to_path_buf());
 
-        if let Some(previous) = self.current_repository.as_ref() {
-            sandbox_access::stop_accessing(previous.path());
-        }
-        let _ = sandbox_access::start_accessing(repo.path());
+        repo.retain_access(std::sync::Arc::new(std::mem::take(
+            &mut self.pending_access,
+        )));
         self.current_repository = Some(repo);
         self.remember_project(project_entry);
         // Persist immediately so the project list survives crashes
@@ -1213,22 +1216,8 @@ impl AppState {
     }
 
     pub fn switch_to_project(&mut self, path: &Path, i18n: &I18n) -> Result<(), String> {
-        if !path.exists() {
-            self.project_history
-                .retain(|entry| entry.path.as_path() != path);
-            let active_path = self
-                .current_repository
-                .as_ref()
-                .map(|current| current.path().to_path_buf());
-            self.persist_workspace_memory(active_path.as_deref());
-            return Err(i18n
-                .project_dir_not_exist_fmt
-                .replace("{}", &path.display().to_string()));
-        }
-
-        let grant = self.grant_for(path);
-        sandbox_access::restore_folder(&grant).map_err(|error| error.to_string())?;
-        let repo = Repository::discover(path).map_err(|error| {
+        let path = self.prepare_repository_access(path)?;
+        let repo = Repository::discover(&path).map_err(|error| {
             i18n.cannot_open_project_fmt
                 .replace("{}", &error.to_string())
         })?;
@@ -1237,9 +1226,6 @@ impl AppState {
     }
 
     pub fn clear_repository(&mut self, i18n: &I18n) {
-        if let Some(previous) = self.current_repository.as_ref() {
-            sandbox_access::stop_accessing(previous.path());
-        }
         self.current_repository = None;
         self.staged_changes.clear();
         self.unstaged_changes.clear();
@@ -2656,16 +2642,84 @@ impl AppState {
     }
 
     pub fn adopt_folder_access(&mut self, path: PathBuf) -> Result<PathBuf, String> {
-        self.adopt_access(sandbox_access::remember_folder(path))
+        self.adopt_access(sandbox_access::remember_folder(path).map_err(|error| error.to_string())?)
     }
 
     pub fn adopt_file_access(&mut self, path: PathBuf) -> Result<PathBuf, String> {
-        self.adopt_access(sandbox_access::remember_file(path))
+        self.adopt_access(sandbox_access::remember_file(path).map_err(|error| error.to_string())?)
     }
 
     fn adopt_access(&mut self, grant: FolderGrant) -> Result<PathBuf, String> {
-        let path = sandbox_access::restore_folder(&grant).map_err(|error| error.to_string())?;
-        self.remember_folder_grant(grant);
+        let lease =
+            sandbox_access::acquire(&grant, &grant.path).map_err(|error| error.to_string())?;
+        let path = lease.path().to_path_buf();
+        self.remember_folder_grant(lease.grant().clone());
+        self.pending_access = vec![lease];
+        Ok(path)
+    }
+
+    pub fn restore_access(&mut self, path: &Path) -> Result<sandbox_access::AccessLease, String> {
+        let grant = self.grant_for(path);
+        let lease = sandbox_access::acquire(&grant, path).map_err(|error| {
+            if let sandbox_access::AccessError::NeedsReselect { path } = &error {
+                self.access_request = Some(path.clone());
+            }
+            error.to_string()
+        })?;
+        self.access_request = None;
+        if lease.grant().path != grant.path {
+            for entry in &mut self.project_history {
+                if let Ok(suffix) = entry.path.strip_prefix(&grant.path) {
+                    entry.path = lease.grant().path.join(suffix);
+                }
+            }
+            if Path::new(&self.git_settings.ssh_key_path) == path {
+                self.git_settings.ssh_key_path = lease.path().display().to_string();
+                self.git_settings
+                    .save()
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        if lease.grant() != &grant {
+            self.folder_grants.retain(|old| old.path != grant.path);
+            self.remember_folder_grant(lease.grant().clone());
+        }
+        Ok(lease)
+    }
+
+    pub fn prepare_repository_access(&mut self, requested: &Path) -> Result<PathBuf, String> {
+        let root = self.restore_access(requested)?;
+        let path = root.path().to_path_buf();
+        let mut leases = vec![root];
+        // A linked worktree's .git file points outside the selected directory.
+        // Acquire that directory and its common metadata before libgit2 opens it.
+        if git_core::requires_bookmarks() {
+            for ancestor in path.ancestors() {
+                let dotgit = ancestor.join(".git");
+                if let Ok(contents) = std::fs::read_to_string(&dotgit) {
+                    if let Some(target) = contents.trim().strip_prefix("gitdir:") {
+                        let gitdir = sandbox_access::absolute_path(&ancestor.join(target.trim()));
+                        let gitdir_lease = self.restore_access(&gitdir)?;
+                        let actual_gitdir = gitdir_lease.path().to_path_buf();
+                        leases.push(gitdir_lease);
+                        if let Ok(common) = std::fs::read_to_string(actual_gitdir.join("commondir"))
+                        {
+                            let common =
+                                sandbox_access::absolute_path(&actual_gitdir.join(common.trim()));
+                            leases.push(self.restore_access(&common)?);
+                        }
+                    }
+                    break;
+                }
+                if dotgit.is_dir() {
+                    break;
+                }
+                if ancestor == leases[0].grant().path {
+                    break;
+                }
+            }
+        }
+        self.pending_access = leases;
         Ok(path)
     }
 
@@ -2681,7 +2735,8 @@ impl AppState {
         if let Some(grant) = self
             .folder_grants
             .iter()
-            .find(|grant| path.starts_with(&grant.path))
+            .filter(|grant| path.starts_with(&grant.path))
+            .max_by_key(|grant| grant.path.components().count())
             .cloned()
         {
             return grant;

@@ -5,12 +5,13 @@
 mod file_watcher;
 mod git_dispatch;
 mod i18n;
-mod sandbox_access;
 mod i18n_smoke;
 mod keyboard;
 mod log_filter;
 mod logging;
 pub mod perf;
+mod platform;
+mod sandbox_access;
 mod state;
 mod theme;
 
@@ -52,9 +53,7 @@ use iced::{
     Alignment, Background, Border, Color, Element, Length, Point, Subscription, Task, Theme, time,
 };
 use log::{info, warn};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const AUTO_REFRESH_TICK_INTERVAL: Duration = Duration::from_secs(2);
@@ -65,6 +64,21 @@ fn app_theme(_: &AppState) -> Theme {
 }
 
 pub fn main() -> iced::Result {
+    #[cfg(feature = "app-store")]
+    {
+        // libgit2 config search paths are process-global: set them before any
+        // worker, watcher or repository is created.
+        let empty =
+            std::env::temp_dir().join(format!("slio-no-global-config-{}", std::process::id()));
+        for level in [
+            git2::ConfigLevel::System,
+            git2::ConfigLevel::Global,
+            git2::ConfigLevel::XDG,
+        ] {
+            unsafe { git2::opts::set_search_path(level, &empty) }
+                .expect("initialize sandbox config paths");
+        }
+    }
     if let Err(error) = logging::LogManager::init(None) {
         eprintln!("Failed to initialize logging: {}", error);
     }
@@ -104,14 +118,13 @@ pub fn main() -> iced::Result {
 
     iced::application(
         move || {
-            let startup_task = if git_core::github_updater() {
-                Task::perform(
-                    git_core::updater::check_for_update(env!("CARGO_PKG_VERSION").to_string()),
-                    |result| Message::UpdateCheckResult(result.ok().flatten()),
-                )
-            } else {
-                Task::none()
-            };
+            #[cfg(not(feature = "app-store"))]
+            let startup_task = Task::perform(
+                git_core::updater::check_for_update(env!("CARGO_PKG_VERSION").to_string()),
+                |result| Message::UpdateCheckResult(result.ok().flatten()),
+            );
+            #[cfg(feature = "app-store")]
+            let startup_task = Task::none();
             let init_i18n = i18n::locale(None);
             let mut app_state = AppState::restore(init_i18n);
             if perf_hud_on_start {
@@ -242,6 +255,61 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
     let i18n = i18n::locale(state.git_settings.language.as_deref());
 
     match message {
+        Message::RebaseCompleted(path, result) => {
+            if state.active_project_path() != Some(path.as_path()) {
+                return Task::none();
+            }
+            let error = match result {
+                Ok(editor) => {
+                    let error = editor.error.clone();
+                    state.rebase_editor = *editor;
+                    error
+                }
+                Err(error) => {
+                    state.rebase_editor.is_loading = false;
+                    Some(error)
+                }
+            };
+            if let Ok(repo) = require_repository(state) {
+                let _ = refresh_repository_after_action(state, &repo, true, i18n);
+                state.rebase_editor.load_status(&repo, i18n);
+            }
+            state.open_auxiliary_view(AuxiliaryView::Rebase, i18n);
+            if let Some(error) = error {
+                state.rebase_editor.error = Some(error.clone());
+                state.set_error(error);
+            } else if state.has_conflicts() {
+                state.set_warning(
+                    i18n.rebase_conflict_warning,
+                    Some(i18n.rebase_conflict_detail.into()),
+                    "workspace.rebase",
+                );
+            } else if let Some(message) = state.rebase_editor.success_message.clone() {
+                state.set_success(message, None, "workspace.rebase");
+            }
+        }
+        Message::HistoryRewriteCompleted(path, commit_id, kind, result) => {
+            if state.active_project_path() != Some(path.as_path()) {
+                return Task::none();
+            }
+            state.is_loading = false;
+            if let Ok(repo) = require_repository(state) {
+                let _ = refresh_repository_after_action(state, &repo, true, i18n);
+                state.rebase_editor.load_status(&repo, i18n);
+            }
+            if let Err(error) = result {
+                state.set_error(error);
+            } else if state.rebase_editor.is_rebasing {
+                open_rebase_session_with_context(state, Some(&commit_id), i18n);
+                if matches!(kind, HistoryRewrite::Reword) && !state.has_conflicts() {
+                    if let Err(error) = switch_commit_dialog_to_amend(state) {
+                        state.set_error(error);
+                    }
+                }
+            } else {
+                state.set_success(i18n.history_refreshed_detail, None, "workspace.history");
+            }
+        }
         Message::OpenRepository => {
             state.show_project_dropdown = false;
             state.set_loading(
@@ -251,7 +319,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             );
 
             match pick_granted_folder(state) {
-                Ok(Some(path)) => match Repository::discover(&path) {
+                Ok(Some(path)) => match prepare_repository_with_access(state, &path)
+                    .and_then(|path| Repository::discover(&path).map_err(|error| error.to_string()))
+                {
                     Ok(repo) => {
                         logging::LogManager::log_repo_operation(
                             "open",
@@ -369,28 +439,26 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 );
             }
         }
-        Message::RefreshComplete(result) => {
-            match result {
-                Ok(refresh_data) => {
-                    let i18n = i18n::locale(state.git_settings.language.as_deref());
-                    let previous_section = state.shell.active_section;
-                    state.apply_refresh_result(refresh_data, &i18n);
-                    if previous_section != ShellSection::Conflicts || !state.has_conflicts() {
-                        state.navigate_to(previous_section, &i18n);
-                    }
-                    refresh_workspace_views(state);
-                    state.set_success(i18n.repo_refreshed, None, "repository.refresh");
+        Message::RefreshComplete(result) => match result {
+            Ok(refresh_data) => {
+                let i18n = i18n::locale(state.git_settings.language.as_deref());
+                let previous_section = state.shell.active_section;
+                state.apply_refresh_result(refresh_data, &i18n);
+                if previous_section != ShellSection::Conflicts || !state.has_conflicts() {
+                    state.navigate_to(previous_section, &i18n);
                 }
-                Err(error) => report_async_failure(
-                    state,
-                    i18n.refresh_failed,
-                    i18n.refresh_failed_fmt.replace("{}", &error),
-                    "repository.refresh",
-                    "repository.refresh",
-                    i18n,
-                ),
+                refresh_workspace_views(state);
+                state.set_success(i18n.repo_refreshed, None, "repository.refresh");
             }
-        }
+            Err(error) => report_async_failure(
+                state,
+                i18n.refresh_failed,
+                i18n.refresh_failed_fmt.replace("{}", &error),
+                "repository.refresh",
+                "repository.refresh",
+                i18n,
+            ),
+        },
         Message::GitOpComplete(result, success_msg) => {
             match result {
                 Ok(refresh_data) => {
@@ -469,51 +537,47 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
             }
         }
-        Message::PushComplete(result) => {
-            match result {
-                Ok(refresh_data) => {
-                    let i18n = i18n::locale(state.git_settings.language.as_deref());
-                    state.apply_refresh_result(refresh_data, &i18n);
-                    refresh_workspace_views(state);
-                    state.set_success(
-                        i18n.push_success,
-                        Some(i18n.push_toast_detail.to_string()),
-                        "workspace.push",
-                    );
-                }
-                Err(error) => {
-                    let i18n = i18n::locale(state.git_settings.language.as_deref());
-                    report_async_failure(
-                        state,
-                        i18n.push_remote_failed,
-                        i18n.push_remote_failed_fmt.replace("{}", &error),
-                        "workspace.push",
-                        "workspace.push",
-                        i18n,
-                    );
-                }
+        Message::PushComplete(result) => match result {
+            Ok(refresh_data) => {
+                let i18n = i18n::locale(state.git_settings.language.as_deref());
+                state.apply_refresh_result(refresh_data, &i18n);
+                refresh_workspace_views(state);
+                state.set_success(
+                    i18n.push_success,
+                    Some(i18n.push_toast_detail.to_string()),
+                    "workspace.push",
+                );
             }
-        }
-        Message::CheckoutComplete(result) => {
-            match result {
-                Ok((target_oid, refresh_data)) => {
-                    let i18n = i18n::locale(state.git_settings.language.as_deref());
-                    state.apply_refresh_result(refresh_data, &i18n);
-                    refresh_workspace_views(state);
-                    if let Some(current) = state.current_repository.clone() {
-                        state.branch_popup.load_branches(&current, &i18n);
-                    }
-                    let short_oid = &target_oid[..target_oid.len().min(8)];
-                    let msg = i18n.checkout_ref_done_fmt.replace("{}", short_oid);
-                    state.branch_popup.success_message = Some(msg.clone());
-                    state.set_success(msg, None, "workspace.branches");
-                }
-                Err(error) => {
-                    state.branch_popup.error = Some(error.clone());
-                    state.set_error(error);
-                }
+            Err(error) => {
+                let i18n = i18n::locale(state.git_settings.language.as_deref());
+                report_async_failure(
+                    state,
+                    i18n.push_remote_failed,
+                    i18n.push_remote_failed_fmt.replace("{}", &error),
+                    "workspace.push",
+                    "workspace.push",
+                    i18n,
+                );
             }
-        }
+        },
+        Message::CheckoutComplete(result) => match result {
+            Ok((target_oid, refresh_data)) => {
+                let i18n = i18n::locale(state.git_settings.language.as_deref());
+                state.apply_refresh_result(refresh_data, &i18n);
+                refresh_workspace_views(state);
+                if let Some(current) = state.current_repository.clone() {
+                    state.branch_popup.load_branches(&current, &i18n);
+                }
+                let short_oid = &target_oid[..target_oid.len().min(8)];
+                let msg = i18n.checkout_ref_done_fmt.replace("{}", short_oid);
+                state.branch_popup.success_message = Some(msg.clone());
+                state.set_success(msg, None, "workspace.branches");
+            }
+            Err(error) => {
+                state.branch_popup.error = Some(error.clone());
+                state.set_error(error);
+            }
+        },
         Message::QuitMergeState => {
             let Some(repo) = state.current_repository.clone() else {
                 state.set_error(i18n.no_repo_opened.to_string());
@@ -645,8 +709,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             if state.should_auto_check_remote(now) {
                 if let Some(repo_path) = state.active_project_path().map(Path::to_path_buf) {
                     state.begin_auto_remote_check(&repo_path, now);
+                    let access = sandbox_access::snapshot();
                     return Task::perform(
-                        async move { auto_refresh_remote_status(repo_path) },
+                        async move {
+                            let _access = access;
+                            auto_refresh_remote_status(repo_path)
+                        },
                         Message::AutoRemoteCheckFinished,
                     );
                 }
@@ -725,7 +793,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::WelcomeOpenProject(path) => {
             // AC-7: open project from recent list; switch_to_project handles remove on missing
-            if let Err(error) = state.switch_to_project(&path, i18n) {
+            if let Err(error) = switch_project_with_access(state, &path, i18n) {
                 state.show_toast(crate::state::FeedbackLevel::Error, &error, None);
             }
         }
@@ -815,10 +883,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 return Task::none();
             };
             let task = git_dispatch::run(
-                move || run_git_op_then_refresh(repo_path, move |repo| {
-                    git_core::index::stage_file(repo, std::path::Path::new(&path_clone))
-                        .map_err(|e| e.to_string())
-                }),
+                move || {
+                    run_git_op_then_refresh(repo_path, move |repo| {
+                        git_core::index::stage_file(repo, std::path::Path::new(&path_clone))
+                            .map_err(|e| e.to_string())
+                    })
+                },
                 move |result| Message::GitOpComplete(result, success_msg.clone()),
             );
             // Chain: after git op completes, select the next file
@@ -842,10 +912,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 return Task::none();
             };
             let task = git_dispatch::run(
-                move || run_git_op_then_refresh(repo_path, move |repo| {
-                    git_core::index::unstage_file(repo, std::path::Path::new(&path_clone))
-                        .map_err(|e| e.to_string())
-                }),
+                move || {
+                    run_git_op_then_refresh(repo_path, move |repo| {
+                        git_core::index::unstage_file(repo, std::path::Path::new(&path_clone))
+                            .map_err(|e| e.to_string())
+                    })
+                },
                 move |result| Message::GitOpComplete(result, success_msg.clone()),
             );
             if let Some(next) = next_path {
@@ -855,21 +927,35 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::StageAll => {
             let success_msg = i18n.all_changes_staged.to_string();
-            let repo_path = state.current_repository.as_ref().unwrap().path().to_path_buf();
+            let repo_path = state
+                .current_repository
+                .as_ref()
+                .unwrap()
+                .path()
+                .to_path_buf();
             return git_dispatch::run(
-                move || run_git_op_then_refresh(repo_path, |repo| {
-                    git_core::index::stage_all(repo).map_err(|e| e.to_string())
-                }),
+                move || {
+                    run_git_op_then_refresh(repo_path, |repo| {
+                        git_core::index::stage_all(repo).map_err(|e| e.to_string())
+                    })
+                },
                 move |result| Message::GitOpComplete(result, success_msg.clone()),
             );
         }
         Message::UnstageAll => {
             let success_msg = i18n.all_changes_unstaged.to_string();
-            let repo_path = state.current_repository.as_ref().unwrap().path().to_path_buf();
+            let repo_path = state
+                .current_repository
+                .as_ref()
+                .unwrap()
+                .path()
+                .to_path_buf();
             return git_dispatch::run(
-                move || run_git_op_then_refresh(repo_path, |repo| {
-                    git_core::index::unstage_all(repo).map_err(|e| e.to_string())
-                }),
+                move || {
+                    run_git_op_then_refresh(repo_path, |repo| {
+                        git_core::index::unstage_all(repo).map_err(|e| e.to_string())
+                    })
+                },
                 move |result| Message::GitOpComplete(result, success_msg.clone()),
             );
         }
@@ -948,44 +1034,42 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 SettingsMessage::Close => state.close_auxiliary_view(i18n),
                 SettingsMessage::SaveAndClose => {
                     state.git_settings.apply_message(&msg);
-                    state.git_settings.apply_auth();
+                    state.git_settings.apply_auth(state.ssh_access.clone());
                     if let Err(e) = state.git_settings.save() {
                         log::warn!("Failed to persist git settings: {}", e);
                     }
                     state.close_auxiliary_view(i18n);
                     state.set_success(i18n.settings_saved, None, "settings.save");
                 }
-                SettingsMessage::ImportSshKey => {
-                    match pick_granted_ssh_key(state) {
-                        Ok(Some(path)) => {
-                            state.git_settings.ssh_key_path = path.display().to_string();
-                            state.git_settings.apply_auth();
-                            if let Err(e) = state.git_settings.save() {
-                                log::warn!("Failed to persist git settings: {}", e);
-                            }
-                            state.set_success(
-                                if i18n.sv_title.contains("设置") {
-                                    "已导入 SSH 私钥"
-                                } else {
-                                    "Imported SSH private key"
-                                },
-                                Some(path.display().to_string()),
-                                "settings.ssh",
-                            );
+                SettingsMessage::ImportSshKey => match pick_granted_ssh_key(state) {
+                    Ok(Some(path)) => {
+                        state.git_settings.ssh_key_path = path.display().to_string();
+                        state.git_settings.apply_auth(state.ssh_access.clone());
+                        if let Err(e) = state.git_settings.save() {
+                            log::warn!("Failed to persist git settings: {}", e);
                         }
-                        Ok(None) => {}
-                        Err(error) => {
-                            report_async_failure(
-                                state,
-                                i18n.settings_saved,
-                                error,
-                                "settings.ssh",
-                                "settings.ssh",
-                                i18n,
-                            );
-                        }
+                        state.set_success(
+                            if i18n.sv_title.contains("设置") {
+                                "已导入 SSH 私钥"
+                            } else {
+                                "Imported SSH private key"
+                            },
+                            Some(path.display().to_string()),
+                            "settings.ssh",
+                        );
                     }
-                }
+                    Ok(None) => {}
+                    Err(error) => {
+                        report_async_failure(
+                            state,
+                            i18n.settings_saved,
+                            error,
+                            "settings.ssh",
+                            "settings.ssh",
+                            i18n,
+                        );
+                    }
+                },
                 SettingsMessage::SetLanguage(_) => {
                     state.git_settings.apply_message(&msg);
                     state.show_toast(
@@ -1116,22 +1200,36 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             views::console_output::ConsoleOutputMessage::ScrollChanged(_vp) => {}
         },
         Message::StageHunk(path, hunk_index) => {
-            let repo_path = state.current_repository.as_ref().unwrap().path().to_path_buf();
+            let repo_path = state
+                .current_repository
+                .as_ref()
+                .unwrap()
+                .path()
+                .to_path_buf();
             return git_dispatch::run(
-                move || run_git_op_then_refresh(repo_path, move |repo| {
-                    git_core::stage_hunk(repo, std::path::Path::new(&path), hunk_index)
-                        .map_err(|e| e.to_string())
-                }),
+                move || {
+                    run_git_op_then_refresh(repo_path, move |repo| {
+                        git_core::stage_hunk(repo, std::path::Path::new(&path), hunk_index)
+                            .map_err(|e| e.to_string())
+                    })
+                },
                 |result| Message::GitOpComplete(result, String::new()),
             );
         }
         Message::UnstageHunk(path, hunk_index) => {
-            let repo_path = state.current_repository.as_ref().unwrap().path().to_path_buf();
+            let repo_path = state
+                .current_repository
+                .as_ref()
+                .unwrap()
+                .path()
+                .to_path_buf();
             return git_dispatch::run(
-                move || run_git_op_then_refresh(repo_path, move |repo| {
-                    git_core::unstage_hunk(repo, std::path::Path::new(&path), hunk_index)
-                        .map_err(|e| e.to_string())
-                }),
+                move || {
+                    run_git_op_then_refresh(repo_path, move |repo| {
+                        git_core::unstage_hunk(repo, std::path::Path::new(&path), hunk_index)
+                            .map_err(|e| e.to_string())
+                    })
+                },
                 |result| Message::GitOpComplete(result, String::new()),
             );
         }
@@ -1224,7 +1322,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     .download_url
                     .as_deref()
                     .unwrap_or(&update.release_url);
-                let _ = open::that(url);
+                let _ = platform::open_url(url);
             }
         }
         Message::DismissUpdate => {
@@ -1246,7 +1344,12 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 }
                 WorktreeMessage::Remove(path) => {
                     if let Ok(repo) = require_repository(state) {
-                        state.worktree_state.remove_worktree(&repo, path);
+                        match prepare_repository_with_access(state, Path::new(&path)) {
+                            Ok(path) => state
+                                .worktree_state
+                                .remove_worktree(&repo, path.display().to_string()),
+                            Err(error) => state.worktree_state.error = Some(error),
+                        }
                     }
                 }
                 WorktreeMessage::Close => state.close_auxiliary_view(i18n),
@@ -1256,14 +1359,14 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
             state.change_context_menu_path = None;
             if let Some(repo) = &state.current_repository {
                 let full_path = repo.path().join(&path);
-                if let Err(e) = std::process::Command::new("open").arg(&full_path).spawn() {
+                if let Err(e) = platform::open_file(&full_path) {
                     log::warn!("Failed to open file in editor: {}", e);
                 }
             }
         }
         Message::SwitchProject(path) => {
             state.show_project_dropdown = false;
-            if let Err(error) = state.switch_to_project(&path, i18n) {
+            if let Err(error) = switch_project_with_access(state, &path, i18n) {
                 report_async_failure(
                     state,
                     i18n.switch_project_failed,
@@ -1310,30 +1413,28 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         }
         Message::RevertFile(path) => {
             let success_msg = i18n.file_reverted.to_string();
-            let repo_path = state.current_repository.as_ref().unwrap().path().to_path_buf();
+            let repo_path = state
+                .current_repository
+                .as_ref()
+                .unwrap()
+                .path()
+                .to_path_buf();
             state.close_change_context_menu();
             return git_dispatch::run(
-                move || run_git_op_then_refresh(repo_path, move |repo| {
-                    git_core::index::discard_file(repo, std::path::Path::new(&path))
-                        .map_err(|e| e.to_string())
-                }),
+                move || {
+                    run_git_op_then_refresh(repo_path, move |repo| {
+                        git_core::index::discard_file(repo, std::path::Path::new(&path))
+                            .map_err(|e| e.to_string())
+                    })
+                },
                 move |result| Message::GitOpComplete(result, success_msg.clone()),
             );
         }
         Message::CopyChangePath(path) => {
-            if let Err(error) = copy_text_to_clipboard(&path) {
-                report_async_failure(
-                    state,
-                    i18n.copy_path_failed,
-                    error.to_message(i18n),
-                    "workspace.copy_path",
-                    "workspace.copy_path",
-                    i18n,
-                );
-            } else {
-                state.set_success(i18n.path_copied, Some(path), "workspace.copy_path");
-                state.close_change_context_menu();
-            }
+            state.set_success(i18n.path_copied, Some(path.clone()), "workspace.copy_path");
+            state.close_change_context_menu();
+
+            return iced::clipboard::write(path.to_string());
         }
         Message::KeyboardShortcut(action) => match action {
             ShortcutAction::StageFile => {
@@ -2635,29 +2736,25 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     }
                 }
                 BranchPopupMessage::CopyCommitHash(commit_id) => {
-                    if let Err(error) = copy_text_to_clipboard(&commit_id) {
-                        report_async_failure(
-                            state,
-                            i18n.copy_commit_hash_failed,
-                            error.to_message(i18n),
-                            "workspace.branches",
-                            "workspace.branches.copy_commit",
-                            i18n,
-                        );
-                    } else {
-                        state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
-                        state.show_toast(
-                            crate::state::FeedbackLevel::Success,
-                            i18n.commit_hash_copied,
-                            Some(short_commit_id(&commit_id).to_string()),
-                        );
-                    }
+                    state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
+                    state.show_toast(
+                        crate::state::FeedbackLevel::Success,
+                        i18n.commit_hash_copied,
+                        Some(short_commit_id(&commit_id).to_string()),
+                    );
+
+                    return iced::clipboard::write(commit_id.to_string());
                 }
                 BranchPopupMessage::ExportCommitPatch(commit_id) => {
                     if let Ok(repo) = require_repository(state) {
                         let default_name = default_patch_file_name(&repo, &commit_id);
                         if let Some(path) = file_picker::save_file(&default_name) {
-                            match git_core::export_commit_patch(&repo, &commit_id, &path) {
+                            match sandbox_access::prepare_output(&path)
+                                .and_then(|()| state.adopt_file_access(path.clone()))
+                                .and_then(|path| {
+                                    git_core::export_commit_patch(&repo, &commit_id, &path)
+                                        .map_err(|error| error.to_string())
+                                }) {
                                 Ok(()) => {
                                     state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
                                     state.set_success(
@@ -3153,29 +3250,25 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     state.history_view.context_menu_anchor = None;
                 }
                 HistoryMessage::CopyCommitHash(commit_id) => {
-                    if let Err(error) = copy_text_to_clipboard(&commit_id) {
-                        report_async_failure(
-                            state,
-                            i18n.copy_commit_hash_failed,
-                            error.to_message(i18n),
-                            "workspace.history",
-                            "workspace.history.copy_commit",
-                            i18n,
-                        );
-                    } else {
-                        state.history_view.context_menu_commit = None;
-                        state.show_toast(
-                            crate::state::FeedbackLevel::Success,
-                            i18n.commit_hash_copied,
-                            Some(short_commit_id(&commit_id).to_string()),
-                        );
-                    }
+                    state.history_view.context_menu_commit = None;
+                    state.show_toast(
+                        crate::state::FeedbackLevel::Success,
+                        i18n.commit_hash_copied,
+                        Some(short_commit_id(&commit_id).to_string()),
+                    );
+
+                    return iced::clipboard::write(commit_id.to_string());
                 }
                 HistoryMessage::ExportCommitPatch(commit_id) => {
                     if let Ok(repo) = require_repository(state) {
                         let default_name = default_patch_file_name(&repo, &commit_id);
                         if let Some(path) = file_picker::save_file(&default_name) {
-                            match git_core::export_commit_patch(&repo, &commit_id, &path) {
+                            match sandbox_access::prepare_output(&path)
+                                .and_then(|()| state.adopt_file_access(path.clone()))
+                                .and_then(|path| {
+                                    git_core::export_commit_patch(&repo, &commit_id, &path)
+                                        .map_err(|error| error.to_string())
+                                }) {
                                 Ok(()) => {
                                     state.history_view.context_menu_commit = None;
                                     state.set_success(
@@ -3274,13 +3367,16 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         }
                         // Execute cherry-pick directly (IDEA-style, no confirmation)
                         let repo_path = repo.path().to_path_buf();
-                        let success_msg = i18n.cherry_picked_fmt
+                        let success_msg = i18n
+                            .cherry_picked_fmt
                             .replace("{}", short_commit_id(&commit_id));
                         return git_dispatch::run(
-                            move || run_git_op_then_refresh(repo_path, move |repo| {
-                                git_core::cherry_pick_commit(repo, &commit_id)
-                                    .map_err(|e| e.to_string())
-                            }),
+                            move || {
+                                run_git_op_then_refresh(repo_path, move |repo| {
+                                    git_core::cherry_pick_commit(repo, &commit_id)
+                                        .map_err(|e| e.to_string())
+                                })
+                            },
                             move |result| Message::GitOpComplete(result, success_msg.clone()),
                         );
                     }
@@ -3305,13 +3401,16 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         }
                         // Execute revert directly (IDEA-style, no confirmation)
                         let repo_path = repo.path().to_path_buf();
-                        let success_msg = i18n.reverted_commit_fmt
+                        let success_msg = i18n
+                            .reverted_commit_fmt
                             .replace("{}", short_commit_id(&commit_id));
                         return git_dispatch::run(
-                            move || run_git_op_then_refresh(repo_path, move |repo| {
-                                git_core::revert_commit(repo, &commit_id)
-                                    .map_err(|e| e.to_string())
-                            }),
+                            move || {
+                                run_git_op_then_refresh(repo_path, move |repo| {
+                                    git_core::revert_commit(repo, &commit_id)
+                                        .map_err(|e| e.to_string())
+                                })
+                            },
                             move |result| Message::GitOpComplete(result, success_msg.clone()),
                         );
                     }
@@ -3339,227 +3438,16 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     }
                 }
                 HistoryMessage::EditCommitMessage(commit_id) => {
-                    if let Ok(repo) = require_repository(state) {
-                        match git_core::edit_commit_message(&repo, &commit_id) {
-                            Ok(execution) => {
-                                state.history_view.context_menu_commit = None;
-                                if let Err(error) =
-                                    refresh_repository_after_action(state, &repo, true, i18n)
-                                {
-                                    report_async_failure(
-                                        state,
-                                        i18n.refresh_repo_state_failed,
-                                        error,
-                                        "workspace.history",
-                                        "workspace.history.reword",
-                                        i18n,
-                                    );
-                                } else if state.has_conflicts() {
-                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                    state.set_warning(
-                                        i18n.reword_conflict,
-                                        Some(i18n.reword_conflict_detail.to_string()),
-                                        "workspace.history.reword",
-                                    );
-                                } else if matches!(
-                                    execution,
-                                    git_core::RewriteExecution::InProgress
-                                ) {
-                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                    if let Err(error) = switch_commit_dialog_to_amend(state) {
-                                        report_async_failure(
-                                            state,
-                                            i18n.cannot_open_commit_edit_panel,
-                                            error,
-                                            "workspace.history",
-                                            "workspace.history.reword",
-                                            i18n,
-                                        );
-                                    } else {
-                                        state.set_info(
-                                            i18n.stopped_at_commit,
-                                            Some(i18n.reword_hint_detail.to_string()),
-                                            "workspace.history.reword",
-                                        );
-                                    }
-                                } else {
-                                    state.set_success(
-                                        i18n.prepared_reword_fmt
-                                            .replace("{}", short_commit_id(&commit_id)),
-                                        Some(i18n.history_refreshed_detail.to_string()),
-                                        "workspace.history.reword",
-                                    );
-                                }
-                            }
-                            Err(error) => report_async_failure(
-                                state,
-                                i18n.start_reword_failed,
-                                error.to_string(),
-                                "workspace.history",
-                                "workspace.history.reword",
-                                i18n,
-                            ),
-                        }
-                    }
+                    return dispatch_history_rewrite(state, commit_id, HistoryRewrite::Reword);
                 }
                 HistoryMessage::FixupCommitToPrevious(commit_id) => {
-                    if let Ok(repo) = require_repository(state) {
-                        match git_core::fixup_commit_to_previous(&repo, &commit_id) {
-                            Ok(execution) => {
-                                state.history_view.context_menu_commit = None;
-                                if let Err(error) =
-                                    refresh_repository_after_action(state, &repo, true, i18n)
-                                {
-                                    report_async_failure(
-                                        state,
-                                        i18n.refresh_repo_state_failed,
-                                        error,
-                                        "workspace.history",
-                                        "workspace.history.fixup",
-                                        i18n,
-                                    );
-                                } else if state.has_conflicts() {
-                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                    state.set_warning(
-                                        i18n.fixup_conflict,
-                                        Some(i18n.fixup_conflict_detail.to_string()),
-                                        "workspace.history.fixup",
-                                    );
-                                } else if matches!(
-                                    execution,
-                                    git_core::RewriteExecution::InProgress
-                                ) {
-                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                    state.set_info(
-                                        i18n.fixup_in_progress,
-                                        Some(i18n.rewrite_in_progress_detail.to_string()),
-                                        "workspace.history.fixup",
-                                    );
-                                } else {
-                                    state.set_success(
-                                        i18n.fixup_done_fmt
-                                            .replace("{}", short_commit_id(&commit_id)),
-                                        Some(i18n.history_refreshed_continue.to_string()),
-                                        "workspace.history.fixup",
-                                    );
-                                }
-                            }
-                            Err(error) => report_async_failure(
-                                state,
-                                i18n.fixup_failed,
-                                error.to_string(),
-                                "workspace.history",
-                                "workspace.history.fixup",
-                                i18n,
-                            ),
-                        }
-                    }
+                    return dispatch_history_rewrite(state, commit_id, HistoryRewrite::Fixup);
                 }
                 HistoryMessage::SquashCommitToPrevious(commit_id) => {
-                    if let Ok(repo) = require_repository(state) {
-                        match git_core::squash_commit_to_previous(&repo, &commit_id) {
-                            Ok(execution) => {
-                                state.history_view.context_menu_commit = None;
-                                if let Err(error) =
-                                    refresh_repository_after_action(state, &repo, true, i18n)
-                                {
-                                    report_async_failure(
-                                        state,
-                                        i18n.refresh_repo_state_failed,
-                                        error,
-                                        "workspace.history",
-                                        "workspace.history.squash",
-                                        i18n,
-                                    );
-                                } else if state.has_conflicts() {
-                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                    state.set_warning(
-                                        i18n.squash_conflict,
-                                        Some(i18n.squash_conflict_detail.to_string()),
-                                        "workspace.history.squash",
-                                    );
-                                } else if matches!(
-                                    execution,
-                                    git_core::RewriteExecution::InProgress
-                                ) {
-                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                    state.set_info(
-                                        i18n.squash_in_progress,
-                                        Some(i18n.rewrite_in_progress_detail.to_string()),
-                                        "workspace.history.squash",
-                                    );
-                                } else {
-                                    state.set_success(
-                                        i18n.squash_done_fmt
-                                            .replace("{}", short_commit_id(&commit_id)),
-                                        Some(i18n.history_refreshed_continue.to_string()),
-                                        "workspace.history.squash",
-                                    );
-                                }
-                            }
-                            Err(error) => report_async_failure(
-                                state,
-                                i18n.squash_failed,
-                                error.to_string(),
-                                "workspace.history",
-                                "workspace.history.squash",
-                                i18n,
-                            ),
-                        }
-                    }
+                    return dispatch_history_rewrite(state, commit_id, HistoryRewrite::Squash);
                 }
                 HistoryMessage::DropCommitFromHistory(commit_id) => {
-                    if let Ok(repo) = require_repository(state) {
-                        match git_core::drop_commit_from_history(&repo, &commit_id) {
-                            Ok(execution) => {
-                                state.history_view.context_menu_commit = None;
-                                if let Err(error) =
-                                    refresh_repository_after_action(state, &repo, true, i18n)
-                                {
-                                    report_async_failure(
-                                        state,
-                                        i18n.refresh_repo_state_failed,
-                                        error,
-                                        "workspace.history",
-                                        "workspace.history.drop",
-                                        i18n,
-                                    );
-                                } else if state.has_conflicts() {
-                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                    state.set_warning(
-                                        i18n.drop_conflict,
-                                        Some(i18n.drop_conflict_detail.to_string()),
-                                        "workspace.history.drop",
-                                    );
-                                } else if matches!(
-                                    execution,
-                                    git_core::RewriteExecution::InProgress
-                                ) {
-                                    open_rebase_session_with_context(state, Some(&commit_id), i18n);
-                                    state.set_info(
-                                        i18n.drop_in_progress,
-                                        Some(i18n.rewrite_in_progress_detail.to_string()),
-                                        "workspace.history.drop",
-                                    );
-                                } else {
-                                    state.set_success(
-                                        i18n.drop_done_fmt
-                                            .replace("{}", short_commit_id(&commit_id)),
-                                        Some(i18n.history_refreshed_continue.to_string()),
-                                        "workspace.history.drop",
-                                    );
-                                }
-                            }
-                            Err(error) => report_async_failure(
-                                state,
-                                i18n.drop_failed,
-                                error.to_string(),
-                                "workspace.history",
-                                "workspace.history.drop",
-                                i18n,
-                            ),
-                        }
-                    }
+                    return dispatch_history_rewrite(state, commit_id, HistoryRewrite::Drop);
                 }
                 HistoryMessage::OpenInteractiveRebaseFromCommit(commit_id) => {
                     if let Ok(repo) = require_repository(state) {
@@ -4206,9 +4094,11 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     let repo_path = repo.path().to_path_buf();
                     let tag_name = name.clone();
                     let remote_name = remote.clone();
+                    let access = sandbox_access::snapshot();
                     return Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || {
+                                let _access = access;
                                 let repo =
                                     git_core::Repository::discover(&repo_path).map_err(|e| {
                                         (tag_name.clone(), remote_name.clone(), e.to_string())
@@ -4598,146 +4488,16 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 state.rebase_editor.select_todo(index);
             }
             RebaseEditorMessage::StartRebase => {
-                if let Ok(repo) = require_repository(state) {
-                    state.rebase_editor.start_rebase(&repo, i18n);
-                    if let Some(error) = state.rebase_editor.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.start_rebase_panel_failed,
-                            error,
-                            "workspace.rebase",
-                            "workspace.rebase.start",
-                            i18n,
-                        );
-                    } else if let Err(error) =
-                        refresh_repository_after_action(state, &repo, true, i18n)
-                    {
-                        report_async_failure(
-                            state,
-                            i18n.refresh_repo_state_failed,
-                            error,
-                            "workspace.rebase",
-                            "workspace.rebase.start",
-                            i18n,
-                        );
-                    } else {
-                        if let Some(current) = state.current_repository.clone() {
-                            state.rebase_editor.load_status(&current, i18n);
-                        }
-                        state.open_auxiliary_view(AuxiliaryView::Rebase, i18n);
-                        if state.has_conflicts() {
-                            state.set_warning(
-                                i18n.rebase_conflict_warning,
-                                Some(i18n.rebase_conflict_detail.to_string()),
-                                "workspace.rebase",
-                            );
-                        } else if let Some(message) = state.rebase_editor.success_message.clone() {
-                            state.set_success(message, None, "workspace.rebase");
-                        }
-                    }
-                }
+                return dispatch_rebase(state, rebase_editor::RebaseEditorState::start_rebase);
             }
             RebaseEditorMessage::ContinueRebase => {
-                if let Ok(repo) = require_repository(state) {
-                    state.rebase_editor.continue_rebase(&repo, i18n);
-                    if let Some(error) = state.rebase_editor.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.continue_rebase_failed,
-                            error,
-                            "workspace.rebase",
-                            "workspace.rebase.continue",
-                            i18n,
-                        );
-                    } else if let Err(error) =
-                        refresh_repository_after_action(state, &repo, true, i18n)
-                    {
-                        report_async_failure(
-                            state,
-                            i18n.refresh_repo_state_failed,
-                            error,
-                            "workspace.rebase",
-                            "workspace.rebase.continue",
-                            i18n,
-                        );
-                    } else if !state.has_conflicts() {
-                        if let Some(current) = state.current_repository.clone() {
-                            state.rebase_editor.load_status(&current, i18n);
-                        }
-                        state.open_auxiliary_view(AuxiliaryView::Rebase, i18n);
-                        if let Some(message) = state.rebase_editor.success_message.clone() {
-                            state.set_success(message, None, "workspace.rebase");
-                        }
-                    }
-                }
+                return dispatch_rebase(state, rebase_editor::RebaseEditorState::continue_rebase);
             }
             RebaseEditorMessage::SkipCommit => {
-                if let Ok(repo) = require_repository(state) {
-                    state.rebase_editor.skip_commit(&repo, i18n);
-                    if let Some(error) = state.rebase_editor.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.skip_commit_failed,
-                            error,
-                            "workspace.rebase",
-                            "workspace.rebase.skip",
-                            i18n,
-                        );
-                    } else if let Err(error) =
-                        refresh_repository_after_action(state, &repo, true, i18n)
-                    {
-                        report_async_failure(
-                            state,
-                            i18n.refresh_repo_state_failed,
-                            error,
-                            "workspace.rebase",
-                            "workspace.rebase.skip",
-                            i18n,
-                        );
-                    } else if !state.has_conflicts() {
-                        if let Some(current) = state.current_repository.clone() {
-                            state.rebase_editor.load_status(&current, i18n);
-                        }
-                        state.open_auxiliary_view(AuxiliaryView::Rebase, i18n);
-                        if let Some(message) = state.rebase_editor.success_message.clone() {
-                            state.set_success(message, None, "workspace.rebase");
-                        }
-                    }
-                }
+                return dispatch_rebase(state, rebase_editor::RebaseEditorState::skip_commit);
             }
             RebaseEditorMessage::AbortRebase => {
-                if let Ok(repo) = require_repository(state) {
-                    state.rebase_editor.abort_rebase(&repo, i18n);
-                    if let Some(error) = state.rebase_editor.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.abort_rebase_failed,
-                            error,
-                            "workspace.rebase",
-                            "workspace.rebase.abort",
-                            i18n,
-                        );
-                    } else if let Err(error) =
-                        refresh_repository_after_action(state, &repo, false, i18n)
-                    {
-                        report_async_failure(
-                            state,
-                            i18n.refresh_repo_state_failed,
-                            error,
-                            "workspace.rebase",
-                            "workspace.rebase.abort",
-                            i18n,
-                        );
-                    } else {
-                        if let Some(current) = state.current_repository.clone() {
-                            state.rebase_editor.load_status(&current, i18n);
-                        }
-                        state.open_auxiliary_view(AuxiliaryView::Rebase, i18n);
-                        if let Some(message) = state.rebase_editor.success_message.clone() {
-                            state.set_success(message, None, "workspace.rebase");
-                        }
-                    }
-                }
+                return dispatch_rebase(state, rebase_editor::RebaseEditorState::abort_rebase);
             }
             RebaseEditorMessage::Refresh => {
                 if let Ok(repo) = require_repository(state) {
@@ -4848,8 +4608,10 @@ fn spawn_signature_backfill(
         .map(|e| {
             let commit_id = e.id.clone();
             let repo_path = repo_path.clone();
+            let access = sandbox_access::snapshot();
             Task::perform(
                 async move {
+                    let _access = access;
                     let repo = git_core::Repository::discover(&repo_path).ok()?;
                     let oid = git2::Oid::from_str(&commit_id).ok()?;
                     let status = git_core::verify_commit_signature(&repo, oid).ok()?;
@@ -5599,6 +5361,42 @@ fn open_gitignore_view(state: &mut AppState) -> Result<(), String> {
     Ok(())
 }
 
+fn switch_project_with_access(
+    state: &mut AppState,
+    path: &Path,
+    i18n: &I18n,
+) -> Result<(), String> {
+    let path = prepare_repository_with_access(state, path)?;
+    state.switch_to_project(&path, i18n)
+}
+
+fn prepare_repository_with_access(state: &mut AppState, path: &Path) -> Result<PathBuf, String> {
+    let mut requested = path.to_path_buf();
+    loop {
+        match state.prepare_repository_access(&requested) {
+            Ok(path) => return Ok(path),
+            Err(error) => {
+                if !git_core::requires_bookmarks() {
+                    return Err(error);
+                }
+                let Some(missing) = state.access_request.take() else {
+                    return Err(error);
+                };
+                let Some(selected) = rfd::FileDialog::new()
+                    .set_title(format!("重新授权 Git 目录：{}", missing.display()))
+                    .pick_folder()
+                else {
+                    return Err(error);
+                };
+                let selected = state.adopt_folder_access(selected)?;
+                if missing == requested && !requested.exists() && selected.join(".git").exists() {
+                    requested = selected;
+                }
+            }
+        }
+    }
+}
+
 fn pick_granted_folder(state: &mut AppState) -> Result<Option<PathBuf>, String> {
     let Some(path) = file_picker::pick_folder() else {
         return Ok(None);
@@ -5610,15 +5408,19 @@ fn pick_granted_ssh_key(state: &mut AppState) -> Result<Option<PathBuf>, String>
     let Some(path) = file_picker::pick_ssh_key() else {
         return Ok(None);
     };
-    Ok(Some(state.adopt_file_access(path)?))
+    let path = state.adopt_file_access(path)?;
+    state.ssh_access = state.pending_access.pop();
+    Ok(Some(path))
 }
 
-fn ensure_clone_destination_access(state: &mut AppState, dest: &Path) -> Result<(), String> {
+fn ensure_clone_destination_access(state: &mut AppState, dest: &Path) -> Result<PathBuf, String> {
     let parent = dest.parent().unwrap_or(dest);
     let grant = state.grant_for(parent);
     if grant.bookmark.is_some() || !git_core::requires_bookmarks() {
-        sandbox_access::restore_folder(&grant).map(|_| ())
-            .map_err(|error| error.to_string())
+        let lease = state.restore_access(parent)?;
+        let parent = lease.path().to_path_buf();
+        state.pending_access = vec![lease];
+        Ok(parent)
     } else {
         Err(if state.git_settings.language.as_deref() == Some("zh-CN") {
             "请先选择克隆目标文件夹"
@@ -5667,29 +5469,43 @@ fn handle_clone_message(
             Task::none()
         }
         CloneMessage::Execute => {
-            let Some(options) = state.clone_dialog.build_options() else {
+            let Some(mut options) = state.clone_dialog.build_options() else {
                 state.clone_dialog.error = Some(i18n.clone_error_invalid_url.to_string());
                 return Task::none();
             };
+            let source_access =
+                if git_core::requires_bookmarks() && Path::new(&options.url).is_absolute() {
+                    match prepare_repository_with_access(state, Path::new(&options.url)) {
+                        Ok(path) => options.url = path.display().to_string(),
+                        Err(error) => {
+                            state.clone_dialog.error = Some(error);
+                            return Task::none();
+                        }
+                    }
+                    std::mem::take(&mut state.pending_access)
+                } else {
+                    Vec::new()
+                };
             // Check if destination already exists
             let dest = state.clone_dialog.destination_path();
-            if let Err(error) = ensure_clone_destination_access(state, &dest) {
-                state.clone_dialog.error = Some(error);
-                return Task::none();
+            match ensure_clone_destination_access(state, &dest) {
+                Ok(parent) => options.parent_dir = parent,
+                Err(error) => {
+                    state.clone_dialog.error = Some(error);
+                    return Task::none();
+                }
             }
+            state.pending_access.extend(source_access);
+            let dest = options.parent_dir.join(&options.directory_name);
             if dest.exists() {
-                state.clone_dialog.error =
-                    Some(i18n.clone_error_dir_exists.to_string());
+                state.clone_dialog.error = Some(i18n.clone_error_dir_exists.to_string());
                 return Task::none();
             }
             state.clone_dialog.is_cloning = true;
             state.clone_dialog.progress = None;
             state.clone_dialog.error = None;
             git_dispatch::run(
-                move || {
-                    git_core::clone::clone(&options, None, None)
-                        .map_err(|e| e.to_string())
-                },
+                move || git_core::clone::clone(&options, None, None).map_err(|e| e.to_string()),
                 Message::CloneComplete,
             )
         }
@@ -5711,6 +5527,71 @@ fn open_stash_panel(state: &mut AppState) -> Result<(), String> {
     state.open_auxiliary_view(AuxiliaryView::Stashes, i18n);
     state.set_info(i18n.stash_opened, None, "workspace.stash");
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum HistoryRewrite {
+    Reword,
+    Fixup,
+    Squash,
+    Drop,
+}
+
+fn dispatch_history_rewrite(
+    state: &mut AppState,
+    commit_id: String,
+    action: HistoryRewrite,
+) -> Task<Message> {
+    if state.is_loading {
+        return Task::none();
+    }
+    let Some(path) = state.active_project_path().map(Path::to_path_buf) else {
+        return Task::none();
+    };
+    state.is_loading = true;
+    state.history_view.context_menu_commit = None;
+    let completion_path = path.clone();
+    let completion_id = commit_id.clone();
+    git_dispatch::run(
+        move || {
+            let repo = Repository::discover(&path).map_err(|error| error.to_string())?;
+            let result = match action {
+                HistoryRewrite::Reword => git_core::edit_commit_message(&repo, &commit_id),
+                HistoryRewrite::Fixup => git_core::fixup_commit_to_previous(&repo, &commit_id),
+                HistoryRewrite::Squash => git_core::squash_commit_to_previous(&repo, &commit_id),
+                HistoryRewrite::Drop => git_core::drop_commit_from_history(&repo, &commit_id),
+            };
+            result.map(|_| ()).map_err(|error| error.to_string())
+        },
+        move |result| {
+            Message::HistoryRewriteCompleted(completion_path, completion_id, action, result)
+        },
+    )
+}
+
+fn dispatch_rebase(
+    state: &mut AppState,
+    operation: fn(&mut rebase_editor::RebaseEditorState, &Repository, &I18n),
+) -> Task<Message> {
+    if state.rebase_editor.is_loading {
+        return Task::none();
+    }
+    let Some(path) = state.active_project_path().map(Path::to_path_buf) else {
+        return Task::none();
+    };
+    let completion_path = path.clone();
+    let mut editor = state.rebase_editor.clone();
+    let language = state.git_settings.language.clone();
+    state.rebase_editor.is_loading = true;
+    state.rebase_editor.error = None;
+    git_dispatch::run(
+        move || {
+            let repo = Repository::discover(&path).map_err(|error| error.to_string())?;
+            operation(&mut editor, &repo, i18n::locale(language.as_deref()));
+            Ok(editor)
+        },
+        move |result| Message::RebaseCompleted(completion_path, result.map(Box::new)),
+    )
 }
 
 fn open_rebase_editor(state: &mut AppState) -> Result<(), String> {
@@ -5987,81 +5868,6 @@ fn report_async_failure(
         .unwrap_or(detail);
     logging::LogManager::log_async_failure(operation, source, &detail);
     state.set_error_with_source(title, detail, source);
-}
-
-pub enum ClipboardError {
-    Unsupported,
-    NoCommand,
-    Unknown(String),
-}
-
-impl ClipboardError {
-    fn to_message(&self, i18n: &I18n) -> String {
-        match self {
-            ClipboardError::Unsupported => i18n.clipboard_unsupported.to_string(),
-            ClipboardError::NoCommand => i18n.clipboard_no_command.to_string(),
-            ClipboardError::Unknown(msg) => msg.clone(),
-        }
-    }
-}
-
-fn copy_text_to_clipboard(value: &str) -> Result<(), ClipboardError> {
-    #[cfg(target_os = "macos")]
-    {
-        return pipe_command_stdin("pbcopy", &[], value).map_err(ClipboardError::Unknown);
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        return pipe_command_stdin("cmd", &["/C", "clip"], value).map_err(ClipboardError::Unknown);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        for (program, args) in [
-            ("wl-copy", vec![]),
-            ("xclip", vec!["-selection", "clipboard"]),
-            ("xsel", vec!["--clipboard", "--input"]),
-        ] {
-            if pipe_command_stdin(program, &args, value).is_ok() {
-                return Ok(());
-            }
-        }
-
-        return Err(ClipboardError::NoCommand);
-    }
-
-    #[allow(unreachable_code)]
-    Err(ClipboardError::Unsupported)
-}
-
-fn pipe_command_stdin(command: &str, args: &[&str], value: &str) -> Result<(), String> {
-    let mut child_command = Command::new(command);
-    git_core::configure_background_command(&mut child_command);
-
-    let mut child = child_command
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Cannot start clipboard command {command}: {error}"))?;
-
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(value.as_bytes())
-            .map_err(|error| format!("Failed to write to clipboard: {error}"))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("Failed waiting for clipboard command: {error}"))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
 }
 
 fn default_patch_file_name(repo: &Repository, commit_id: &str) -> String {
@@ -7899,6 +7705,8 @@ pub enum Message {
     OpenCloneDialog,
     CloneMessage(CloneMessage),
     CloneComplete(Result<std::path::PathBuf, String>),
+    RebaseCompleted(PathBuf, Result<Box<rebase_editor::RebaseEditorState>, String>),
+    HistoryRewriteCompleted(PathBuf, String, HistoryRewrite, Result<(), String>),
     StashPanelMessage(StashPanelMessage),
     RebaseEditorMessage(RebaseEditorMessage),
     ShowSettings,
