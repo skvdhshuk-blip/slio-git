@@ -635,8 +635,30 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                     Message::RebaseEditorMessage(RebaseEditorMessage::AbortRebase),
                 );
             }
-            StateAction::ContinueCherryPick => {
-                return update(state, Message::Commit);
+            StateAction::ContinueCherryPick | StateAction::ContinueRevert => {
+                if let Some(repo) = state.current_repository.as_ref() {
+                    let (kind, message) = match action {
+                        StateAction::ContinueCherryPick => (
+                            git_core::InProgressCommitActionKind::CherryPick,
+                            i18n.bp_continued_cherry_pick,
+                        ),
+                        _ => (
+                            git_core::InProgressCommitActionKind::Revert,
+                            i18n.bp_continued_revert,
+                        ),
+                    };
+                    let repo_path = repo.path().to_path_buf();
+                    let message = message.to_string();
+                    return git_dispatch::run(
+                        move || {
+                            run_git_op_then_refresh(repo_path, move |repo| {
+                                git_core::continue_in_progress_commit_action(repo, kind)
+                                    .map_err(|error| error.to_string())
+                            })
+                        },
+                        move |result| Message::GitOpComplete(result, message.clone()),
+                    );
+                }
             }
             StateAction::AbortCherryPick => {
                 if let Some(repo) = state.current_repository.clone() {
@@ -660,9 +682,6 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                         Err(error) => state.set_error(error.to_string()),
                     }
                 }
-            }
-            StateAction::ContinueRevert => {
-                return update(state, Message::Commit);
             }
             StateAction::AbortRevert => {
                 if let Some(repo) = state.current_repository.clone() {
