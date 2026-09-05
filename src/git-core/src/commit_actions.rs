@@ -1,15 +1,17 @@
 //! Commit-level actions for branch/history workflows.
 
+#[cfg_attr(feature = "app-store", path = "commit_actions/native.rs")]
+#[cfg_attr(not(feature = "app-store"), path = "commit_actions/desktop.rs")]
+mod backend;
+
 use crate::commit;
 use crate::error::GitError;
 use crate::git_utils::{current_head_oid, is_ancestor, resolve_commit_oid};
 use crate::index;
-use crate::process::git_command;
 use crate::repository::{Repository, RepositoryState};
 use log::info;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InProgressCommitActionKind {
@@ -32,6 +34,7 @@ pub struct PushCurrentBranchTarget {
     pub upstream_ref: String,
     pub upstream_branch_name: String,
     pub selected_commit: String,
+    pub expected_remote_oid: String,
     pub is_fast_forward: bool,
     pub requires_force_with_lease: bool,
 }
@@ -66,6 +69,7 @@ fn git_dir(repo: &Repository) -> &Path {
     &repo.path
 }
 
+#[cfg(not(feature = "app-store"))]
 fn has_rebase_in_progress(repo: &Repository) -> bool {
     let git_dir = git_dir(repo);
     git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
@@ -109,34 +113,6 @@ fn ensure_clean_worktree(repo: &Repository, operation: &str) -> Result<(), GitEr
             details: "当前仓库还有未提交改动，请先提交、暂存或清理工作区".to_string(),
         })
     }
-}
-
-fn run_git_command(repo: &Repository, operation: &str, args: &[String]) -> Result<(), GitError> {
-    let output = git_command()?
-        .args(args)
-        .current_dir(repo.command_cwd())
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: operation.to_string(),
-            details: format!("Failed to execute git {operation}: {e}"),
-        })?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let details = if stderr.trim().is_empty() {
-        stdout.trim().to_string()
-    } else {
-        stderr.trim().to_string()
-    };
-
-    Err(GitError::OperationFailed {
-        operation: operation.to_string(),
-        details: format!("git {operation} failed: {details}"),
-    })
 }
 
 fn current_branch_first_parent_chain(
@@ -310,43 +286,6 @@ fn build_rewrite_todo(
         .collect()
 }
 
-fn rewrite_temp_dir(operation: &str) -> PathBuf {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    std::env::temp_dir().join(format!(
-        "slio-git-{operation}-{}-{timestamp}",
-        std::process::id()
-    ))
-}
-
-fn write_sequence_editor_script(
-    operation: &str,
-    todo_path: &Path,
-    script_path: &Path,
-) -> Result<(), GitError> {
-    #[cfg(unix)]
-    let contents = format!("#!/bin/sh\ncat '{}' > \"$1\"\n", todo_path.display());
-    #[cfg(windows)]
-    let contents = format!("@echo off\r\ntype \"{}\" > %1\r\n", todo_path.display());
-
-    fs::write(script_path, contents).map_err(GitError::Io)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(script_path)
-            .map_err(GitError::Io)?
-            .permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(script_path, permissions).map_err(GitError::Io)?;
-    }
-
-    let _ = operation;
-    Ok(())
-}
-
 fn run_scripted_interactive_rebase(
     repo: &Repository,
     operation: &str,
@@ -354,67 +293,13 @@ fn run_scripted_interactive_rebase(
     todo_contents: &str,
     auto_accept_editor: bool,
 ) -> Result<RewriteExecution, GitError> {
-    let temp_dir = rewrite_temp_dir(operation);
-    fs::create_dir_all(&temp_dir).map_err(GitError::Io)?;
-
-    let todo_path = temp_dir.join("git-rebase-todo");
-    let script_path = if cfg!(windows) {
-        temp_dir.join("sequence-editor.cmd")
-    } else {
-        temp_dir.join("sequence-editor.sh")
-    };
-
-    fs::write(&todo_path, todo_contents).map_err(GitError::Io)?;
-    write_sequence_editor_script(operation, &todo_path, &script_path)?;
-
-    let mut command = git_command()?;
-    command.current_dir(repo.command_cwd());
-    command.env("GIT_SEQUENCE_EDITOR", &script_path);
-    if auto_accept_editor {
-        command.env("GIT_EDITOR", "true");
-    }
-
-    command.arg("rebase").arg("-i");
-    if let Some(base_spec) = base_spec {
-        command.arg(base_spec);
-    } else {
-        command.arg("--root");
-    }
-
-    let output = command.output().map_err(|e| GitError::OperationFailed {
-        operation: operation.to_string(),
-        details: format!("Failed to execute git {operation}: {e}"),
-    })?;
-
-    let cleanup_result = fs::remove_dir_all(&temp_dir);
-    if cleanup_result.is_err() {
-        let _ = cleanup_result;
-    }
-
-    if output.status.success() {
-        return Ok(if has_rebase_in_progress(repo) {
-            RewriteExecution::InProgress
-        } else {
-            RewriteExecution::Completed
-        });
-    }
-
-    if has_rebase_in_progress(repo) {
-        return Ok(RewriteExecution::InProgress);
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let details = if stderr.trim().is_empty() {
-        stdout.trim().to_string()
-    } else {
-        stderr.trim().to_string()
-    };
-
-    Err(GitError::OperationFailed {
-        operation: operation.to_string(),
-        details: format!("git {operation} failed: {details}"),
-    })
+    backend::run_scripted_interactive_rebase(
+        repo,
+        operation,
+        base_spec,
+        todo_contents,
+        auto_accept_editor,
+    )
 }
 
 pub fn export_commit_patch(
@@ -422,39 +307,33 @@ pub fn export_commit_patch(
     commit_id: &str,
     output_path: &Path,
 ) -> Result<(), GitError> {
-    info!(
-        "Exporting patch for commit '{}' to '{}'",
-        commit_id,
-        output_path.display()
-    );
-
-    let output = git_command()?
-        .args(["format-patch", "--stdout", "-1", commit_id])
-        .current_dir(repo.command_cwd())
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "format-patch".to_string(),
-            details: format!("Failed to execute git format-patch: {e}"),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "format-patch".to_string(),
-            details: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        });
-    }
-
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    fs::write(output_path, output.stdout)?;
-    Ok(())
+    backend::export_commit_patch(repo, commit_id, output_path)
 }
 
 pub fn get_in_progress_commit_action(
     repo: &Repository,
 ) -> Result<Option<InProgressCommitAction>, GitError> {
+    if let Some(operation) = crate::native::sequencer::status(repo)? {
+        let kind = match operation.kind {
+            crate::native::journal::Kind::Rebase | crate::native::journal::Kind::Merge => {
+                return Ok(None);
+            }
+            crate::native::journal::Kind::CherryPick => InProgressCommitActionKind::CherryPick,
+            crate::native::journal::Kind::Revert => InProgressCommitActionKind::Revert,
+        };
+        let commit_id = operation.steps.first().map(|step| step.commit.clone());
+        let subject = commit_id
+            .as_deref()
+            .map(|id| commit::get_commit(repo, id))
+            .transpose()?
+            .map(|info| commit_subject(&info.message).to_string());
+        return Ok(Some(InProgressCommitAction {
+            kind,
+            commit_id,
+            subject,
+            conflicted_files: index::get_conflicted_files(repo)?,
+        }));
+    }
     let (kind, head_file) = match repo.get_state() {
         RepositoryState::CherryPick => (
             InProgressCommitActionKind::CherryPick,
@@ -487,27 +366,13 @@ pub fn get_in_progress_commit_action(
 }
 
 pub fn cherry_pick_commit(repo: &Repository, commit_id: &str) -> Result<(), GitError> {
-    info!("Cherry-picking commit '{}'", commit_id);
-    // Let git handle dirty worktree errors naturally with its own messages
-
-    let args = vec![
-        "cherry-pick".to_string(),
-        "--no-edit".to_string(),
-        commit_id.to_string(),
-    ];
-    run_git_command(repo, "cherry-pick", &args)
+    crate::native::reject_active(repo)?;
+    backend::cherry_pick_commit(repo, commit_id)
 }
 
 pub fn revert_commit(repo: &Repository, commit_id: &str) -> Result<(), GitError> {
-    info!("Reverting commit '{}'", commit_id);
-    // No clean worktree check — git revert works with dirty worktree (matches IDEA behavior)
-
-    let args = vec![
-        "revert".to_string(),
-        "--no-edit".to_string(),
-        commit_id.to_string(),
-    ];
-    run_git_command(repo, "revert", &args)
+    crate::native::reject_active(repo)?;
+    backend::revert_commit(repo, commit_id)
 }
 
 pub fn edit_commit_message(
@@ -560,67 +425,33 @@ pub fn continue_in_progress_commit_action(
     repo: &Repository,
     kind: InProgressCommitActionKind,
 ) -> Result<(), GitError> {
-    let operation = match kind {
-        InProgressCommitActionKind::CherryPick => "cherry-pick",
-        InProgressCommitActionKind::Revert => "revert",
-    };
-
-    let add_output = git_command()?
-        .args(["add", "-A"])
-        .current_dir(repo.command_cwd())
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: format!("{operation}_continue"),
-            details: format!("Failed to execute git add: {e}"),
-        })?;
-
-    if !add_output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: format!("{operation}_continue"),
-            details: format!(
-                "git add failed: {}",
-                String::from_utf8_lossy(&add_output.stderr)
-            ),
-        });
+    if crate::native::active(repo) {
+        let native_kind = match kind {
+            InProgressCommitActionKind::CherryPick => crate::native::journal::Kind::CherryPick,
+            InProgressCommitActionKind::Revert => crate::native::journal::Kind::Revert,
+        };
+        crate::native::require_kind(repo, native_kind)?;
+        if !crate::native::sequencer::continue_operation(repo)? {
+            return Err(GitError::MergeConflict);
+        }
+        return Ok(());
     }
-
-    let args = match kind {
-        InProgressCommitActionKind::CherryPick => {
-            vec![
-                "-c".to_string(),
-                "core.editor=true".to_string(),
-                "cherry-pick".to_string(),
-                "--continue".to_string(),
-            ]
-        }
-        InProgressCommitActionKind::Revert => {
-            vec![
-                "-c".to_string(),
-                "core.editor=true".to_string(),
-                "revert".to_string(),
-                "--continue".to_string(),
-            ]
-        }
-    };
-
-    run_git_command(repo, &format!("{operation}_continue"), &args)
+    backend::continue_in_progress_commit_action(repo, kind)
 }
 
 pub fn abort_in_progress_commit_action(
     repo: &Repository,
     kind: InProgressCommitActionKind,
 ) -> Result<(), GitError> {
-    let (operation, args) = match kind {
-        InProgressCommitActionKind::CherryPick => (
-            "cherry-pick",
-            vec!["cherry-pick".to_string(), "--abort".to_string()],
-        ),
-        InProgressCommitActionKind::Revert => {
-            ("revert", vec!["revert".to_string(), "--abort".to_string()])
-        }
-    };
-
-    run_git_command(repo, &format!("{operation}_abort"), &args)
+    if crate::native::active(repo) {
+        let native_kind = match kind {
+            InProgressCommitActionKind::CherryPick => crate::native::journal::Kind::CherryPick,
+            InProgressCommitActionKind::Revert => crate::native::journal::Kind::Revert,
+        };
+        crate::native::require_kind(repo, native_kind)?;
+        return crate::native::sequencer::abort(repo);
+    }
+    backend::abort_in_progress_commit_action(repo, kind)
 }
 
 /// Reset mode matching IDEA's GitNewResetDialog.
@@ -662,6 +493,7 @@ pub fn reset_current_branch_to_commit(
         commit_id, mode
     );
 
+    crate::native::reject_active(repo)?;
     // Only hard reset requires clean worktree
     if mode == ResetMode::Hard {
         ensure_clean_worktree(repo, "reset")?;
@@ -689,12 +521,7 @@ pub fn reset_current_branch_to_commit(
         });
     }
 
-    let args = vec![
-        "reset".to_string(),
-        mode.git_flag().to_string(),
-        commit_id.to_string(),
-    ];
-    run_git_command(repo, "reset", &args)
+    backend::reset(repo, commit_id, mode)
 }
 
 pub fn resolve_push_current_branch_target(
@@ -744,7 +571,8 @@ pub fn resolve_push_current_branch_target(
         local_branch_name,
         upstream_ref,
         upstream_branch_name,
-        selected_commit: commit_id.to_string(),
+        selected_commit: selected_oid.to_string(),
+        expected_remote_oid: upstream_oid.to_string(),
         is_fast_forward,
         requires_force_with_lease: !is_fast_forward,
     })
@@ -754,31 +582,14 @@ pub fn push_current_branch_to_commit(
     repo: &Repository,
     target: &PushCurrentBranchTarget,
 ) -> Result<(), GitError> {
-    info!(
-        "Pushing current branch '{}' to '{}' at '{}'",
-        target.local_branch_name, target.upstream_ref, target.selected_commit
-    );
-
-    ensure_no_in_progress_operation(repo, "push-to-here")?;
-
-    let refspec = format!(
-        "{}:refs/heads/{}",
-        target.selected_commit, target.upstream_branch_name
-    );
-    let mut args = vec!["push".to_string()];
-    if target.requires_force_with_lease {
-        args.push("--force-with-lease".to_string());
-    }
-    args.push(target.remote_name.clone());
-    args.push(refspec);
-
-    run_git_command(repo, "push", &args)
+    backend::push_current_branch_to_commit(repo, target)
 }
 
 /// Uncommit: soft-reset from HEAD to the parent of the given commit.
 /// All changes from the removed commits are returned to the staging area.
 /// Equivalent to IDEA's "Uncommit" action.
 pub fn uncommit_to_commit(repo: &Repository, commit_id: &str) -> Result<(), GitError> {
+    crate::native::reject_active(repo)?;
     info!(
         "Uncommitting from HEAD to commit {} (soft reset to parent)",
         commit_id

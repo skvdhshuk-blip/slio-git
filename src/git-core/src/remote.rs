@@ -1,12 +1,11 @@
 //! Remote operations for git-core
 
 use crate::error::GitError;
-use crate::process::git_command;
+#[cfg_attr(feature = "app-store", path = "remote/native.rs")]
+#[cfg_attr(not(feature = "app-store"), path = "remote/desktop.rs")]
+mod backend;
 use crate::repository::Repository;
-use git2::{
-    Config, Cred, CredentialHelper, Error as Git2Error, FetchOptions,
-    PushOptions as Git2PushOptions, RemoteCallbacks,
-};
+use git2::{Config, RemoteCallbacks};
 use log::info;
 
 /// A Git remote
@@ -34,6 +33,7 @@ pub struct PushOptions<'a> {
     pub set_upstream: bool,
 }
 
+#[cfg(any(test, not(feature = "app-store")))]
 fn remote_url_uses_ssh(url: &str) -> bool {
     if url.starts_with("ssh://") {
         return true;
@@ -62,9 +62,19 @@ fn resolve_auth_username(
         .map(str::to_string)
         .or_else(|| username_from_url.map(str::to_string))
         .or_else(|| {
-            let mut helper = CredentialHelper::new(url);
-            helper.config(config);
-            helper.username.clone()
+            #[cfg(not(feature = "app-store"))]
+            {
+                let mut helper = git2::CredentialHelper::new(url);
+                helper.config(config);
+                helper.username.clone()
+            }
+            #[cfg(feature = "app-store")]
+            {
+                config
+                    .get_string(&format!("credential.{url}.username"))
+                    .ok()
+                    .or_else(|| config.get_string("credential.username").ok())
+            }
         })
 }
 
@@ -72,94 +82,10 @@ pub(crate) fn build_remote_callbacks(
     config: Config,
     credentials: Option<(&str, &str)>,
 ) -> RemoteCallbacks<'static> {
-    let explicit_username = credentials
-        .map(|(username, _)| username.trim().to_string())
-        .filter(|username| !username.is_empty());
-    let explicit_password =
-        credentials.and_then(|(_, password)| (!password.is_empty()).then(|| password.to_string()));
-
-    let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(move |url, username_from_url, allowed_types| {
-        if allowed_types.is_user_pass_plaintext() {
-            if let (Some(username), Some(password)) =
-                (explicit_username.as_deref(), explicit_password.as_deref())
-            {
-                return Cred::userpass_plaintext(username, password);
-            }
-        }
-
-        let auth_username =
-            resolve_auth_username(&config, url, explicit_username.as_deref(), username_from_url);
-
-        if allowed_types.is_username() {
-            if let Some(username) = auth_username.as_deref() {
-                return Cred::username(username);
-            }
-        }
-
-        if allowed_types.is_ssh_key() {
-            if let Some(username) = auth_username.as_deref() {
-                let imported = crate::auth::context();
-                if let Some(private_key) = imported.imported_ssh_key.as_ref() {
-                    if private_key.exists() {
-                        let pub_path = imported
-                            .imported_ssh_pub
-                            .as_ref()
-                            .filter(|path| path.exists())
-                            .map(std::path::PathBuf::as_path);
-                        if let Ok(cred) = Cred::ssh_key(username, pub_path, private_key, None) {
-                            return Ok(cred);
-                        }
-                    }
-                }
-
-                if crate::capability::implicit_home_ssh() {
-                    if let Ok(cred) = Cred::ssh_key_from_agent(username) {
-                        return Ok(cred);
-                    }
-
-                    let ssh_dir = dirs_next::home_dir()
-                        .map(|h| h.join(".ssh"))
-                        .unwrap_or_default();
-                    let key_names = ["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"];
-                    for key_name in &key_names {
-                        let private_key = ssh_dir.join(key_name);
-                        if private_key.exists() {
-                            let public_key = ssh_dir.join(format!("{key_name}.pub"));
-                            let pub_path = public_key.exists().then_some(public_key.as_path());
-                            if let Ok(cred) =
-                                Cred::ssh_key(username, pub_path, &private_key, None)
-                            {
-                                return Ok(cred);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if allowed_types.is_user_pass_plaintext() {
-            if let Ok(cred) =
-                Cred::credential_helper(&config, url, explicit_username.as_deref().or(username_from_url))
-            {
-                return Ok(cred);
-            }
-        }
-
-        if allowed_types.is_default() {
-            if let Ok(cred) = Cred::default() {
-                return Ok(cred);
-            }
-        }
-
-        Err(Git2Error::from_str(
-            "failed to resolve remote credentials from manual input, ssh-agent, or git credential helper",
-        ))
-    });
-
-    callbacks
+    backend::build_remote_callbacks(config, credentials)
 }
 
+#[cfg(not(feature = "app-store"))]
 fn remote_url(repo: &Repository, remote_name: &str) -> Result<String, GitError> {
     let repo_lock = repo.inner.read().unwrap();
     let remote = repo_lock
@@ -172,45 +98,14 @@ fn remote_url(repo: &Repository, remote_name: &str) -> Result<String, GitError> 
     Ok(remote.url().unwrap_or("").to_string())
 }
 
-fn run_git_remote_command(
-    repo: &Repository,
-    operation: &str,
-    remote_name: &str,
-    args: &[&str],
-) -> Result<(), GitError> {
-    let output = git_command()?
-        .args(args)
-        .current_dir(repo.command_cwd())
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: operation.to_string(),
-            details: format!("Failed to execute git {operation}: {e}"),
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let details = if stderr.trim().is_empty() {
-            stdout.trim().to_string()
-        } else {
-            stderr.trim().to_string()
-        };
-
-        return Err(GitError::RemoteFailed {
-            remote: remote_name.to_string(),
-            details: format!("git {operation} failed: {details}"),
-        });
-    }
-
-    Ok(())
-}
-
+#[cfg(any(test, not(feature = "app-store")))]
 fn has_explicit_credentials(credentials: Option<(&str, &str)>) -> bool {
     credentials.is_some_and(|(username, password)| {
         !username.trim().is_empty() || !password.trim().is_empty()
     })
 }
 
+#[cfg(any(test, not(feature = "app-store")))]
 fn should_use_system_git_for_push(repo: &Repository, credentials: Option<(&str, &str)>) -> bool {
     repo.is_worktree() && !has_explicit_credentials(credentials)
 }
@@ -249,6 +144,7 @@ fn current_branch(repo: &Repository, operation: &str) -> Result<String, GitError
         })
 }
 
+#[cfg(any(test, not(feature = "app-store")))]
 fn build_pull_args(
     repo: &Repository,
     remote_name: &str,
@@ -332,6 +228,7 @@ fn should_auto_set_upstream(repo: &Repository, branch_name: &str, target_branch:
     current_branch == branch_name && repo.current_upstream_ref().is_none()
 }
 
+#[cfg(any(test, not(feature = "app-store")))]
 fn build_push_args(
     repo: &Repository,
     remote_name: &str,
@@ -356,16 +253,6 @@ fn build_push_args(
     args.push(remote_name.to_string());
     args.push(refspec);
     args
-}
-
-fn run_git_remote_command_with_owned_args(
-    repo: &Repository,
-    operation: &str,
-    remote_name: &str,
-    args: Vec<String>,
-) -> Result<(), GitError> {
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_git_remote_command(repo, operation, remote_name, &arg_refs)
 }
 
 /// List all remotes
@@ -423,53 +310,7 @@ pub fn fetch(
     remote_name: &str,
     credentials: Option<(&str, &str)>,
 ) -> Result<(), GitError> {
-    info!("Fetching from remote '{}'", remote_name);
-
-    let remote_url = remote_url(repo, remote_name)?;
-    if remote_url_uses_ssh(&remote_url) && crate::capability::system_git() {
-        info!(
-            "Using system git fetch for SSH remote '{}' ({})",
-            remote_name, remote_url
-        );
-        return run_git_remote_command(repo, "fetch", remote_name, &["fetch", remote_name]);
-    }
-
-    let repo_lock = repo.inner.write().unwrap();
-    let config = repo_lock.config().map_err(|e| GitError::RemoteFailed {
-        remote: remote_name.to_string(),
-        details: e.to_string(),
-    })?;
-    let mut remote = repo_lock
-        .find_remote(remote_name)
-        .map_err(|e| GitError::RemoteFailed {
-            remote: remote_name.to_string(),
-            details: e.to_string(),
-        })?;
-
-    let mut callbacks = build_remote_callbacks(config, credentials);
-
-    callbacks.transfer_progress(|progress| {
-        info!(
-            "Fetch progress: {}/{} objects",
-            progress.received_objects(),
-            progress.total_objects()
-        );
-        true
-    });
-
-    let mut fetch_options = FetchOptions::new();
-    fetch_options.remote_callbacks(callbacks);
-
-    let refspecs = ["refs/heads/*:refs/remotes/*"];
-    remote
-        .fetch(&refspecs, Some(&mut fetch_options), None)
-        .map_err(|e| GitError::RemoteFailed {
-            remote: remote_name.to_string(),
-            details: e.to_string(),
-        })?;
-
-    info!("Fetch completed successfully");
-    Ok(())
+    backend::fetch(repo, remote_name, credentials)
 }
 
 /// Push to a remote
@@ -495,102 +336,8 @@ pub fn push_with_options(
     options: PushOptions<'_>,
     credentials: Option<(&str, &str)>,
 ) -> Result<(), GitError> {
-    info!(
-        "Pushing branch '{}' to remote '{}'",
-        branch_name, remote_name
-    );
-
-    let target_branch = normalize_target_branch(branch_name, options);
-    let refspec = build_push_refspec(branch_name, target_branch);
-    let should_set_upstream =
-        options.set_upstream || should_auto_set_upstream(repo, branch_name, target_branch);
-    if !crate::capability::system_git() && options.force_with_lease {
-        return Err(GitError::OperationFailed {
-            operation: "push".to_string(),
-            details: "force-with-lease is unavailable in the App Store build".to_string(),
-        });
-    }
-
-    let requires_system_git = crate::capability::system_git()
-        && (should_use_system_git_for_push(repo, credentials)
-            || should_set_upstream
-            || options.force_with_lease
-            || options.push_tags
-            || branch_name != target_branch
-            || is_explicit_refspec(branch_name));
-
-    if requires_system_git {
-        info!("Using system git for push with options {:?}", options);
-        return run_git_remote_command_with_owned_args(
-            repo,
-            "push",
-            remote_name,
-            build_push_args(repo, remote_name, branch_name, options),
-        );
-    }
-
-    // Try libgit2 first (handles SSH keys from agent + ~/.ssh/ + credential helpers)
-    let libgit2_result = (|| -> Result<(), GitError> {
-        let repo_lock = repo.inner.write().unwrap();
-        let config = repo_lock.config().map_err(|e| GitError::RemoteFailed {
-            remote: remote_name.to_string(),
-            details: e.to_string(),
-        })?;
-        let mut remote =
-            repo_lock
-                .find_remote(remote_name)
-                .map_err(|e| GitError::RemoteFailed {
-                    remote: remote_name.to_string(),
-                    details: e.to_string(),
-                })?;
-
-        let mut callbacks = build_remote_callbacks(config, credentials);
-        callbacks.push_update_reference(|refname, msg| {
-            info!("Push update: {} - {:?}", refname, msg);
-            Ok(())
-        });
-
-        let mut push_options = Git2PushOptions::new();
-        push_options.remote_callbacks(callbacks);
-
-        let mut refspecs = vec![refspec.clone()];
-        if options.push_tags {
-            refspecs.push("refs/tags/*".to_string());
-        }
-        let refspec_refs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
-        remote
-            .push(&refspec_refs, Some(&mut push_options))
-            .map_err(|e| GitError::RemoteFailed {
-                remote: remote_name.to_string(),
-                details: e.to_string(),
-            })?;
-
-        info!("Push completed successfully via libgit2");
-        Ok(())
-    })();
-
-    if libgit2_result.is_ok() {
-        if should_set_upstream {
-            set_branch_upstream(repo, branch_name, remote_name, target_branch)?;
-        }
-        return libgit2_result;
-    }
-
-    if !crate::capability::system_git() {
-        return libgit2_result;
-    }
-
-    // Fallback to system git (handles edge cases libgit2 can't)
-    info!(
-        "libgit2 push failed ({}), falling back to system git",
-        libgit2_result.as_ref().unwrap_err()
-    );
-    run_git_remote_command_with_owned_args(
-        repo,
-        "push",
-        remote_name,
-        build_push_args(repo, remote_name, branch_name, options),
-    )
+    crate::native::reject_active(repo)?;
+    backend::push_with_options(repo, remote_name, branch_name, options, credentials)
 }
 
 fn set_branch_upstream(
@@ -666,91 +413,8 @@ pub fn pull_with_options(
     options: PullOptions<'_>,
     credentials: Option<(&str, &str)>,
 ) -> Result<(), GitError> {
-    info!(
-        "Pulling from remote '{}' with options {:?}",
-        remote_name, options
-    );
-
-    if !crate::capability::system_git() {
-        return pull_with_libgit2(repo, remote_name, options, credentials);
-    }
-
-    let repo_path = repo.command_cwd();
-    let args = build_pull_args(repo, remote_name, options)?;
-    let output = git_command()?
-        .args(&args)
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "pull".to_string(),
-            details: format!("Failed to execute git pull: {}", e),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "pull".to_string(),
-            details: format!(
-                "git pull failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
-    info!("Pull completed successfully");
-    Ok(())
-}
-
-fn pull_with_libgit2(
-    repo: &Repository,
-    remote_name: &str,
-    options: PullOptions<'_>,
-    credentials: Option<(&str, &str)>,
-) -> Result<(), GitError> {
-    fetch(repo, remote_name, credentials)?;
-
-    let branch_name = options
-        .branch_name
-        .map(str::to_string)
-        .or_else(|| repo.current_branch().ok().flatten())
-        .ok_or_else(|| GitError::OperationFailed {
-            operation: "pull".to_string(),
-            details: "no current branch to pull".to_string(),
-        })?;
-
-    if options.rebase {
-        return Err(GitError::OperationFailed {
-            operation: "pull".to_string(),
-            details: "rebase pull is unavailable in the App Store build".to_string(),
-        });
-    }
-    if options.squash {
-        return Err(GitError::OperationFailed {
-            operation: "pull".to_string(),
-            details: "squash pull is unavailable in the App Store build".to_string(),
-        });
-    }
-
-    let signature = crate::commit::get_default_signature(repo)?;
-    let repo_lock = repo.inner.write().unwrap();
-    let fetch_head = repo_lock
-        .find_reference("FETCH_HEAD")
-        .map_err(|e| GitError::RemoteFailed {
-            remote: remote_name.to_string(),
-            details: e.to_string(),
-        })?;
-    let fetch_commit = repo_lock
-        .reference_to_annotated_commit(&fetch_head)
-        .map_err(|e| GitError::RemoteFailed {
-            remote: remote_name.to_string(),
-            details: e.to_string(),
-        })?;
-    crate::branch::finish_libgit2_merge(
-        &repo_lock,
-        &fetch_commit,
-        &signature,
-        &format!("{remote_name}/{branch_name}"),
-        "pull",
-    )
+    crate::native::reject_active(repo)?;
+    backend::pull_with_options(repo, remote_name, options, credentials)
 }
 
 #[cfg(test)]
@@ -1088,3 +752,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(feature = "app-store")]
+pub(crate) use backend::push_selected_commit;

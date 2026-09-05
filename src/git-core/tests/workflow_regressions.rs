@@ -61,14 +61,14 @@ fn create_conflicted_repository() -> (TestRepo, String) {
     git(repo.path(), &["add", "shared.txt"]).expect("failed to stage main version");
     git(repo.path(), &["commit", "-m", "main change"]).expect("failed to commit main");
 
-    let output = Command::new("git")
-        .args(["merge", "feature"])
-        .current_dir(repo.path())
-        .output()
-        .expect("failed to merge feature branch");
+    #[cfg(not(feature = "app-store"))]
+    assert!(git(repo.path(), &["merge", "feature"]).is_err());
+    #[cfg(feature = "app-store")]
     assert!(
-        !output.status.success(),
-        "expected merge to create a conflict"
+        Repository::open(repo.path())
+            .unwrap()
+            .merge_branch("feature")
+            .is_err()
     );
 
     (repo, main_branch)
@@ -237,14 +237,14 @@ fn linked_worktree_refresh_clears_merge_state_after_merge_commit() {
     git(&worktree_path, &["commit", "-m", "worktree change"])
         .expect("failed to commit worktree change");
 
-    let merge_output = Command::new("git")
-        .args(["merge", "master", "--no-edit"])
-        .current_dir(&worktree_path)
-        .output()
-        .expect("failed to start merge");
+    #[cfg(not(feature = "app-store"))]
+    assert!(git(&worktree_path, &["merge", "master", "--no-edit"]).is_err());
+    #[cfg(feature = "app-store")]
     assert!(
-        !merge_output.status.success(),
-        "merge should stop on conflict"
+        Repository::open(&worktree_path)
+            .unwrap()
+            .merge_branch("master")
+            .is_err()
     );
 
     let mut worktree_repo =
@@ -513,7 +513,6 @@ fn get_history_for_ref_returns_selected_branch_head_first() {
 }
 
 #[test]
-#[cfg(not(feature = "app-store"))]
 fn export_commit_patch_writes_patch_file() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("tracked.txt", "base\n", "base commit")
@@ -531,7 +530,6 @@ fn export_commit_patch_writes_patch_file() {
 }
 
 #[test]
-#[cfg(not(feature = "app-store"))]
 fn cherry_pick_commit_applies_selected_commit_on_current_branch() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("shared.txt", "base\n", "base commit")
@@ -567,7 +565,6 @@ fn cherry_pick_commit_applies_selected_commit_on_current_branch() {
 }
 
 #[test]
-#[cfg(not(feature = "app-store"))]
 fn in_progress_cherry_pick_can_be_detected_continued_and_aborted() {
     let (repo, feature_commit) = create_cherry_pick_conflict_repository();
     let repository = Repository::open(repo.path()).expect("failed to reopen repository");
@@ -621,7 +618,6 @@ fn in_progress_cherry_pick_can_be_detected_continued_and_aborted() {
 }
 
 #[test]
-#[cfg(not(feature = "app-store"))]
 fn revert_commit_creates_inverse_commit_and_restores_content() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("shared.txt", "base\n", "base commit")
@@ -647,7 +643,6 @@ fn revert_commit_creates_inverse_commit_and_restores_content() {
 }
 
 #[test]
-#[cfg(not(feature = "app-store"))]
 fn reset_current_branch_to_commit_rewinds_head_to_selected_ancestor() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("tracked.txt", "base\n", "base commit")
@@ -679,7 +674,6 @@ fn reset_current_branch_to_commit_rewinds_head_to_selected_ancestor() {
 }
 
 #[test]
-#[cfg(not(feature = "app-store"))]
 fn push_current_branch_to_commit_rewinds_upstream_with_force_with_lease() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("tracked.txt", "base\n", "base commit")
@@ -965,7 +959,6 @@ fn checkout_remote_branch_creates_local_tracking_branch() {
 }
 
 #[test]
-#[cfg(not(feature = "app-store"))]
 fn rebase_start_rebases_current_branch_onto_target_branch() {
     let repo = TestRepo::new().expect("failed to create test repository");
     repo.add_and_commit("shared.txt", "base\n", "base commit")

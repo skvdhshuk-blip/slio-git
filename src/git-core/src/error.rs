@@ -4,6 +4,19 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum GitError {
+    #[error("{operation} is unavailable in this distribution: {reason}")]
+    CapabilityUnavailable { operation: String, reason: String },
+
+    #[error("Repository recovery required: {reason}")]
+    RecoveryRequired { reason: String },
+
+    #[error("Reference {reference} changed; expected {expected}, found {actual}")]
+    RemoteRefChanged {
+        reference: String,
+        expected: String,
+        actual: String,
+    },
+
     #[error("Repository not found at path: {path}")]
     RepositoryNotFound { path: String },
 

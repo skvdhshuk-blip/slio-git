@@ -2,15 +2,17 @@
 //!
 //! Provides rebase functionality using git commands
 
+#[cfg_attr(feature = "app-store", path = "rebase/native.rs")]
+#[cfg_attr(not(feature = "app-store"), path = "rebase/desktop.rs")]
+mod backend;
+
 use crate::error::GitError;
 use crate::index;
-use crate::process::git_command;
 use crate::repository::{Repository, RepositoryState};
 use git2::Oid;
 use log::info;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Rebase operation result
 #[derive(Debug, Clone)]
@@ -34,28 +36,14 @@ pub struct InteractiveRebasePlan {
 }
 
 fn git_dir(repo: &Repository) -> PathBuf {
-    let workdir = repo.command_cwd();
-    let dot_git = workdir.join(".git");
-    if dot_git.is_dir() {
-        return dot_git;
-    }
-
-    if dot_git.is_file() {
-        if let Ok(contents) = fs::read_to_string(&dot_git) {
-            let trimmed = contents.trim();
-            if let Some(path) = trimmed.strip_prefix("gitdir:") {
-                let candidate = workdir.join(path.trim());
-                if candidate.exists() {
-                    return candidate;
-                }
-            }
-        }
-    }
-
-    repo.path.join(".git")
+    repo.path.clone()
 }
 
+#[cfg(any(test, not(feature = "app-store")))]
 fn is_rebase_in_progress(repo: &Repository) -> bool {
+    if crate::native::active(repo) {
+        return true;
+    }
     let git_dir = git_dir(repo);
     git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
 }
@@ -201,38 +189,6 @@ fn ensure_local_interactive_rebase_allowed(
     Ok(())
 }
 
-fn interactive_rebase_temp_dir(operation: &str) -> PathBuf {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    std::env::temp_dir().join(format!(
-        "slio-git-{operation}-{}-{timestamp}",
-        std::process::id()
-    ))
-}
-
-fn write_sequence_editor_script(todo_path: &Path, script_path: &Path) -> Result<(), GitError> {
-    #[cfg(unix)]
-    let contents = format!("#!/bin/sh\ncat '{}' > \"$1\"\n", todo_path.display());
-    #[cfg(windows)]
-    let contents = format!("@echo off\r\ntype \"{}\" > %1\r\n", todo_path.display());
-
-    fs::write(script_path, contents).map_err(GitError::Io)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(script_path)
-            .map_err(GitError::Io)?
-            .permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(script_path, permissions).map_err(GitError::Io)?;
-    }
-
-    Ok(())
-}
-
 fn parse_todo_line(line: &str) -> Option<RebaseTodoEntry> {
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.starts_with('#') || trimmed == "noop" {
@@ -267,6 +223,7 @@ fn read_last_todo_entry(path: &Path) -> Result<Option<RebaseTodoEntry>, GitError
     Ok(contents.lines().rev().find_map(parse_todo_line))
 }
 
+#[cfg(any(test, not(feature = "app-store")))]
 fn build_todo_contents(entries: &[RebaseTodoEntry]) -> Result<String, GitError> {
     if entries.is_empty() {
         return Err(GitError::OperationFailed {
@@ -314,50 +271,10 @@ fn build_todo_contents(entries: &[RebaseTodoEntry]) -> Result<String, GitError> 
     Ok(contents)
 }
 
-fn command_result_message(output: &std::process::Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => stdout,
-        (true, false) => stderr,
-        (false, false) => format!("{stderr}\n{stdout}"),
-    }
-}
-
 /// Start a rebase onto the given branch / ref.
 pub fn rebase_start(repo: &Repository, onto: &str) -> Result<String, GitError> {
-    info!("Starting rebase onto '{}'", onto);
-
-    let repo_path = repo.command_cwd();
-
-    let output = git_command()?
-        .args(["rebase", onto])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "rebase_start".to_string(),
-            details: format!("Failed to execute git rebase: {}", e),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "rebase_start".to_string(),
-            details: format!(
-                "git rebase failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
-    info!("Rebase started successfully");
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        Ok(format!("Rebase started onto {onto}"))
-    } else {
-        Ok(stdout)
-    }
+    crate::native::reject_active(repo)?;
+    backend::rebase_start(repo, onto)
 }
 
 pub fn prepare_interactive_rebase_plan(
@@ -442,189 +359,79 @@ pub fn start_interactive_rebase(
     base_ref: Option<&str>,
     entries: &[RebaseTodoEntry],
 ) -> Result<String, GitError> {
-    info!(
-        "Starting interactive rebase with {} todo entries",
-        entries.len()
-    );
-    ensure_clean_worktree(repo, "interactive_rebase_start")?;
-
-    let todo_contents = build_todo_contents(entries)?;
-    let temp_dir = interactive_rebase_temp_dir("interactive_rebase");
-    fs::create_dir_all(&temp_dir).map_err(GitError::Io)?;
-
-    let todo_path = temp_dir.join("git-rebase-todo");
-    let script_path = if cfg!(windows) {
-        temp_dir.join("sequence-editor.cmd")
-    } else {
-        temp_dir.join("sequence-editor.sh")
-    };
-
-    fs::write(&todo_path, todo_contents).map_err(GitError::Io)?;
-    write_sequence_editor_script(&todo_path, &script_path)?;
-
-    let mut command = git_command()?;
-    command.current_dir(repo.command_cwd());
-    command.env("GIT_SEQUENCE_EDITOR", &script_path);
-    if entries
-        .iter()
-        .any(|entry| entry.action.eq_ignore_ascii_case("squash"))
-    {
-        command.env("GIT_EDITOR", "true");
-    }
-
-    command.arg("rebase").arg("-i");
-    if let Some(base_ref) = base_ref {
-        command.arg(base_ref);
-    } else {
-        command.arg("--root");
-    }
-
-    let output = command.output().map_err(|e| GitError::OperationFailed {
-        operation: "interactive_rebase_start".to_string(),
-        details: format!("Failed to execute git rebase -i: {e}"),
-    })?;
-
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if stdout.is_empty() {
-            "交互式变基已启动".to_string()
-        } else {
-            stdout
-        });
-    }
-
-    if is_rebase_in_progress(repo) {
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let message = if !stderr.is_empty() { stderr } else { stdout };
-        return Ok(if message.is_empty() {
-            "交互式变基已进入待继续状态".to_string()
-        } else {
-            message
-        });
-    }
-
-    Err(GitError::OperationFailed {
-        operation: "interactive_rebase_start".to_string(),
-        details: format!(
-            "git rebase -i failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
-    })
+    crate::native::reject_active(repo)?;
+    backend::start_interactive_rebase(repo, base_ref, entries)
 }
 
 /// Continue a rebase after resolving conflicts
 pub fn rebase_continue(repo: &Repository) -> Result<RebaseResult, GitError> {
-    info!("Continuing rebase");
-
-    let repo_path = repo.command_cwd();
-
-    // First add the resolved files
-    let add_output = git_command()?
-        .args(["add", "-A"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "rebase_continue".to_string(),
-            details: format!("Failed to execute git add: {}", e),
-        })?;
-
-    if !add_output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "rebase_continue".to_string(),
-            details: format!(
-                "git add failed: {}",
-                String::from_utf8_lossy(&add_output.stderr)
-            ),
+    if crate::native::active(repo) {
+        crate::native::require_kind(repo, crate::native::journal::Kind::Rebase)?;
+        let success = crate::native::sequencer::continue_operation(repo)?;
+        return Ok(RebaseResult {
+            success,
+            message: if success {
+                "变基完成"
+            } else {
+                "变基等待冲突处理或修改提交"
+            }
+            .into(),
         });
     }
-
-    // Then continue the rebase
-    let output = git_command()?
-        .args(["rebase", "--continue"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "rebase_continue".to_string(),
-            details: format!("Failed to execute git rebase: {}", e),
-        })?;
-
-    let result = RebaseResult {
-        success: output.status.success(),
-        message: command_result_message(&output),
-    };
-
-    if !output.status.success() {
-        info!("Rebase continue failed: {}", result.message);
-    } else {
-        info!("Rebase continued successfully");
-    }
-
-    Ok(result)
+    backend::rebase_continue(repo)
 }
 
 /// Abort the current rebase
 pub fn rebase_abort(repo: &Repository) -> Result<(), GitError> {
-    info!("Aborting rebase");
-
-    let repo_path = repo.command_cwd();
-
-    let output = git_command()?
-        .args(["rebase", "--abort"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "rebase_abort".to_string(),
-            details: format!("Failed to execute git rebase: {}", e),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "rebase_abort".to_string(),
-            details: format!(
-                "git rebase --abort failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
+    if crate::native::active(repo) {
+        crate::native::require_kind(repo, crate::native::journal::Kind::Rebase)?;
+        return crate::native::sequencer::abort(repo);
     }
-
-    info!("Rebase aborted successfully");
-    Ok(())
+    backend::rebase_abort(repo)
 }
 
 /// Skip the current commit during rebase
 pub fn rebase_skip(repo: &Repository) -> Result<RebaseResult, GitError> {
-    info!("Skipping current commit during rebase");
-
-    let repo_path = repo.command_cwd();
-
-    let output = git_command()?
-        .args(["rebase", "--skip"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "rebase_skip".to_string(),
-            details: format!("Failed to execute git rebase: {}", e),
-        })?;
-
-    let result = RebaseResult {
-        success: output.status.success(),
-        message: command_result_message(&output),
-    };
-
-    if !output.status.success() {
-        info!("Rebase skip failed: {}", result.message);
-    } else {
-        info!("Rebase skipped successfully");
+    if crate::native::active(repo) {
+        crate::native::require_kind(repo, crate::native::journal::Kind::Rebase)?;
+        let success = crate::native::sequencer::skip(repo)?;
+        return Ok(RebaseResult {
+            success,
+            message: if success {
+                "变基完成"
+            } else {
+                "变基等待冲突处理或修改提交"
+            }
+            .into(),
+        });
     }
-
-    Ok(result)
+    backend::rebase_skip(repo)
 }
 
 /// Get the current rebase status
 pub fn get_rebase_status(repo: &Repository) -> Result<Option<RebaseStatus>, GitError> {
+    if let Some(operation) = crate::native::sequencer::status(repo)? {
+        if operation.kind != crate::native::journal::Kind::Rebase {
+            return Ok(None);
+        }
+        let total = operation.steps.len() as u32;
+        let current = if operation.phase == "edit" {
+            operation.cursor
+        } else {
+            operation.cursor + 1
+        }
+        .min(operation.steps.len()) as u32;
+        return Ok(Some(RebaseStatus {
+            is_interactive: true,
+            current_step: current,
+            total_steps: total,
+            progress: if total == 0 {
+                1.0
+            } else {
+                current as f32 / total as f32
+            },
+        }));
+    }
     let git_dir = git_dir(repo);
 
     // Check if we're in a rebase
@@ -673,6 +480,15 @@ pub fn get_rebase_status(repo: &Repository) -> Result<Option<RebaseStatus>, GitE
 }
 
 pub fn get_rebase_todo(repo: &Repository) -> Result<Vec<RebaseTodoEntry>, GitError> {
+    if let Some(operation) = crate::native::sequencer::status(repo)? {
+        if operation.kind != crate::native::journal::Kind::Rebase {
+            return Ok(Vec::new());
+        }
+        return operation.steps[operation.cursor..]
+            .iter()
+            .map(|step| native_todo(repo, step))
+            .collect();
+    }
     let git_dir = git_dir(repo);
     let todo_path = git_dir.join("rebase-merge").join("git-rebase-todo");
     if !todo_path.exists() {
@@ -688,28 +504,31 @@ pub fn get_rebase_todo(repo: &Repository) -> Result<Vec<RebaseTodoEntry>, GitErr
 }
 
 pub fn get_current_rebase_step(repo: &Repository) -> Result<Option<RebaseTodoEntry>, GitError> {
+    if let Some(operation) = crate::native::sequencer::status(repo)? {
+        if operation.kind != crate::native::journal::Kind::Rebase {
+            return Ok(None);
+        }
+        let cursor = if operation.phase == "edit" {
+            operation.cursor.saturating_sub(1)
+        } else {
+            operation.cursor
+        };
+        return operation
+            .steps
+            .get(cursor)
+            .map(|step| native_todo(repo, step))
+            .transpose();
+    }
     let git_dir = git_dir(repo);
     read_last_todo_entry(&git_dir.join("rebase-merge").join("done"))
 }
 
 /// Check if there are rebase conflicts
 pub fn has_rebase_conflicts(repo: &Repository) -> Result<bool, GitError> {
-    let repo_path = repo.command_cwd();
-
-    // Check for conflict markers in the index
-    let output = git_command()?
-        .args(["diff", "--name-only", "--diff-filter=U"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "has_rebase_conflicts".to_string(),
-            details: format!("Failed to execute git diff: {}", e),
-        })?;
-
-    let conflicted_files = String::from_utf8_lossy(&output.stdout);
-    let has_conflicts = !conflicted_files.trim().is_empty();
-
-    Ok(has_conflicts)
+    if crate::native::active(repo) {
+        return Ok(repo.inner.read().unwrap().index()?.has_conflicts());
+    }
+    backend::has_rebase_conflicts(repo)
 }
 
 /// Rebase status information
@@ -835,7 +654,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "app-store"))]
     fn start_interactive_rebase_exposes_current_step_and_remaining_todo() {
         let (repo, _temp_dir, commits) = create_linear_history_repo();
         let entries = vec![
@@ -879,3 +697,22 @@ mod tests {
         assert!(!is_rebase_in_progress(&repo));
     }
 }
+
+fn native_todo(
+    repo: &Repository,
+    step: &crate::native::journal::Step,
+) -> Result<RebaseTodoEntry, GitError> {
+    let commit = crate::commit::get_commit(repo, &step.commit)?;
+    Ok(RebaseTodoEntry {
+        action: if step.action == "reword" {
+            "edit".into()
+        } else {
+            step.action.clone()
+        },
+        commit: step.commit.clone(),
+        message: commit.message.lines().next().unwrap_or_default().into(),
+    })
+}
+
+#[cfg(feature = "app-store")]
+pub(crate) use backend::start_onto;

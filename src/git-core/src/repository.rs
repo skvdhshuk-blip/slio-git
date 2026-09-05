@@ -1,5 +1,9 @@
 //! Repository management for git-core
 
+#[cfg_attr(feature = "app-store", path = "repository/native.rs")]
+#[cfg_attr(not(feature = "app-store"), path = "repository/desktop.rs")]
+mod backend;
+
 use crate::error::GitError;
 use crate::signature::SignatureCache;
 use chrono::{Local, LocalResult, TimeZone};
@@ -81,9 +85,15 @@ pub struct Repository {
     pub state: RepositoryState,
     pub(crate) inner: Arc<RwLock<Git2Repository>>,
     signature_cache: Arc<SignatureCache>,
+    access: Option<Arc<dyn Send + Sync>>,
 }
 
 impl Repository {
+    /// Keep the caller's platform access alive with every repository clone.
+    pub fn retain_access(&mut self, access: Arc<dyn Send + Sync>) {
+        self.access = Some(access);
+    }
+
     /// Get repository path
     pub fn path(&self) -> &Path {
         self.workdir.as_deref().unwrap_or(&self.path)
@@ -180,7 +190,7 @@ impl Repository {
     fn from_git2(repo: Git2Repository) -> Result<Self, GitError> {
         let path = repo.path().to_path_buf();
         let workdir = repo.workdir().map(|p| p.to_path_buf());
-        let state = convert_state(repo.state());
+        let state = crate::native::state(&repo).unwrap_or_else(|| convert_state(repo.state()));
 
         info!("Repository opened: {:?}, state: {:?}", path, state);
 
@@ -190,6 +200,7 @@ impl Repository {
             state,
             inner: Arc::new(RwLock::new(repo)),
             signature_cache: Arc::new(SignatureCache::new()),
+            access: None,
         })
     }
 
@@ -232,18 +243,7 @@ impl Repository {
 
     /// Resolve the full upstream ref of the current branch, if configured.
     pub fn current_upstream_ref(&self) -> Option<String> {
-        let branch_name = self.current_branch().ok().flatten()?;
-        let repo_lock = self.inner.read().ok()?;
-        let branch = repo_lock
-            .find_branch(&branch_name, git2::BranchType::Local)
-            .ok()?;
-        let upstream = branch.upstream().ok()?;
-        let name = upstream.name().ok().flatten().map(str::to_string)?;
-        Some(
-            name.strip_prefix("refs/remotes/")
-                .unwrap_or(&name)
-                .to_string(),
-        )
+        backend::current_upstream_ref(self)
     }
 
     /// Get a compact repository state hint for workspace chrome.
@@ -262,45 +262,13 @@ impl Repository {
 
     /// Get sync status with upstream branch
     pub fn sync_status(&self) -> SyncStatus {
-        // Get current branch name
-        let branch_name = match self.current_branch() {
-            Ok(Some(name)) => name,
-            _ => return SyncStatus::NoUpstream,
-        };
-
-        let repo_lock = match self.inner.read() {
-            Ok(lock) => lock,
-            Err(_) => return SyncStatus::Unknown,
-        };
-        let branch = match repo_lock.find_branch(&branch_name, git2::BranchType::Local) {
-            Ok(branch) => branch,
-            Err(_) => return SyncStatus::NoUpstream,
-        };
-        let local_oid = match branch.get().target() {
-            Some(oid) => oid,
-            None => return SyncStatus::Unknown,
-        };
-        let upstream = match branch.upstream() {
-            Ok(upstream) => upstream,
-            Err(_) => return SyncStatus::NoUpstream,
-        };
-        let upstream_oid = match upstream.get().target() {
-            Some(oid) => oid,
-            None => return SyncStatus::Unknown,
-        };
-        match repo_lock.graph_ahead_behind(local_oid, upstream_oid) {
-            Ok((0, 0)) => SyncStatus::Synced,
-            Ok((ahead, 0)) => SyncStatus::Ahead(ahead),
-            Ok((0, behind)) => SyncStatus::Behind(behind),
-            Ok((ahead, behind)) => SyncStatus::Diverged { ahead, behind },
-            Err(_) => SyncStatus::Unknown,
-        }
+        backend::sync_status(self)
     }
 
     /// Get repository state
     pub fn get_state(&self) -> RepositoryState {
         let repo = self.inner.read().unwrap();
-        convert_state(repo.state())
+        crate::native::state(&repo).unwrap_or_else(|| convert_state(repo.state()))
     }
 
     /// Refresh repository state from disk
@@ -313,7 +281,8 @@ impl Repository {
 
         self.path = new_repo.path().to_path_buf();
         self.workdir = new_repo.workdir().map(|path| path.to_path_buf());
-        self.state = convert_state(new_repo.state());
+        self.state =
+            crate::native::state(&new_repo).unwrap_or_else(|| convert_state(new_repo.state()));
         *self.inner.write().unwrap() = new_repo;
         self.signature_cache.clear();
 
@@ -327,25 +296,35 @@ impl Repository {
 /// This clears merge state files such as `MERGE_HEAD` and `MERGE_MSG`, while keeping
 /// the current `HEAD`, index and worktree contents intact.
 pub fn quit_merge(repo: &Repository) -> Result<(), GitError> {
-    let repo_lock = repo.inner.write().unwrap();
-    let state = repo_lock.state();
-
-    if state != git2::RepositoryState::Merge {
-        return Err(GitError::OperationFailed {
-            operation: "quit_merge".to_string(),
-            details: "当前仓库没有进行中的合并状态".to_string(),
-        });
+    if crate::native::active(repo) {
+        return crate::native::sequencer::quit_merge(repo);
     }
+    #[cfg(feature = "app-store")]
+    return Err(GitError::RecoveryRequired {
+        reason: "请回到发起合并的工具处理当前流程".into(),
+    });
+    #[cfg(not(feature = "app-store"))]
+    {
+        let repo_lock = repo.inner.write().unwrap();
+        let state = repo_lock.state();
 
-    repo_lock
-        .cleanup_state()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "quit_merge".to_string(),
-            details: format!("Failed to clear merge state: {e}"),
-        })?;
+        if state != git2::RepositoryState::Merge {
+            return Err(GitError::OperationFailed {
+                operation: "quit_merge".to_string(),
+                details: "当前仓库没有进行中的合并状态".to_string(),
+            });
+        }
 
-    info!("Merge state cleared");
-    Ok(())
+        repo_lock
+            .cleanup_state()
+            .map_err(|e| GitError::OperationFailed {
+                operation: "quit_merge".to_string(),
+                details: format!("Failed to clear merge state: {e}"),
+            })?;
+
+        info!("Merge state cleared");
+        Ok(())
+    }
 }
 
 /// Convert git2 repository state to our state enum
@@ -354,12 +333,17 @@ fn convert_state(state: git2::RepositoryState) -> RepositoryState {
     match state {
         git2::RepositoryState::Clean => OurState::Clean,
         git2::RepositoryState::Merge => OurState::Merging,
-        git2::RepositoryState::Rebase => OurState::Rebasing,
-        git2::RepositoryState::ApplyMailbox => OurState::ApplyMailbox,
+        git2::RepositoryState::Rebase
+        | git2::RepositoryState::RebaseInteractive
+        | git2::RepositoryState::RebaseMerge => OurState::Rebasing,
+        git2::RepositoryState::ApplyMailbox | git2::RepositoryState::ApplyMailboxOrRebase => {
+            OurState::ApplyMailbox
+        }
         git2::RepositoryState::Bisect => OurState::Bisect,
-        git2::RepositoryState::CherryPick => OurState::CherryPick,
-        git2::RepositoryState::Revert => OurState::Revert,
-        _ => OurState::Clean,
+        git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence => {
+            OurState::CherryPick
+        }
+        git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => OurState::Revert,
     }
 }
 

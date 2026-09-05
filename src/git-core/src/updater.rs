@@ -1,9 +1,13 @@
 //! GitHub release auto-update checker.
 
+#[cfg(not(feature = "app-store"))]
 use log::info;
+#[cfg(not(feature = "app-store"))]
 use serde::Deserialize;
 
+#[cfg(not(feature = "app-store"))]
 const GITHUB_REPO: &str = "sk-wang/slio-git";
+#[cfg(not(feature = "app-store"))]
 const GITHUB_API: &str = "https://api.github.com";
 
 /// Information about an available update.
@@ -16,6 +20,7 @@ pub struct UpdateInfo {
     pub release_notes: String,
 }
 
+#[cfg(not(feature = "app-store"))]
 #[derive(Deserialize)]
 struct GitHubRelease {
     tag_name: String,
@@ -24,6 +29,7 @@ struct GitHubRelease {
     assets: Vec<GitHubAsset>,
 }
 
+#[cfg(not(feature = "app-store"))]
 #[derive(Deserialize)]
 struct GitHubAsset {
     name: String,
@@ -32,10 +38,8 @@ struct GitHubAsset {
 
 /// Check GitHub for a newer release than `current_version`.
 /// Returns `Some(UpdateInfo)` if a newer version exists.
+#[cfg(not(feature = "app-store"))]
 pub async fn check_for_update(current_version: String) -> Result<Option<UpdateInfo>, String> {
-    if !crate::capability::github_updater() {
-        return Ok(None);
-    }
     let current_version = current_version.as_str();
     let url = format!("{}/repos/{}/releases/latest", GITHUB_API, GITHUB_REPO);
 
@@ -85,6 +89,7 @@ pub async fn check_for_update(current_version: String) -> Result<Option<UpdateIn
 }
 
 /// Simple semver comparison: returns true if `latest` > `current`.
+#[cfg(any(test, not(feature = "app-store")))]
 fn is_newer(latest: &str, current: &str) -> bool {
     let parse = |s: &str| -> Vec<u32> {
         s.split('.')

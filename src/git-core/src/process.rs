@@ -1,4 +1,3 @@
-use crate::error::GitError;
 use std::process::Command;
 
 #[cfg(windows)]
@@ -21,37 +20,6 @@ pub fn background_command(program: &str) -> Command {
     command
 }
 
-pub fn require_system_git(operation: &str) -> Result<(), GitError> {
-    if crate::capability::system_git() {
-        Ok(())
-    } else {
-        Err(GitError::OperationFailed {
-            operation: operation.to_string(),
-            details: format!(
-                "{operation} needs system git, which is not available in the App Store build"
-            ),
-        })
-    }
-}
-
-pub fn git_command() -> Result<Command, GitError> {
-    require_system_git("git")?;
-    Ok(background_command("git"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn store_build_rejects_system_git() {
-        let result = require_system_git("probe");
-        if crate::capability::system_git() {
-            assert!(result.is_ok());
-            assert!(git_command().is_ok());
-        } else {
-            assert!(result.is_err());
-            assert!(git_command().is_err());
-        }
-    }
+pub fn git_command() -> Command {
+    background_command("git")
 }

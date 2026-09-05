@@ -44,6 +44,15 @@ pub fn create_commit(
     _author_name: &str,
     _author_email: &str,
 ) -> Result<String, GitError> {
+    if crate::native::active(repo) {
+        return crate::native::sequencer::finish_merge(repo, message);
+    }
+    #[cfg(feature = "app-store")]
+    if repo.get_state() != crate::repository::RepositoryState::Clean {
+        return Err(GitError::RecoveryRequired {
+            reason: "请回到发起该流程的工具完成提交或恢复".into(),
+        });
+    }
     info!("Creating commit: {}", message);
 
     let repo_lock = repo.inner.write().unwrap();
@@ -82,12 +91,10 @@ pub fn create_commit(
     let parent_refs: Vec<&git2::Commit<'_>> = parent_commits.iter().collect();
 
     // Create signature
-    let signature = repo_lock
-        .signature()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "create_commit".to_string(),
-            details: e.to_string(),
-        })?;
+    let signature = crate::auth::signature(&repo_lock).map_err(|e| GitError::OperationFailed {
+        operation: "create_commit".to_string(),
+        details: e.to_string(),
+    })?;
 
     let commit_oid = repo_lock
         .commit(
@@ -165,6 +172,13 @@ fn read_merge_head_oids(git_dir: &Path, operation: &str) -> Result<Vec<git2::Oid
 /// losslessly via [`String::from_utf8_lossy`] so the caller always gets text it
 /// can display.
 pub fn prepared_merge_message(repo: &Repository) -> Result<Option<String>, GitError> {
+    if let Some(operation) = crate::native::sequencer::status(repo)? {
+        if operation.kind == crate::native::journal::Kind::Merge {
+            return Ok(Some(operation.message.unwrap_or_else(|| {
+                format!("Merge commit '{}'\n", operation.steps[0].commit)
+            })));
+        }
+    }
     let merge_msg_path = {
         let repo_lock = repo.inner.read().unwrap();
         repo_lock.path().join("MERGE_MSG")
@@ -284,6 +298,10 @@ fn short_oid(oid: git2::Oid) -> String {
 
 /// Amend a commit with a new message
 pub fn amend_commit(repo: &Repository, commit_id: &str, message: &str) -> Result<String, GitError> {
+    if crate::native::active(repo) {
+        return crate::native::sequencer::amend(repo, commit_id, message);
+    }
+    crate::native::reject_active(repo)?;
     info!("Amending commit: {}", commit_id);
 
     let repo_lock = repo.inner.write().unwrap();
@@ -305,12 +323,10 @@ pub fn amend_commit(repo: &Repository, commit_id: &str, message: &str) -> Result
     })?;
 
     // Create signature
-    let signature = repo_lock
-        .signature()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "amend_commit".to_string(),
-            details: e.to_string(),
-        })?;
+    let signature = crate::auth::signature(&repo_lock).map_err(|e| GitError::OperationFailed {
+        operation: "amend_commit".to_string(),
+        details: e.to_string(),
+    })?;
 
     // Amend the commit using the commit object
     let amend_oid = commit
@@ -345,17 +361,7 @@ pub fn create_signature(
 
 /// Get the default signature (user's git config)
 pub fn get_default_signature(repo: &Repository) -> Result<git2::Signature<'static>, GitError> {
-    if let Some((name, email)) = crate::auth::configured_identity() {
-        return create_signature(repo, &name, &email);
-    }
-
-    let repo_lock = repo.inner.read().unwrap();
-    repo_lock
-        .signature()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "get_default_signature".to_string(),
-            details: e.to_string(),
-        })
+    crate::auth::signature(&repo.inner.read().unwrap())
 }
 
 /// Validate a commit reference (hash, branch name, tag, etc.)
@@ -785,10 +791,13 @@ mod tests {
         write_file(temp_dir.path(), "shared.txt", "main change\n");
         commit_all(&repo, "main change");
 
-        assert!(
-            !try_run_git(temp_dir.path(), &["merge", "feature", "--no-edit"]),
-            "merge should stop on conflict"
-        );
+        #[cfg(not(feature = "app-store"))]
+        assert!(!try_run_git(
+            temp_dir.path(),
+            &["merge", "feature", "--no-edit"]
+        ));
+        #[cfg(feature = "app-store")]
+        assert!(repo.merge_branch("feature").is_err());
 
         let repo = Repository::discover(temp_dir.path()).expect("discover conflicted repo");
         assert_eq!(repo.get_state(), RepositoryState::Merging);
@@ -831,10 +840,13 @@ mod tests {
         let stale_repo = Repository::discover(temp_dir.path()).expect("open repo before merge");
         assert_eq!(stale_repo.get_state(), RepositoryState::Clean);
 
-        assert!(
-            !try_run_git(temp_dir.path(), &["merge", "feature", "--no-edit"]),
-            "merge should stop on conflict"
-        );
+        #[cfg(not(feature = "app-store"))]
+        assert!(!try_run_git(
+            temp_dir.path(),
+            &["merge", "feature", "--no-edit"]
+        ));
+        #[cfg(feature = "app-store")]
+        assert!(repo.merge_branch("feature").is_err());
 
         resolve_conflict(
             &stale_repo,
@@ -873,10 +885,10 @@ mod tests {
         write_file(temp_dir.path(), "shared.txt", "main change\n");
         commit_all(&repo, "main change");
 
-        assert!(
-            !try_run_git(temp_dir.path(), &["merge", "feature", "--no-edit"]),
-            "merge should stop on conflict"
-        );
+        assert!(!try_run_git(
+            temp_dir.path(),
+            &["merge", "feature", "--no-edit"]
+        ));
 
         let repo = Repository::discover(temp_dir.path()).expect("discover conflicted repo");
         assert_eq!(repo.get_state(), RepositoryState::Merging);

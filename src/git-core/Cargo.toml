@@ -26,5 +26,5 @@ dirs-next = { workspace = true }
 similar = "3.0.0"
 reqwest = { workspace = true }
 
-[dev-dependencies]
 tempfile = { workspace = true }
+fs2 = "0.4.3"

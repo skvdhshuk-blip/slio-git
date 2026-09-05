@@ -597,6 +597,7 @@ pub fn resolve_conflict(
     file_path: &Path,
     resolution: ConflictResolution,
 ) -> Result<(), GitError> {
+    crate::native::allow_edit(repo)?;
     let index_path = repo_relative_path(repo, file_path);
     let content = match resolution {
         ConflictResolution::Ours => {

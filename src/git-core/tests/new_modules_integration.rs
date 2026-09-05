@@ -191,21 +191,11 @@ fn verify_commit_signature_returns_unsigned_for_normal_commit() {
     let oid = git2::Oid::from_str(&history[0].id).unwrap();
 
     let status = git_core::verify_commit_signature(&r, oid).unwrap();
-    if git_core::system_git() {
-        assert_eq!(
-            status,
-            git_core::SignatureStatus::NoSignature,
-            "normal commit should be NoSignature"
-        );
-    } else {
-        assert_eq!(
-            status,
-            git_core::SignatureStatus::NotVerified {
-                reason: git_core::VerificationFailureReason::CannotVerify,
-            },
-            "App Store build cannot verify signatures"
-        );
-    }
+    assert_eq!(
+        status,
+        git_core::SignatureStatus::NoSignature,
+        "normal commit should be NoSignature in either channel"
+    );
 }
 
 // ── Commit message history ────────────────────────────────────────────────────
