@@ -497,7 +497,9 @@ fn generate_hunk_patch(file_path: &Path, hunk: &Hunk) -> Result<String, GitError
     patch.push_str(&format!("--- a/{}\n", file_path.to_string_lossy()));
     patch.push_str(&format!("+++ b/{}\n", file_path.to_string_lossy()));
     patch.push_str(&hunk.header);
-    patch.push('\n');
+    if !hunk.header.ends_with('\n') {
+        patch.push('\n');
+    }
 
     // Add the hunk lines
     for line in &hunk.lines {
