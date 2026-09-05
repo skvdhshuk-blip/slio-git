@@ -132,7 +132,13 @@ fn requested_under_root(
             path: requested.into(),
         });
     }
-    Ok(resolved_root.join(suffix))
+    // Joining an empty suffix adds a trailing slash, which turns a granted file
+    // (patch destination or SSH key) into a directory request on macOS.
+    Ok(if suffix.as_os_str().is_empty() {
+        resolved_root.to_path_buf()
+    } else {
+        resolved_root.join(suffix)
+    })
 }
 
 pub fn acquire(grant: &FolderGrant, requested: &Path) -> Result<AccessLease, AccessError> {
@@ -412,6 +418,16 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn exact_file_grant_preserves_the_resolved_file_path() {
+        let grant = FolderGrant {
+            path: "/old/export.patch".into(),
+            bookmark: None,
+        };
+        let resolved = Path::new("/new/export.patch");
+        let requested = requested_under_root(&grant, &grant.path, resolved).unwrap();
+        assert_eq!(requested.as_os_str(), resolved.as_os_str());
     }
     #[test]
     fn missing_bookmark_requires_reselection_in_mas() {
