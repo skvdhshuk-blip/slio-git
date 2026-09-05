@@ -2659,8 +2659,8 @@ impl AppState {
     }
 
     pub fn restore_access(&mut self, path: &Path) -> Result<sandbox_access::AccessLease, String> {
-        let grant = self.grant_for(path);
-        let lease = sandbox_access::acquire(&grant, path).map_err(|error| {
+        let (grant, requested) = self.grant_request(path);
+        let lease = sandbox_access::acquire(&grant, &requested).map_err(|error| {
             if let sandbox_access::AccessError::NeedsReselect { path } = &error {
                 self.access_request = Some(path.clone());
             }
@@ -2685,6 +2685,22 @@ impl AppState {
             self.remember_folder_grant(lease.grant().clone());
         }
         Ok(lease)
+    }
+
+    fn grant_request(&self, path: &Path) -> (FolderGrant, PathBuf) {
+        let grant = self.grant_for(path);
+        // Prefer the stored spelling so moved bookmarks can resolve. After a
+        // new grant, recognize filesystem aliases such as /var -> /private/var
+        // without replacing a requested child with its authorized parent.
+        if grant.bookmark.is_none() {
+            if let Ok(canonical) = std::fs::canonicalize(path) {
+                let canonical_grant = self.grant_for(&canonical);
+                if canonical_grant.bookmark.is_some() {
+                    return (canonical_grant, canonical);
+                }
+            }
+        }
+        (grant, path.to_path_buf())
     }
 
     pub fn prepare_repository_access(&mut self, requested: &Path) -> Result<PathBuf, String> {
@@ -2885,6 +2901,33 @@ pub fn is_docked_auxiliary_view(_view: AuxiliaryView) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn grant_alias_resolution_keeps_requested_child_and_prefers_stored_bookmarks() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let child = root.join("repo");
+        std::fs::create_dir_all(&child).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let mut state = super::AppState::new();
+        let canonical_root = std::fs::canonicalize(&root).unwrap();
+        state.folder_grants.push(super::FolderGrant {
+            path: canonical_root.clone(),
+            bookmark: Some(vec![1]),
+        });
+        let requested = alias.join("repo");
+        let (grant, resolved) = state.grant_request(&requested);
+        assert_eq!(grant.path, canonical_root);
+        assert_eq!(resolved, std::fs::canonicalize(&child).unwrap());
+        state.folder_grants.push(super::FolderGrant {
+            path: requested.clone(),
+            bookmark: Some(vec![2]),
+        });
+        let (grant, resolved) = state.grant_request(&requested);
+        assert_eq!(grant.bookmark, Some(vec![2]));
+        assert_eq!(resolved, requested);
+    }
     use super::{AppState, PersistedWorkspaceMemory, ProjectEntry, RecoveryAction, ShellSection};
     use crate::i18n::EN;
     use crate::views::branch_popup::MetadataDensity;
