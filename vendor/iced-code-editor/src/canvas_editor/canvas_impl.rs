@@ -1576,60 +1576,63 @@ mod tests {
         buffer: &TextBuffer,
         target_line: usize,
         warm: bool,
-    ) -> Vec<(Style, String)> {
+    ) -> Result<Vec<(Style, String)>, Box<dyn std::error::Error>> {
         let syntax_set = SyntaxSet::load_defaults_nonewlines();
         let theme_set = ThemeSet::load_defaults();
-        let syntax =
-            syntax_ref_for_language(&syntax_set, syntax_name).expect("syntax should be available");
+        let syntax = syntax_ref_for_language(&syntax_set, syntax_name)
+            .ok_or("syntax should be available")?;
         let theme = theme_set
             .themes
             .get("base16-ocean.dark")
             .or_else(|| theme_set.themes.values().next())
-            .expect("syntax theme should be available");
+            .ok_or("syntax theme should be available")?;
         let mut highlighter = HighlightLines::new(syntax, theme);
 
         if warm {
             warm_syntax_highlighter_to_line(&mut highlighter, &syntax_set, buffer, target_line);
         }
 
-        highlighter
-            .highlight_line(buffer.line(target_line), &syntax_set)
-            .expect("highlight line")
+        Ok(highlighter
+            .highlight_line(buffer.line(target_line), &syntax_set)?
             .into_iter()
             .map(|(style, text)| (style, text.to_string()))
-            .collect()
+            .collect())
     }
 
     #[test]
-    fn syntax_highlighter_uses_php_source_scope() {
+    fn syntax_highlighter_uses_php_source_scope() -> Result<(), Box<dyn std::error::Error>> {
         let syntax_set = SyntaxSet::load_defaults_nonewlines();
-        let syntax = syntax_ref_for_language(&syntax_set, "php").expect("PHP syntax");
+        let syntax = syntax_ref_for_language(&syntax_set, "php").ok_or("PHP syntax")?;
 
         assert_eq!(
             syntax.scope.build_string(),
             "source.php",
             "PHP canvas highlighting should not require an opening <?php tag"
         );
+        Ok(())
     }
 
     #[test]
-    fn syntax_highlighter_line_comments_do_not_leak_into_next_python_line() {
+    fn syntax_highlighter_line_comments_do_not_leak_into_next_python_line()
+    -> Result<(), Box<dyn std::error::Error>> {
         let content = ["# module comment", "from typing import List"].join("\n");
         let buffer = TextBuffer::new(&content);
         let target_line = 1;
 
-        let cold = ranges_for_line("py", &buffer, target_line, false);
-        let warm = ranges_for_line("py", &buffer, target_line, true);
+        let cold = ranges_for_line("py", &buffer, target_line, false)?;
+        let warm = ranges_for_line("py", &buffer, target_line, true)?;
 
         assert_eq!(
             style_text_signature(&warm),
             style_text_signature(&cold),
             "warming over a line comment must not keep the next Python line in comment scope"
         );
+        Ok(())
     }
 
     #[test]
-    fn syntax_highlighter_line_comments_do_not_leak_into_next_php_line() {
+    fn syntax_highlighter_line_comments_do_not_leak_into_next_php_line()
+    -> Result<(), Box<dyn std::error::Error>> {
         let content = [
             "<?php",
             "class IndexExploreService",
@@ -1652,14 +1655,15 @@ mod tests {
         let buffer = TextBuffer::new(&content);
         let target_line = 11;
 
-        let cold = ranges_for_line("php", &buffer, target_line, false);
-        let warm = ranges_for_line("php", &buffer, target_line, true);
+        let cold = ranges_for_line("php", &buffer, target_line, false)?;
+        let warm = ranges_for_line("php", &buffer, target_line, true)?;
 
         assert_eq!(
             style_text_signature(&warm),
             style_text_signature(&cold),
             "warming over a // comment must not keep the next PHP line in comment scope"
         );
+        Ok(())
     }
 
     fn style_text_signature(ranges: &[(Style, String)]) -> Vec<(u8, u8, u8, String)> {
