@@ -5550,6 +5550,8 @@ fn dispatch_history_rewrite(
     };
     state.is_loading = true;
     state.history_view.context_menu_commit = None;
+    state.rebase_editor.success_message = None;
+    state.rebase_editor.error = None;
     let completion_path = path.clone();
     let completion_id = commit_id.clone();
     git_dispatch::run(
