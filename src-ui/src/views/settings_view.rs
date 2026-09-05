@@ -38,6 +38,7 @@ pub enum SettingsMessage {
     SetUserEmail(String),
     SetSshKeyPath(String),
     ImportSshKey,
+    ImportKnownHosts,
     // Actions
     Close,
     SaveAndClose,
@@ -108,6 +109,7 @@ pub struct GitSettings {
     pub user_name: String,
     pub user_email: String,
     pub ssh_key_path: String,
+    pub known_hosts_path: String,
 }
 
 impl Default for GitSettings {
@@ -135,6 +137,7 @@ impl Default for GitSettings {
             user_name: String::new(),
             user_email: String::new(),
             ssh_key_path: String::new(),
+            known_hosts_path: String::new(),
         }
     }
 }
@@ -177,20 +180,29 @@ impl GitSettings {
             SettingsMessage::SetUserName(val) => self.user_name = val.clone(),
             SettingsMessage::SetUserEmail(val) => self.user_email = val.clone(),
             SettingsMessage::SetSshKeyPath(val) => self.ssh_key_path = val.clone(),
-            SettingsMessage::ImportSshKey => {}
+            SettingsMessage::ImportSshKey | SettingsMessage::ImportKnownHosts => {}
             SettingsMessage::Close | SettingsMessage::SaveAndClose => {}
         }
     }
 
-    pub fn apply_auth(&self, access: Option<crate::sandbox_access::AccessLease>) {
-        let access = access
-            .filter(|lease| lease.path() == std::path::Path::new(&self.ssh_key_path))
-            .map(|lease| std::sync::Arc::new(lease) as std::sync::Arc<dyn Send + Sync>);
+    pub fn apply_auth(
+        &self,
+        access: Option<crate::sandbox_access::AccessLease>,
+        hosts_access: Option<crate::sandbox_access::AccessLease>,
+    ) {
+        let access =
+            access.filter(|lease| lease.path() == std::path::Path::new(&self.ssh_key_path));
+        let hosts_access = hosts_access
+            .filter(|lease| lease.path() == std::path::Path::new(&self.known_hosts_path));
+        let access =
+            Some(std::sync::Arc::new((access, hosts_access)) as std::sync::Arc<dyn Send + Sync>);
         git_core::auth::set_context_with_access(
             git_core::AuthContext {
                 imported_ssh_key: (!self.ssh_key_path.is_empty())
                     .then(|| std::path::PathBuf::from(&self.ssh_key_path)),
                 imported_ssh_pub: None,
+                imported_known_hosts: (!self.known_hosts_path.is_empty())
+                    .then(|| self.known_hosts_path.clone().into()),
                 user_name: (!self.user_name.trim().is_empty()).then(|| self.user_name.clone()),
                 user_email: (!self.user_email.trim().is_empty()).then(|| self.user_email.clone()),
             },
@@ -273,6 +285,7 @@ impl GitSettings {
                 "user_name" => s.user_name = value.to_string(),
                 "user_email" => s.user_email = value.to_string(),
                 "ssh_key_path" => s.ssh_key_path = value.to_string(),
+                "known_hosts_path" => s.known_hosts_path = value.to_string(),
                 _ => {}
             }
         }
@@ -323,7 +336,8 @@ impl GitSettings {
              history_commit_limit\t{}\n\
              user_name\t{}\n\
              user_email\t{}\n\
-             ssh_key_path\t{}\n",
+             ssh_key_path\t{}\n\
+             known_hosts_path\t{}\n",
             self.auto_update_on_push_reject,
             self.pull_autocrlf_true,
             self.protected_branches,
@@ -344,6 +358,7 @@ impl GitSettings {
             self.user_name,
             self.user_email,
             self.ssh_key_path,
+            self.known_hosts_path,
         )
     }
 
@@ -543,6 +558,29 @@ pub fn view<'a>(settings: &'a GitSettings, i18n: &'a I18n) -> Element<'a, Settin
                         Some(SettingsMessage::ImportSshKey),
                     )),
             )
+            .push_maybe(git_core::is_app_store_build().then(|| {
+                Row::new()
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(i18n.sv_known_hosts_label)
+                            .size(12)
+                            .color(theme::darcula::TEXT_SECONDARY),
+                    )
+                    .push(
+                        Text::new(if settings.known_hosts_path.is_empty() {
+                            i18n.sv_known_hosts_missing
+                        } else {
+                            &settings.known_hosts_path
+                        })
+                        .size(12)
+                        .width(Length::Fill),
+                    )
+                    .push(button::ghost(
+                        i18n.sv_import_known_hosts,
+                        Some(SettingsMessage::ImportKnownHosts),
+                    ))
+            }))
             .push_maybe((!store_note.is_empty()).then(|| {
                 Text::new(store_note)
                     .size(11)
@@ -946,12 +984,14 @@ mod tests {
             user_name: "Ada".to_string(),
             user_email: "ada@example.com".to_string(),
             ssh_key_path: "/tmp/id_ed25519".to_string(),
+            known_hosts_path: "/tmp/known_hosts".to_string(),
             ..GitSettings::default()
         };
         let loaded = GitSettings::parse(&s.serialize());
         assert_eq!(loaded.user_name, "Ada");
         assert_eq!(loaded.user_email, "ada@example.com");
         assert_eq!(loaded.ssh_key_path, "/tmp/id_ed25519");
+        assert_eq!(loaded.known_hosts_path, "/tmp/known_hosts");
     }
 
     #[test]

@@ -720,6 +720,7 @@ pub struct AppState {
     pub folder_grants: Vec<FolderGrant>,
     pub pending_access: Vec<sandbox_access::AccessLease>,
     pub ssh_access: Option<sandbox_access::AccessLease>,
+    pub known_hosts_access: Option<sandbox_access::AccessLease>,
     pub access_request: Option<PathBuf>,
     pub shell: AppShellState,
     pub feedback: Option<FeedbackState>,
@@ -889,6 +890,7 @@ impl AppState {
             folder_grants: Vec::new(),
             pending_access: Vec::new(),
             ssh_access: None,
+            known_hosts_access: None,
             access_request: None,
             shell,
             feedback: None,
@@ -976,16 +978,37 @@ impl AppState {
             })
             .collect();
 
-        state.git_settings.apply_auth(state.ssh_access.clone());
+        state
+            .git_settings
+            .apply_auth(state.ssh_access.clone(), state.known_hosts_access.clone());
         if !state.git_settings.ssh_key_path.is_empty() {
             let key = PathBuf::from(&state.git_settings.ssh_key_path);
             match state.restore_access(&key) {
                 Ok(lease) => {
                     state.git_settings.ssh_key_path = lease.path().display().to_string();
                     state.ssh_access = Some(lease);
-                    state.git_settings.apply_auth(state.ssh_access.clone());
+                    state
+                        .git_settings
+                        .apply_auth(state.ssh_access.clone(), state.known_hosts_access.clone());
                 }
                 Err(error) => warn!("SSH key access for {} failed: {}", key.display(), error),
+            }
+        }
+        if !state.git_settings.known_hosts_path.is_empty() {
+            let key = PathBuf::from(&state.git_settings.known_hosts_path);
+            match state.restore_access(&key) {
+                Ok(lease) => {
+                    state.git_settings.known_hosts_path = lease.path().display().to_string();
+                    state.known_hosts_access = Some(lease);
+                    state
+                        .git_settings
+                        .apply_auth(state.ssh_access.clone(), state.known_hosts_access.clone());
+                }
+                Err(error) => warn!(
+                    "SSH known_hosts access for {} failed: {}",
+                    key.display(),
+                    error
+                ),
             }
         }
 
@@ -2672,6 +2695,12 @@ impl AppState {
                 if let Ok(suffix) = entry.path.strip_prefix(&grant.path) {
                     entry.path = lease.grant().path.join(suffix);
                 }
+            }
+            if Path::new(&self.git_settings.known_hosts_path) == path {
+                self.git_settings.known_hosts_path = lease.path().display().to_string();
+                self.git_settings
+                    .save()
+                    .map_err(|error| error.to_string())?;
             }
             if Path::new(&self.git_settings.ssh_key_path) == path {
                 self.git_settings.ssh_key_path = lease.path().display().to_string();

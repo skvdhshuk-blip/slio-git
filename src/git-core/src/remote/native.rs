@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 pub(super) fn build_remote_callbacks(
     mut config: Config,
     credentials: Option<(&str, &str)>,
+    url: &str,
 ) -> RemoteCallbacks<'static> {
     let username = credentials
         .map(|pair| pair.0.trim().to_string())
@@ -17,7 +18,33 @@ pub(super) fn build_remote_callbacks(
         .filter(|password| !password.is_empty());
     let (identity, access) = crate::auth::network_context();
     let config = config.snapshot();
+    let known_hosts = identity
+        .imported_known_hosts
+        .as_deref()
+        .map(read_known_hosts)
+        .unwrap_or_else(|| {
+            Err(git2::Error::from_str(
+                "Import the server's known_hosts file in Settings before connecting with SSH",
+            ))
+        });
+    let port = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.port())
+        .unwrap_or(22);
     let mut callbacks = RemoteCallbacks::new();
+    callbacks.certificate_check(move |certificate, hostname| {
+        let Some(hostkey) = certificate.as_hostkey() else {
+            return Ok(git2::CertificateCheckStatus::CertificatePassthrough);
+        };
+        let hosts = known_hosts.as_ref()
+            .map_err(|error| git2::Error::from_str(error.message()))?;
+        let key = hostkey.hostkey().ok_or_else(|| git2::Error::from_str("SSH server provided no host key"))?;
+        match hosts.check_port(hostname, port, key) {
+            ssh2::CheckResult::Match => Ok(git2::CertificateCheckStatus::CertificateOk),
+            ssh2::CheckResult::Mismatch => Err(git2::Error::from_str("SSH server host key changed; verify the server before importing updated known_hosts")),
+            _ => Err(git2::Error::from_str("SSH server is absent from the authorized known_hosts file")),
+        }
+    });
     callbacks.credentials(move |url, from_url, allowed| {
         let _access = &access;
         let config = config
@@ -55,9 +82,18 @@ pub(super) fn fetch(
     let raw = repo.inner.write().unwrap();
     let mut remote = raw.find_remote(remote_name)?;
     let mut options = FetchOptions::new();
-    options.remote_callbacks(build_remote_callbacks(raw.config()?, credentials));
+    options.remote_callbacks(build_remote_callbacks(
+        raw.config()?,
+        credentials,
+        remote.url().unwrap_or(""),
+    ));
     // Empty refspecs use this remote's configured mapping, including its name.
-    remote.fetch::<&str>(&[], Some(&mut options), None)?;
+    remote
+        .fetch::<&str>(&[], Some(&mut options), None)
+        .map_err(|error| GitError::RemoteFailed {
+            remote: remote_name.into(),
+            details: transport_error(&error),
+        })?;
     Ok(())
 }
 
@@ -87,7 +123,7 @@ fn expected_remote(
     Ok(Oid::zero())
 }
 
-fn push_refspecs(
+pub(super) fn push_refspecs(
     raw: &git2::Repository,
     remote_name: &str,
     refspecs: &[String],
@@ -117,7 +153,11 @@ fn push_refspecs(
     let lease_error = RefCell::new(None);
     let outcomes = RefCell::new(BTreeMap::new());
     let negotiated = RefCell::new(std::collections::BTreeSet::new());
-    let mut callbacks = build_remote_callbacks(raw.config()?, credentials);
+    let mut callbacks = build_remote_callbacks(
+        raw.config()?,
+        credentials,
+        remote.pushurl().or_else(|| remote.url()).unwrap_or(""),
+    );
     callbacks.push_negotiation(|updates| {
         for update in updates {
             let reference = update
@@ -172,7 +212,7 @@ fn push_refspecs(
     }
     result.map_err(|error| GitError::RemoteFailed {
         remote: remote_name.into(),
-        details: error.to_string(),
+        details: transport_error(&error),
     })?;
     if negotiated
         .into_inner()
@@ -304,8 +344,17 @@ pub(super) fn pull_with_options(
         let raw = repo.inner.write().unwrap();
         let mut remote = raw.find_remote(remote_name)?;
         let mut fetch_options = FetchOptions::new();
-        fetch_options.remote_callbacks(build_remote_callbacks(raw.config()?, credentials));
-        remote.fetch(&[&reference], Some(&mut fetch_options), None)?;
+        fetch_options.remote_callbacks(build_remote_callbacks(
+            raw.config()?,
+            credentials,
+            remote.url().unwrap_or(""),
+        ));
+        remote
+            .fetch(&[&reference], Some(&mut fetch_options), None)
+            .map_err(|error| GitError::RemoteFailed {
+                remote: remote_name.into(),
+                details: transport_error(&error),
+            })?;
         // FETCH_HEAD contains only this explicitly requested branch.
         raw.find_reference("FETCH_HEAD")?.peel_to_commit()?.id()
     };
@@ -334,4 +383,33 @@ pub(super) fn pull_with_options(
         options.squash,
         options.force_autocrlf_true,
     )
+}
+
+// Read once when callbacks are constructed: changing settings or replacing the
+// selected file cannot change the server identity accepted by an in-flight task.
+fn read_known_hosts(path: &std::path::Path) -> Result<ssh2::KnownHosts, git2::Error> {
+    let read = || -> Result<ssh2::KnownHosts, Box<dyn std::error::Error>> {
+        let contents = std::fs::read_to_string(path)?;
+        let session = ssh2::Session::new()?;
+        let mut hosts = session.known_hosts()?;
+        for line in contents
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        {
+            // libssh2 does not implement OpenSSH certificate/revocation markers.
+            // Never reinterpret a marked line as an ordinary trusted key.
+            if line.starts_with('@') {
+                return Err(
+                    "OpenSSH known_hosts markers are not supported; import explicit server keys"
+                        .into(),
+                );
+            }
+            hosts.read_str(line, ssh2::KnownHostFileKind::OpenSSH)?;
+        }
+        Ok(hosts)
+    };
+    read().map_err(|error| {
+        git2::Error::from_str(&format!("Cannot read authorized known_hosts: {error}"))
+    })
 }

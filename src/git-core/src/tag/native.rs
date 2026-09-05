@@ -1,7 +1,6 @@
 //! Native execution for tag.
 
 use super::*;
-use git2::PushOptions as Git2PushOptions;
 
 pub(super) fn list_tags(repo: &Repository) -> Result<Vec<TagInfo>, GitError> {
     info!("Listing all tags");
@@ -110,28 +109,11 @@ pub(super) fn delete_tag(repo: &Repository, name: &str) -> Result<(), GitError> 
 
 pub(super) fn push_tag(repo: &Repository, tag_name: &str, remote: &str) -> Result<(), GitError> {
     info!("Pushing tag '{}' to remote '{}'", tag_name, remote);
-    let repo_lock = repo.inner.write().unwrap();
-    let config = repo_lock.config().map_err(|e| GitError::RemoteFailed {
-        remote: remote.to_string(),
-        details: e.to_string(),
-    })?;
-    let mut remote_obj = repo_lock
-        .find_remote(remote)
-        .map_err(|e| GitError::RemoteFailed {
-            remote: remote.to_string(),
-            details: e.to_string(),
-        })?;
-    let callbacks = crate::remote::build_remote_callbacks(config, None);
-    let mut options = Git2PushOptions::new();
-    options.remote_callbacks(callbacks);
-    let refspec = format!("refs/tags/{tag_name}");
-    remote_obj
-        .push(&[&refspec], Some(&mut options))
-        .map_err(|e| GitError::RemoteFailed {
-            remote: remote.to_string(),
-            details: e.to_string(),
-        })?;
-    Ok(())
+    crate::remote::push_reference(
+        repo,
+        remote,
+        format!("refs/tags/{tag_name}:refs/tags/{tag_name}"),
+    )
 }
 
 pub(super) fn delete_remote_tag(
@@ -140,26 +122,5 @@ pub(super) fn delete_remote_tag(
     remote: &str,
 ) -> Result<(), GitError> {
     info!("Deleting tag '{}' from remote '{}'", tag_name, remote);
-    let repo_lock = repo.inner.write().unwrap();
-    let config = repo_lock.config().map_err(|e| GitError::RemoteFailed {
-        remote: remote.to_string(),
-        details: e.to_string(),
-    })?;
-    let mut remote_obj = repo_lock
-        .find_remote(remote)
-        .map_err(|e| GitError::RemoteFailed {
-            remote: remote.to_string(),
-            details: e.to_string(),
-        })?;
-    let callbacks = crate::remote::build_remote_callbacks(config, None);
-    let mut options = Git2PushOptions::new();
-    options.remote_callbacks(callbacks);
-    let refspec = format!(":refs/tags/{tag_name}");
-    remote_obj
-        .push(&[&refspec], Some(&mut options))
-        .map_err(|e| GitError::RemoteFailed {
-            remote: remote.to_string(),
-            details: e.to_string(),
-        })?;
-    Ok(())
+    crate::remote::push_reference(repo, remote, format!(":refs/tags/{tag_name}"))
 }

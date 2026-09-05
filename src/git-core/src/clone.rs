@@ -64,7 +64,7 @@ pub fn clone(
         details: format!("failed to open git config: {e}"),
     })?;
 
-    let mut callbacks = build_remote_callbacks(config, credentials);
+    let mut callbacks = build_remote_callbacks(config, credentials, &options.url);
 
     // Wrap the progress callback in Arc<Mutex<..>> so closures can share it
     // while satisfying the 'static lifetime required by RemoteCallbacks.
@@ -122,7 +122,7 @@ pub fn clone(
         .clone(&options.url, &dest)
         .map_err(|e| GitError::CloneFailed {
             url: options.url.clone(),
-            details: e.to_string(),
+            details: crate::remote::transport_error(&e),
         })?;
 
     // Drop the repo handle to release the lock before returning the path.

@@ -1034,17 +1034,59 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 SettingsMessage::Close => state.close_auxiliary_view(i18n),
                 SettingsMessage::SaveAndClose => {
                     state.git_settings.apply_message(&msg);
-                    state.git_settings.apply_auth(state.ssh_access.clone());
+                    state
+                        .git_settings
+                        .apply_auth(state.ssh_access.clone(), state.known_hosts_access.clone());
                     if let Err(e) = state.git_settings.save() {
                         log::warn!("Failed to persist git settings: {}", e);
                     }
                     state.close_auxiliary_view(i18n);
                     state.set_success(i18n.settings_saved, None, "settings.save");
                 }
+                SettingsMessage::ImportKnownHosts => {
+                    if let Some(path) = file_picker::pick_file() {
+                        match state.adopt_file_access(path) {
+                            Ok(path) => {
+                                state.known_hosts_access = state.pending_access.pop();
+                                state.git_settings.known_hosts_path = path.display().to_string();
+                                state.git_settings.apply_auth(
+                                    state.ssh_access.clone(),
+                                    state.known_hosts_access.clone(),
+                                );
+                                if let Err(error) = state.git_settings.save() {
+                                    report_async_failure(
+                                        state,
+                                        i18n.settings_saved,
+                                        error.to_string(),
+                                        "settings.ssh",
+                                        "settings.ssh",
+                                        i18n,
+                                    );
+                                } else {
+                                    state.set_success(
+                                        i18n.sv_known_hosts_imported,
+                                        Some(path.display().to_string()),
+                                        "settings.ssh",
+                                    );
+                                }
+                            }
+                            Err(error) => report_async_failure(
+                                state,
+                                i18n.settings_saved,
+                                error,
+                                "settings.ssh",
+                                "settings.ssh",
+                                i18n,
+                            ),
+                        }
+                    }
+                }
                 SettingsMessage::ImportSshKey => match pick_granted_ssh_key(state) {
                     Ok(Some(path)) => {
                         state.git_settings.ssh_key_path = path.display().to_string();
-                        state.git_settings.apply_auth(state.ssh_access.clone());
+                        state
+                            .git_settings
+                            .apply_auth(state.ssh_access.clone(), state.known_hosts_access.clone());
                         if let Err(e) = state.git_settings.save() {
                             log::warn!("Failed to persist git settings: {}", e);
                         }

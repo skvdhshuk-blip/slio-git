@@ -748,6 +748,14 @@ pub(crate) fn checkpoint(point: &str) -> Result<(), GitError> {
             false
         });
         if fail {
+            // Only the isolated crash-test child sets this path. Keep the
+            // live lock and stack intact until the parent sends SIGKILL.
+            if let Some(marker) = std::env::var_os("SLIO_TEST_KILL_CHECKPOINT") {
+                std::fs::write(marker, point)?;
+                loop {
+                    std::thread::park();
+                }
+            }
             return Err(recovery(format!("simulated interruption after {point}")));
         }
     }

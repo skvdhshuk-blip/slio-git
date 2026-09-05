@@ -47,6 +47,7 @@ pub(crate) fn signature(repo: &git2::Repository) -> Result<git2::Signature<'stat
 pub struct AuthContext {
     pub imported_ssh_key: Option<PathBuf>,
     pub imported_ssh_pub: Option<PathBuf>,
+    pub imported_known_hosts: Option<PathBuf>,
     pub user_name: Option<String>,
     pub user_email: Option<String>,
 }
@@ -61,6 +62,7 @@ static AUTH: RwLock<AuthState> = RwLock::new(AuthState {
     context: AuthContext {
         imported_ssh_key: None,
         imported_ssh_pub: None,
+        imported_known_hosts: None,
         user_name: None,
         user_email: None,
     },
@@ -145,7 +147,7 @@ mod tests {
             let weak = Arc::downgrade(&lease);
             set_context_with_access(AuthContext::default(), Some(lease));
             let callbacks =
-                crate::remote::build_remote_callbacks(git2::Config::new().unwrap(), None);
+                crate::remote::build_remote_callbacks(git2::Config::new().unwrap(), None, "");
             set_context(AuthContext::default());
             assert!(
                 weak.upgrade().is_some(),

@@ -268,6 +268,137 @@ fn native_recovers_each_persistent_boundary_without_duplicate_commits() {
     }
 }
 
+// Run the same test binary as a separate process, with its live repository
+// locks intact. An I/O error alone cannot exercise OS lock release on a crash.
+#[test]
+fn native_crash_child() {
+    let Ok(path) = std::env::var("SLIO_TEST_CRASH_REPOSITORY") else {
+        return;
+    };
+    let boundary = std::env::var("SLIO_TEST_CRASH_BOUNDARY").unwrap();
+    let boundary = CRASH_BOUNDARIES
+        .iter()
+        .copied()
+        .find(|point| *point == boundary)
+        .unwrap();
+    let hit = std::env::var("SLIO_TEST_CRASH_HIT")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let path = Path::new(&path);
+    let ids = git(path, &["rev-list", "--reverse", "HEAD"]);
+    let ids: Vec<_> = ids.lines().collect();
+    let repo = Repository::open(path).unwrap();
+    journal::fail_after(boundary, hit);
+    assert!(
+        start(
+            &repo,
+            None,
+            &[
+                entry(ids[2], "pick"),
+                entry(ids[0], "pick"),
+                entry(ids[1], "pick")
+            ],
+        )
+        .unwrap()
+    );
+}
+
+const CRASH_BOUNDARIES: [&str; 6] = [
+    "journal",
+    "file",
+    "index",
+    "head",
+    "publish-ref",
+    "publish-head",
+];
+
+#[cfg(unix)]
+#[test]
+fn native_sigkill_recovers_every_observed_persistent_boundary() {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Child, Stdio};
+    use std::time::{Duration, Instant};
+    struct ChildGuard(Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut killed = 0;
+    for boundary in CRASH_BOUNDARIES {
+        for hit in 0..32 {
+            let (dir, repo, ids) = fixture();
+            let old_tree = git(dir.path(), &["rev-parse", "HEAD^{tree}"]);
+            let marker = dir.path().join(".git/crash-checkpoint");
+            drop(repo);
+            let mut child = ChildGuard(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "native::tests::native_crash_child",
+                        "--nocapture",
+                    ])
+                    .env("SLIO_TEST_CRASH_REPOSITORY", dir.path())
+                    .env("SLIO_TEST_CRASH_BOUNDARY", boundary)
+                    .env("SLIO_TEST_CRASH_HIT", hit.to_string())
+                    .env("SLIO_TEST_KILL_CHECKPOINT", &marker)
+                    .stdout(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
+            let started = Instant::now();
+            while !marker.exists() && child.0.try_wait().unwrap().is_none() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(30),
+                    "{boundary} {hit}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if !marker.exists() {
+                assert!(child.0.wait().unwrap().success(), "{boundary} {hit}");
+                assert!(hit > 0, "checkpoint {boundary} was never exercised");
+                break;
+            }
+            child.0.kill().unwrap();
+            assert_eq!(child.0.wait().unwrap().signal(), Some(9));
+            killed += 1;
+            let reopened = Repository::open(dir.path()).unwrap();
+            // The branch remains recoverable and unrelated new files survive.
+            fs::write(dir.path().join("unrelated"), b"preserve me\n").unwrap();
+            assert!(
+                crate::rebase::rebase_continue(&reopened).unwrap().success,
+                "{boundary} {hit}"
+            );
+            let completed_head = git(dir.path(), &["rev-parse", "HEAD"]);
+            assert_eq!(
+                git(dir.path(), &["log", "--reverse", "--format=%s"]),
+                "c\na\nb"
+            );
+            assert_eq!(git(dir.path(), &["rev-list", "--count", "HEAD"]), "3");
+            assert_eq!(git(dir.path(), &["rev-parse", "HEAD^{tree}"]), old_tree);
+            assert_ne!(completed_head, ids[2]);
+            assert_eq!(
+                git(dir.path(), &["symbolic-ref", "HEAD"]),
+                "refs/heads/main"
+            );
+            assert_eq!(git(dir.path(), &["status", "--porcelain"]), "?? unrelated");
+            assert_eq!(
+                fs::read(dir.path().join("unrelated")).unwrap(),
+                b"preserve me\n"
+            );
+            assert!(crate::rebase::rebase_continue(&reopened).is_err());
+            assert_eq!(git(dir.path(), &["rev-parse", "HEAD"]), completed_head);
+            assert_eq!(git(dir.path(), &["status", "--porcelain"]), "?? unrelated");
+            assert!(!super::active(&reopened));
+            assert!(hit < 31, "expand coverage for {boundary}");
+        }
+    }
+    assert!(killed >= CRASH_BOUNDARIES.len());
+    eprintln!("verified {killed} SIGKILL boundaries");
+}
+
 #[test]
 fn native_external_changes_are_rejected_without_overwriting_them() {
     for change in ["file", "index", "branch"] {

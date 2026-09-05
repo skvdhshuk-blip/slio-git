@@ -378,6 +378,14 @@ pub fn rebase_continue(repo: &Repository) -> Result<RebaseResult, GitError> {
             .into(),
         });
     }
+    // A repeated native recovery click must not reach desktop's `git add -A`
+    // after the journal has been cleaned up. External rebases still use the
+    // existing desktop takeover path when one is actually active.
+    if repo.get_state() != RepositoryState::Rebasing {
+        return Err(GitError::RecoveryRequired {
+            reason: "no rebase is active".into(),
+        });
+    }
     backend::rebase_continue(repo)
 }
 

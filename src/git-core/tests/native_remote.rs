@@ -46,9 +46,11 @@ impl Server {
             .local_addr()
             .unwrap()
             .port();
-        let process = Command::new("git")
+        // Git's launcher leaves its git-daemon child alive when killed on
+        // macOS. Own the actual server process so Drop closes its listener.
+        let exec_path = git(dir.path(), &["--exec-path"]);
+        let process = Command::new(Path::new(&exec_path).join("git-daemon"))
             .args([
-                "daemon",
                 "--reuseaddr",
                 "--export-all",
                 "--enable=receive-pack",
@@ -248,4 +250,33 @@ fn fetch_mapping_pull_target_and_all_merge_strategies_are_honored() {
             ""
         );
     }
+}
+
+#[test]
+fn standalone_tag_push_and_delete_report_server_rejection() {
+    let (local, server, repo, _, _) = setup();
+    git(local.path(), &["tag", "v-rejected"]);
+    server.hook(
+        "update",
+        "#!/bin/sh\necho 'tag policy rejected' >&2\nexit 1\n",
+    );
+    let error = git_core::push_tag(&repo, "v-rejected", "origin").unwrap_err();
+    assert!(error.to_string().contains("refs/tags/v-rejected"));
+    assert!(git(&server.path(), &["tag", "--list"]).is_empty());
+    fs::remove_file(server.path().join("hooks/update")).unwrap();
+    git_core::push_tag(&repo, "v-rejected", "origin").unwrap();
+    let previous = git(&server.path(), &["rev-parse", "refs/tags/v-rejected"]);
+    server.hook(
+        "update",
+        "#!/bin/sh\necho 'tag deletion rejected' >&2\nexit 1\n",
+    );
+    let error = git_core::delete_remote_tag(&repo, "v-rejected", "origin").unwrap_err();
+    assert!(error.to_string().contains("refs/tags/v-rejected"));
+    assert_eq!(
+        git(&server.path(), &["rev-parse", "refs/tags/v-rejected"]),
+        previous
+    );
+    fs::remove_file(server.path().join("hooks/update")).unwrap();
+    git_core::delete_remote_tag(&repo, "v-rejected", "origin").unwrap();
+    assert!(git(&server.path(), &["tag", "--list"]).is_empty());
 }

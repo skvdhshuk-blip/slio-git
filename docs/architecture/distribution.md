@@ -77,8 +77,12 @@ Refreshing a stale bookmark updates the same persisted bookmark format. The gran
 root and requested repository path are distinct, including moved parent folders.
 Open/recent/local-clone/worktree paths acquire their external Git/common directories
 before opening libgit2. Directory reselection resumes the same requested operation.
-SSH key snapshots hold the exact key's lease; editing settings cannot revoke an
-in-flight transport. No adjacent `.pub` file is guessed. A save-panel grant permits
+SSH key and explicitly imported `known_hosts` snapshots retain both files' leases;
+editing settings cannot revoke an in-flight transport. Server keys are checked
+against the imported file, including hashed hosts and explicit SSH ports; unknown
+or changed keys fail closed. Trust data is read once before connection. OpenSSH
+certificate/revocation markers are rejected as unsupported, never ignored. No
+adjacent `.pub` file is guessed. A save-panel grant permits
 writing the selected patch file, not an arbitrary sibling temporary file.
 
 Bundle ID, settings locations and bookmark encoding are unchanged. This is not a
@@ -117,8 +121,8 @@ Run the channels separately; `--all-features` does not test desktop behavior:
 ```sh
 cargo test --workspace --no-default-features
 cargo test --workspace --features app-store
-cargo clippy -p git-core -p src-ui --all-targets --no-default-features
-cargo clippy -p git-core -p src-ui --all-targets --features app-store
+cargo clippy --workspace --all-targets --no-default-features
+cargo clippy --workspace --all-targets --features app-store
 python3 -m unittest discover -s scripts/tests
 ```
 
@@ -128,7 +132,12 @@ root/reordered/empty operations, conflict continue/skip/abort, linked-worktree
 identity and crashes at journal/file/index/HEAD/publication/directory-replacement
 boundaries. `native_remote` uses a real local git daemon and receive hooks, including
 stale lease, frozen confirmation, rejected references, partial success and a remote
-update during upload. The advanced-operation tests previously excluded from MAS
+update during upload, and standalone tag push/deletion rejection. `native_ssh`
+uses an isolated loopback OpenSSH server for clone/fetch/push, missing trust,
+wrong keys and changed server identities without changing user SSH files. Native
+crash tests also SIGKILL a child with its repository lock live at all 27 observed
+persistence points, then recover through the public API in both channels.
+The advanced-operation tests previously excluded from MAS
 run in both channels. The editor's font regression asserts finite public layout
 metrics, which include the existing missing-font fallback, instead of requiring
 uninitialized raw font measurement to succeed.
@@ -151,5 +160,6 @@ claim or App Review approval follows from build/test/package success.
 References: [Cargo features](https://doc.rust-lang.org/cargo/reference/features.html),
 [Git pull](https://git-scm.com/docs/git-pull),
 [libgit2 negotiation](https://libgit2.org/docs/reference/main/remote/git_push_negotiation.html),
+[SSH host verification](https://docs.rs/ssh2/0.9.6/ssh2/struct.KnownHosts.html),
 [reference results](https://libgit2.org/docs/reference/main/remote/git_push_update_reference_cb.html),
 [Apple scoped access](https://developer.apple.com/documentation/foundation/url/startaccessingsecurityscopedresource()).

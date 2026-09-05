@@ -81,8 +81,37 @@ fn resolve_auth_username(
 pub(crate) fn build_remote_callbacks(
     config: Config,
     credentials: Option<(&str, &str)>,
+    url: &str,
 ) -> RemoteCallbacks<'static> {
-    backend::build_remote_callbacks(config, credentials)
+    #[cfg(feature = "app-store")]
+    {
+        backend::build_remote_callbacks(config, credentials, url)
+    }
+    #[cfg(not(feature = "app-store"))]
+    {
+        let _ = url;
+        backend::build_remote_callbacks(config, credentials)
+    }
+}
+
+/// libgit2 1.8 replaces a rejected SSH certificate callback's message. Keep
+/// the failure actionable without ever treating an unknown host as trusted.
+pub(crate) fn transport_error(error: &git2::Error) -> String {
+    #[cfg(feature = "app-store")]
+    if error.class() == git2::ErrorClass::Ssh && error.message().contains("hostkey") {
+        return "SSH server identity could not be verified (unknown or changed host key). Verify the server and import its trusted known_hosts file in Settings.".into();
+    }
+    error.to_string()
+}
+
+#[cfg(feature = "app-store")]
+pub(crate) fn push_reference(
+    repo: &Repository,
+    remote: &str,
+    refspec: String,
+) -> Result<(), GitError> {
+    let raw = repo.inner.write().unwrap();
+    backend::push_refspecs(&raw, remote, &[refspec], false, None, None)
 }
 
 #[cfg(not(feature = "app-store"))]
