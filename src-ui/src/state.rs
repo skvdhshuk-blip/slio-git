@@ -1957,6 +1957,9 @@ impl AppState {
             self.conflict_resolver = None;
         }
 
+        if self.is_log_tool_window_active() {
+            self.refresh_log_tool_window_data(i18n);
+        }
         self.mark_workspace_refreshed(std::time::Instant::now());
     }
 
@@ -3292,6 +3295,32 @@ mod tests {
         );
         assert!(state.branch_popup.error.is_none());
         assert!(state.history_view.error.is_none());
+    }
+
+    #[test]
+    fn background_git_completion_updates_visible_history_without_switching_tabs() {
+        let (dir, repo) = create_committed_repo();
+        let mut state = AppState::new();
+        state.set_repository(repo, &EN);
+        state.switch_git_tool_window_tab(super::GitToolWindowTab::Log, &EN);
+        assert_eq!(state.history_view.entries.len(), 1);
+        fs::write(dir.path().join("background.txt"), "background operation\n").unwrap();
+        let result = crate::run_git_op_then_refresh(dir.path().to_path_buf(), |repo| {
+            git_core::stage_file(repo, std::path::Path::new("background.txt"))
+                .map_err(|error| error.to_string())?;
+            git_core::create_commit(repo, "background commit", "", "")
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+        state.apply_refresh_result(result, &EN);
+        assert_eq!(state.history_view.entries.len(), 2);
+        assert_eq!(
+            state.history_view.entries[0].message.trim(),
+            "background commit"
+        );
+        assert!(state.staged_changes.is_empty());
+        assert!(state.untracked_files.is_empty());
     }
 
     #[test]
