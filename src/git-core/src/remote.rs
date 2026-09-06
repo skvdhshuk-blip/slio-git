@@ -358,6 +358,35 @@ pub fn push(
     )
 }
 
+/// Resolve the current branch's configured destination before starting transport.
+/// Without an upstream, retain the existing origin/current-branch first-push flow.
+pub fn push_current_upstream(
+    repo: &Repository,
+    credentials: Option<(&str, &str)>,
+) -> Result<(), GitError> {
+    let branch = current_branch(repo, "push")?;
+    let remote = {
+        let raw = repo.inner.read().unwrap();
+        let config = raw.config()?;
+        match config.get_string(&format!("branch.{branch}.remote")) {
+            Ok(remote) => remote,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => "origin".into(),
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let target = configured_upstream_branch(repo, &remote);
+    push_with_options(
+        repo,
+        &remote,
+        &branch,
+        PushOptions {
+            target_branch: target.as_deref(),
+            ..PushOptions::default()
+        },
+        credentials,
+    )
+}
+
 pub fn push_with_options(
     repo: &Repository,
     remote_name: &str,

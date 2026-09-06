@@ -28,11 +28,3 @@ pub(super) fn apply_patch_cached(repo: &Repository, patch: &str) -> Result<(), G
         "apply_patch_cached",
     )
 }
-pub(super) fn apply_patch_workdir(repo: &Repository, patch: &str) -> Result<(), GitError> {
-    apply_patch_git2(
-        repo,
-        patch,
-        git2::ApplyLocation::WorkDir,
-        "apply_patch_workdir",
-    )
-}

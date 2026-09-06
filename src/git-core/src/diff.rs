@@ -224,7 +224,7 @@ pub fn diff_file_to_index(repo: &Repository, file_path: &Path) -> Result<Diff, G
     diff_options.include_untracked(true);
     diff_options.recurse_untracked_dirs(true);
     diff_options.show_untracked_content(true);
-    diff_options.pathspec(file_path);
+    diff_options.pathspec(file_path).disable_pathspec_match(true);
 
     let diff = repo_lock
         .diff_index_to_workdir(None, Some(&mut diff_options))
@@ -260,7 +260,7 @@ pub fn diff_index_to_head(repo: &Repository, file_path: &Path) -> Result<Diff, G
     })?;
 
     let mut diff_options = DiffOptions::new();
-    diff_options.pathspec(file_path);
+    diff_options.pathspec(file_path).disable_pathspec_match(true);
 
     // Compare HEAD tree to the current index so staged preview does not leak
     // unstaged worktree edits into the "already staged" diff.
@@ -599,50 +599,81 @@ pub fn resolve_conflict(
 ) -> Result<(), GitError> {
     crate::native::allow_edit(repo)?;
     let index_path = repo_relative_path(repo, file_path);
-    let content = match resolution {
-        ConflictResolution::Ours => {
-            // Git stages: 1 = base, 2 = ours, 3 = theirs
-            get_stage_content(repo, index_path.as_path(), 2)?
-        }
-        ConflictResolution::Theirs => get_stage_content(repo, index_path.as_path(), 3)?,
-        ConflictResolution::Base => get_stage_content(repo, index_path.as_path(), 1)?,
-        ConflictResolution::Custom(ref s) => s.clone(),
-    };
-
-    // Write the resolved content to the working directory
-    let workdir_path = workdir_file_path(repo, file_path);
-    if let Some(parent) = workdir_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| GitError::OperationFailed {
-            operation: "resolve_conflict".to_string(),
-            details: format!("Failed to prepare resolved file parent: {}", e),
-        })?;
+    let raw = repo.inner.write().unwrap();
+    let mut index = raw.index()?;
+    let ours = index.get_path(&index_path, 2);
+    let theirs = index.get_path(&index_path, 3);
+    let base = index.get_path(&index_path, 1);
+    if ours.is_none() && theirs.is_none() && base.is_none() {
+        return Err(GitError::InvalidInput {
+            message: "The selected path is no longer conflicted".into(),
+        });
     }
-    std::fs::write(&workdir_path, content).map_err(|e| GitError::OperationFailed {
-        operation: "resolve_conflict".to_string(),
-        details: format!("Failed to write resolved file: {}", e),
+    let selected = match resolution {
+        ConflictResolution::Ours => ours,
+        ConflictResolution::Theirs => theirs,
+        ConflictResolution::Base => base,
+        ConflictResolution::Custom(content) => {
+            let mut entry = ours.or(theirs).or(base).unwrap();
+            entry.id = raw.blob(content.as_bytes())?;
+            Some(entry)
+        }
+    };
+    let relative = index_path.to_str().ok_or_else(|| GitError::InvalidInput {
+        message: "Conflict path is not valid UTF-8".into(),
     })?;
-
-    // Stage the resolved file
-    let repo_lock = repo.inner.read().unwrap();
-    let mut index = repo_lock.index().map_err(|e| GitError::OperationFailed {
-        operation: "resolve_conflict".to_string(),
-        details: format!("Failed to get index: {}", e),
-    })?;
-
-    // Remove conflict entries and add the resolved file
-    index.remove_path(index_path.as_path()).ok();
-
-    index
-        .add_path(index_path.as_path())
-        .map_err(|e| GitError::OperationFailed {
-            operation: "resolve_conflict".to_string(),
-            details: format!("Failed to add resolved file: {}", e),
-        })?;
-
-    index.write().map_err(|e| GitError::OperationFailed {
-        operation: "resolve_conflict".to_string(),
-        details: format!("Failed to write index: {}", e),
-    })?;
+    let root = repo.command_cwd();
+    crate::native::journal::check_parents(&root, relative)?;
+    let destination = root.join(&index_path);
+    if let Some(mut entry) = selected {
+        let blob = raw.find_blob(entry.id)?;
+        let parent = destination.parent().unwrap();
+        std::fs::create_dir_all(parent)?;
+        match entry.mode {
+            0o100644 | 0o100755 => {
+                crate::native::journal::atomic_write_mode(
+                    &destination,
+                    blob.content(),
+                    Some(entry.mode & 0o777),
+                )?;
+            }
+            0o120000 => {
+                let staging = tempfile::tempdir_in(parent)?;
+                let link = staging.path().join("link");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
+                    std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(blob.content()), &link)?;
+                }
+                #[cfg(windows)]
+                std::os::windows::fs::symlink_file(
+                    std::str::from_utf8(blob.content()).map_err(|_| GitError::InvalidInput {
+                        message: "Link target is not valid UTF-8".into(),
+                    })?,
+                    &link,
+                )?;
+                std::fs::rename(link, &destination)?;
+            }
+            _ => {
+                return Err(GitError::InvalidInput {
+                    message: "Resolve this entry type with its dedicated Git operation".into(),
+                });
+            }
+        }
+        // Clear the conflict stage while retaining the chosen blob and file mode.
+        entry.flags &= !0x3000;
+        index.remove_path(&index_path)?;
+        index.add(&entry)?;
+    } else {
+        // Missing on a conflict side means deletion, not missing repository data.
+        match std::fs::remove_file(&destination) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        index.remove_path(&index_path)?;
+    }
+    index.write()?;
 
     Ok(())
 }

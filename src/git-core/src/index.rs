@@ -67,12 +67,19 @@ pub fn stage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
         details: e.to_string(),
     })?;
 
-    index
-        .add_path(path)
-        .map_err(|e| GitError::OperationFailed {
-            operation: "stage_file".to_string(),
-            details: e.to_string(),
-        })?;
+    match std::fs::symlink_metadata(repo.command_cwd().join(path)) {
+        Ok(_) => index.add_path(path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let indexed = (0..=3).any(|stage| index.get_path(path, stage).is_some());
+            let head = head_commit(&repo_lock)?;
+            let tree = head.as_ref().map(|head| head.tree()).transpose()?;
+            if !indexed && !tree.as_ref().is_some_and(|tree| tree.get_path(path).is_ok()) {
+                return Err(error.into());
+            }
+            index.remove_path(path)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
 
     index.write().map_err(|e| GitError::OperationFailed {
         operation: "stage_file".to_string(),
@@ -82,88 +89,51 @@ pub fn stage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
     Ok(())
 }
 
-/// Unstage a file by resetting HEAD to the given path
+/// Reset only the selected index entry, including before the first commit.
 pub fn unstage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
     crate::native::allow_edit(repo)?;
-    info!("Unstaging file: {:?}", path);
-
-    let repo_lock = repo.inner.read().unwrap();
-
-    // Get the HEAD commit's tree for the path
-    let head = repo_lock.head().map_err(|e| GitError::OperationFailed {
-        operation: "unstage_file".to_string(),
-        details: e.to_string(),
-    })?;
-
-    let commit = head
-        .peel_to_commit()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "unstage_file".to_string(),
-            details: e.to_string(),
+    let raw = repo.inner.write().unwrap();
+    let head = head_commit(&raw)?;
+    let tree = head.as_ref().map(|commit| commit.tree()).transpose()?;
+    let mut index = raw.index()?;
+    index.remove_path(path)?;
+    if let Some(entry) = tree
+        .as_ref()
+        .map(|tree| tree.get_path(path))
+        .transpose()
+        .or_else(|error| {
+            if error.code() == git2::ErrorCode::NotFound {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        })?
+    {
+        index.add(&git2::IndexEntry {
+            id: entry.id(),
+            mode: entry.filemode() as u32,
+            path: path.as_os_str().as_encoded_bytes().to_vec(),
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            flags: 0,
+            flags_extended: 0,
         })?;
-
-    let tree = commit.tree().map_err(|e| GitError::OperationFailed {
-        operation: "unstage_file".to_string(),
-        details: e.to_string(),
-    })?;
-
-    // Reset the index entry to match the HEAD tree
-    let mut index = repo_lock.index().map_err(|e| GitError::OperationFailed {
-        operation: "unstage_file".to_string(),
-        details: e.to_string(),
-    })?;
-
-    // If file exists in HEAD tree, we need to restore it to index from HEAD
-    match tree.get_path(path) {
-        Ok(entry) => {
-            // Remove the staged version
-            index
-                .remove_path(path)
-                .map_err(|e| GitError::OperationFailed {
-                    operation: "unstage_file".to_string(),
-                    details: e.to_string(),
-                })?;
-
-            // Create an IndexEntry from the tree entry and add it back
-            let id = entry.id();
-            let mode = entry.filemode();
-            let path_str = path.to_string_lossy().to_string();
-
-            // Create IndexEntry manually for git2 0.19
-            let index_entry = git2::IndexEntry {
-                dev: 0,
-                ino: 0,
-                id,
-                mode: mode as u32,
-                uid: 0,
-                gid: 0,
-                file_size: 0,
-                mtime: git2::IndexTime::new(0, 0),
-                ctime: git2::IndexTime::new(0, 0),
-                path: path_str.into_bytes(),
-                flags: 0,
-                flags_extended: 0,
-            };
-
-            index
-                .add(&index_entry)
-                .map_err(|e| GitError::OperationFailed {
-                    operation: "unstage_file".to_string(),
-                    details: e.to_string(),
-                })?;
-        }
-        _ => {
-            // File didn't exist in HEAD, just remove from index
-            index.remove_path(path).ok(); // Ignore error if not in index
-        }
     }
-
-    index.write().map_err(|e| GitError::OperationFailed {
-        operation: "unstage_file".to_string(),
-        details: e.to_string(),
-    })?;
-
+    index.write()?;
     Ok(())
+}
+
+fn head_commit(raw: &git2::Repository) -> Result<Option<git2::Commit<'_>>, GitError> {
+    match raw.head() {
+        Ok(head) => Ok(Some(head.peel_to_commit()?)),
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Stage all files
@@ -196,8 +166,14 @@ pub fn stage_all(repo: &Repository) -> Result<(), GitError> {
 pub fn unstage_all(repo: &Repository) -> Result<(), GitError> {
     crate::native::allow_edit(repo)?;
     let repo_lock = repo.inner.write().unwrap();
-    let obj = repo_lock.head()?.peel_to_commit()?;
-    repo_lock.reset(obj.as_object(), git2::ResetType::Mixed, None)?;
+    let head = head_commit(&repo_lock)?;
+    let mut index = repo_lock.index()?;
+    if let Some(head) = head {
+        index.read_tree(&head.tree()?)?;
+    } else {
+        index.clear()?;
+    }
+    index.write()?;
     Ok(())
 }
 
@@ -367,7 +343,7 @@ pub fn get_file_hunks(repo: &Repository, file_path: &Path) -> Result<Vec<Hunk>, 
     let repo_lock = repo.inner.read().unwrap();
 
     let mut diff_opts = DiffOptions::new();
-    diff_opts.pathspec(file_path);
+    diff_opts.pathspec(file_path).disable_pathspec_match(true);
 
     let diff = repo_lock
         .diff_index_to_workdir(None, Some(&mut diff_opts))
@@ -392,8 +368,9 @@ fn collect_diff_hunks(diff: &git2::Diff) -> Result<Vec<Hunk>, GitError> {
     diff.print(git2::DiffFormat::Patch, |_delta, hunk_opt, line| {
         let origin = line.origin();
 
-        // Skip the hunk-header pseudo-line that git2 emits.
-        if origin == 'H' {
+        // Display hunks contain only real lines. EOF markers are derived from
+        // each line's bytes when generating a patch, never counted as content.
+        if !matches!(origin, ' ' | '+' | '-') {
             return true;
         }
 
@@ -460,209 +437,82 @@ fn parse_range_part(part: &str) -> (u32, u32) {
     (start, lines)
 }
 
-/// Stage a specific hunk of a file
+/// Stage a specific hunk without serializing raw diff bytes through UI text.
 pub fn stage_hunk(repo: &Repository, file_path: &Path, hunk_index: usize) -> Result<(), GitError> {
-    crate::native::allow_edit(repo)?;
-    info!("Staging hunk {} of file: {:?}", hunk_index, file_path);
-
-    // Get the diff for this file
-    let hunks = get_file_hunks(repo, file_path)?;
-
-    let hunk = hunks
-        .get(hunk_index)
-        .ok_or_else(|| GitError::OperationFailed {
-            operation: "stage_hunk".to_string(),
-            details: format!("Hunk {} not found", hunk_index),
-        })?;
-
-    // Generate a patch for just this hunk
-    let patch = generate_hunk_patch(file_path, hunk)?;
-
-    // Apply the patch to the index using git apply --cached
-    apply_patch_cached(repo, &patch)?;
-
-    Ok(())
+    apply_index_hunk(repo, file_path, hunk_index, false)
 }
 
-/// Generate a patch string for a single hunk
-fn generate_hunk_patch(file_path: &Path, hunk: &Hunk) -> Result<String, GitError> {
-    let mut patch = String::new();
-
-    // Add the hunk header
-    patch.push_str(&format!(
-        "diff --git a/{} b/{}\n",
-        file_path.to_string_lossy(),
-        file_path.to_string_lossy()
-    ));
-    patch.push_str(&format!("--- a/{}\n", file_path.to_string_lossy()));
-    patch.push_str(&format!("+++ b/{}\n", file_path.to_string_lossy()));
-    patch.push_str(&hunk.header);
-    if !hunk.header.ends_with('\n') {
-        patch.push('\n');
-    }
-
-    // Add the hunk lines
-    for line in &hunk.lines {
-        patch.push(line.origin);
-        patch.push_str(&line.content);
-        if !line.content.ends_with('\n') {
-            patch.push('\n');
-        }
-    }
-
-    Ok(patch)
-}
-
-/// Apply a patch to the index using git apply --cached
-fn apply_patch_cached(repo: &Repository, patch: &str) -> Result<(), GitError> {
-    backend::apply_patch_cached(repo, patch)
-}
-
-/// Unstage a hunk (move changes back to workdir)
-/// Uses git checkout HEAD -- file to reset the specific file, then re-apply other hunks
+/// Unstage only this hunk; the worktree and other index hunks stay untouched.
 pub fn unstage_hunk(
     repo: &Repository,
     file_path: &Path,
     hunk_index: usize,
 ) -> Result<(), GitError> {
+    apply_index_hunk(repo, file_path, hunk_index, true)
+}
+
+fn apply_index_hunk(
+    repo: &Repository,
+    path: &Path,
+    selected: usize,
+    reverse: bool,
+) -> Result<(), GitError> {
     crate::native::allow_edit(repo)?;
-    info!("Unstaging hunk {} of file: {:?}", hunk_index, file_path);
-
-    // Get the diff between index and HEAD for this file
-    let hunks = get_index_hunks(repo, file_path)?;
-
-    let hunk = hunks
-        .get(hunk_index)
-        .ok_or_else(|| GitError::OperationFailed {
-            operation: "unstage_hunk".to_string(),
-            details: format!("Hunk {} not found in index", hunk_index),
-        })?;
-
-    // Generate a reverse patch for this hunk
-    let patch = generate_reverse_hunk_patch(file_path, hunk)?;
-
-    // Apply the reverse patch to the workdir using git apply
-    apply_patch_workdir(repo, &patch)?;
-
-    // Also reset the file in the index but keep other hunks staged
-    // This is a simplified approach - complex but correct unstage is very difficult
-    reset_file_in_index(repo, file_path)?;
-
-    // Re-stage the other hunks
-    re_stage_other_hunks(repo, file_path, hunk_index)?;
-
+    let raw = repo.inner.write().unwrap();
+    let mut options = DiffOptions::new();
+    options
+        .pathspec(path)
+        .disable_pathspec_match(true)
+        .reverse(reverse);
+    let head = head_commit(&raw)?;
+    let tree = head.as_ref().map(|commit| commit.tree()).transpose()?;
+    let diff = if reverse {
+        raw.diff_tree_to_index(tree.as_ref(), None, Some(&mut options))?
+    } else {
+        raw.diff_index_to_workdir(None, Some(&mut options))?
+    };
+    let patch = git2::Patch::from_diff(&diff, 0)?;
+    if patch
+        .as_ref()
+        .is_none_or(|patch| selected >= patch.num_hunks())
+    {
+        return Err(GitError::InvalidInput {
+            message: format!("Hunk {selected} not found"),
+        });
+    }
+    let mut position = 0;
+    let mut apply = git2::ApplyOptions::new();
+    apply.hunk_callback(|_| {
+        let include = position == selected;
+        position += 1;
+        include
+    });
+    raw.apply(&diff, git2::ApplyLocation::Index, Some(&mut apply))?;
     Ok(())
+}
+
+fn apply_patch_cached(repo: &Repository, patch: &str) -> Result<(), GitError> {
+    backend::apply_patch_cached(repo, patch)
 }
 
 /// Get hunks between index and HEAD for a specific file
 pub fn get_index_hunks(repo: &Repository, file_path: &Path) -> Result<Vec<Hunk>, GitError> {
     let repo_lock = repo.inner.read().unwrap();
 
-    let head = repo_lock.head().map_err(|e| GitError::OperationFailed {
-        operation: "get_index_hunks".to_string(),
-        details: e.to_string(),
-    })?;
-
-    let commit = head
-        .peel_to_commit()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "get_index_hunks".to_string(),
-            details: e.to_string(),
-        })?;
-
-    let head_tree = commit.tree().map_err(|e| GitError::OperationFailed {
-        operation: "get_index_hunks".to_string(),
-        details: e.to_string(),
-    })?;
+    let head = head_commit(&repo_lock)?;
+    let head_tree = head.as_ref().map(|commit| commit.tree()).transpose()?;
 
     let mut diff_opts = DiffOptions::new();
-    diff_opts.pathspec(file_path);
+    diff_opts.pathspec(file_path).disable_pathspec_match(true);
 
     let diff = repo_lock
-        .diff_tree_to_index(Some(&head_tree), None, Some(&mut diff_opts))
+        .diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))
         .map_err(|e| GitError::OperationFailed {
             operation: "get_index_hunks".to_string(),
             details: e.to_string(),
         })?;
 
     collect_diff_hunks(&diff)
-}
-
-/// Generate a reverse patch for unstaking (addition becomes deletion)
-fn generate_reverse_hunk_patch(file_path: &Path, hunk: &Hunk) -> Result<String, GitError> {
-    let mut patch = String::new();
-
-    patch.push_str(&format!(
-        "diff --git a/{} b/{}\n",
-        file_path.to_string_lossy(),
-        file_path.to_string_lossy()
-    ));
-    patch.push_str(&format!("--- a/{}\n", file_path.to_string_lossy()));
-    patch.push_str(&format!("+++ b/{}\n", file_path.to_string_lossy()));
-    patch.push_str(&hunk.header);
-    patch.push('\n');
-
-    // Reverse the hunk lines
-    for line in &hunk.lines {
-        let reversed_origin = match line.origin {
-            '+' => '-',
-            '-' => '+',
-            c => c,
-        };
-        patch.push(reversed_origin);
-        patch.push_str(&line.content);
-        if !line.content.ends_with('\n') {
-            patch.push('\n');
-        }
-    }
-
-    Ok(patch)
-}
-
-/// Apply a patch to the workdir using git apply
-fn apply_patch_workdir(repo: &Repository, patch: &str) -> Result<(), GitError> {
-    backend::apply_patch_workdir(repo, patch)
-}
-
-/// Reset a file in the index to HEAD state
-fn reset_file_in_index(repo: &Repository, file_path: &Path) -> Result<(), GitError> {
-    let repo_lock = repo.inner.write().unwrap();
-    let head = repo_lock.head().map_err(|e| GitError::OperationFailed {
-        operation: "reset_file_in_index".to_string(),
-        details: e.to_string(),
-    })?;
-    let object = head
-        .peel(git2::ObjectType::Commit)
-        .map_err(|e| GitError::OperationFailed {
-            operation: "reset_file_in_index".to_string(),
-            details: e.to_string(),
-        })?;
-    repo_lock
-        .reset_default(Some(&object), [file_path])
-        .map_err(|e| GitError::OperationFailed {
-            operation: "reset_file_in_index".to_string(),
-            details: e.to_string(),
-        })?;
-    Ok(())
-}
-
-/// Re-stage hunks except the one at hunk_index
-fn re_stage_other_hunks(
-    repo: &Repository,
-    file_path: &Path,
-    skip_hunk_index: usize,
-) -> Result<(), GitError> {
-    // Get workdir hunks and re-stage all except the skipped one
-    let workdir_hunks = get_file_hunks(repo, file_path)?;
-
-    for (i, hunk) in workdir_hunks.iter().enumerate() {
-        if i != skip_hunk_index {
-            let patch = generate_hunk_patch(file_path, hunk)?;
-            apply_patch_cached(repo, &patch)?;
-        }
-    }
-
-    Ok(())
 }
 
 /// Build the actual unified-diff patch body (shared by stage and unstage
@@ -689,7 +539,7 @@ fn build_patch_string(
         patch.push(*origin);
         patch.push_str(content);
         if !content.ends_with('\n') {
-            patch.push('\n');
+            patch.push_str("\n\\ No newline at end of file\n");
         }
     }
 
@@ -956,18 +806,17 @@ pub fn discard_file(repo: &Repository, file_path: &Path) -> Result<(), GitError>
                 details: e.to_string(),
             })?;
     } else {
-        // Untracked: remove file/directory
-        if full_path.is_dir() {
-            std::fs::remove_dir_all(&full_path).map_err(|e| GitError::OperationFailed {
-                operation: "discard_file".to_string(),
-                details: format!("Failed to remove directory: {}", e),
-            })?;
-        } else {
-            std::fs::remove_file(&full_path).map_err(|e| GitError::OperationFailed {
-                operation: "discard_file".to_string(),
-                details: format!("Failed to remove file: {}", e),
-            })?;
+        // A new index entry may already be absent from the working directory.
+        match std::fs::symlink_metadata(&full_path) {
+            Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&full_path)?,
+            Ok(_) => std::fs::remove_file(&full_path)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
+        let raw = repo.inner.write().unwrap();
+        let mut index = raw.index()?;
+        index.remove_path(file_path)?;
+        index.write()?;
     }
 
     Ok(())

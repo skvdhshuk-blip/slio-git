@@ -236,7 +236,7 @@ pub(crate) fn image(path: &Path, storage: Option<&Path>) -> Result<Option<FileIm
     Ok(Some(FileImage { blob, mode }))
 }
 
-fn check_parents(root: &Path, relative: &str) -> Result<(), GitError> {
+pub(crate) fn check_parents(root: &Path, relative: &str) -> Result<(), GitError> {
     checked_relative(relative.as_bytes())?;
     let mut path = root.to_path_buf();
     let parts: Vec<_> = Path::new(relative).components().collect();
@@ -260,7 +260,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), GitError> {
     atomic_write_mode(path, bytes, None)
 }
 
-fn atomic_write_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), GitError> {
+pub(crate) fn atomic_write_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), GitError> {
     let parent = path
         .parent()
         .ok_or_else(|| recovery("missing file parent"))?;

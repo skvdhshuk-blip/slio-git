@@ -316,11 +316,11 @@ pub fn amend_commit(repo: &Repository, commit_id: &str, message: &str) -> Result
             id: commit_id.to_string(),
         })?;
 
-    // Get the tree from the commit
-    let tree = commit.tree().map_err(|e| GitError::OperationFailed {
-        operation: "amend_commit".to_string(),
-        details: e.to_string(),
-    })?;
+    let mut index = repo_lock.index()?;
+    if index.has_conflicts() {
+        return Err(GitError::MergeConflict);
+    }
+    let tree = repo_lock.find_tree(index.write_tree()?)?;
 
     // Create signature
     let signature = crate::auth::signature(&repo_lock).map_err(|e| GitError::OperationFailed {
@@ -332,7 +332,7 @@ pub fn amend_commit(repo: &Repository, commit_id: &str, message: &str) -> Result
     let amend_oid = commit
         .amend(
             Some("HEAD"),
-            Some(&signature),
+            None, // Preserve the original author; only the committer changes.
             Some(&signature),
             None,
             Some(message),

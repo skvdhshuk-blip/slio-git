@@ -45,9 +45,8 @@ pub(super) fn fetch(
     let mut fetch_options = FetchOptions::new();
     fetch_options.remote_callbacks(callbacks);
 
-    let refspecs = ["refs/heads/*:refs/remotes/*"];
     remote
-        .fetch(&refspecs, Some(&mut fetch_options), None)
+        .fetch::<&str>(&[], Some(&mut fetch_options), None)
         .map_err(|e| GitError::RemoteFailed {
             remote: remote_name.to_string(),
             details: e.to_string(),
@@ -91,6 +90,7 @@ pub(super) fn push_with_options(
     }
 
     // Try libgit2 first (handles SSH keys from agent + ~/.ssh/ + credential helpers)
+    let mut rejected = Vec::new();
     let libgit2_result = (|| -> Result<(), GitError> {
         let repo_lock = repo.inner.write().unwrap();
         let config = repo_lock.config().map_err(|e| GitError::RemoteFailed {
@@ -108,6 +108,9 @@ pub(super) fn push_with_options(
         let mut callbacks = build_remote_callbacks(config, credentials);
         callbacks.push_update_reference(|refname, msg| {
             info!("Push update: {} - {:?}", refname, msg);
+            if let Some(message) = msg {
+                rejected.push(format!("{refname}: {message}"));
+            }
             Ok(())
         });
 
@@ -121,11 +124,18 @@ pub(super) fn push_with_options(
                 details: e.to_string(),
             })?;
 
-        info!("Push completed successfully via libgit2");
         Ok(())
     })();
 
+    // A policy rejection is a completed server decision, never a retry trigger.
+    if !rejected.is_empty() {
+        return Err(GitError::RemoteFailed {
+            remote: remote_name.into(),
+            details: format!("服务端拒绝：{}", rejected.join("; ")),
+        });
+    }
     if libgit2_result.is_ok() {
+        info!("Push completed successfully via libgit2");
         return libgit2_result;
     }
 
