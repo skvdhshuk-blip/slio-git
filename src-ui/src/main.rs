@@ -4950,7 +4950,9 @@ fn run_push_blocking(
         .as_ref()
         .is_some_and(|expected| expected != &branch)
     {
-        return Err("提交已完成，但当前分支已切换；请从原分支推送".into());
+        return Err(
+            "Commit completed, but the current branch changed; push from the original branch".into(),
+        );
     }
     git_core::remote::push_current_upstream(&repo, None).map_err(|e| e.to_string())?;
 

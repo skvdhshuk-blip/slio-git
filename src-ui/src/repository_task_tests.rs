@@ -154,5 +154,5 @@ fn commit_push_stops_when_branch_changed_before_upload() {
     let (_dir, p, _) = fixture("switched-branch");
     git(&p, &["checkout", "-b", "other"]);
     let error = run_push_blocking(p, Some("main".into())).unwrap_err();
-    assert!(error.contains("当前分支已切换"), "{error}");
+    assert!(error.contains("current branch changed"), "{error}");
 }
