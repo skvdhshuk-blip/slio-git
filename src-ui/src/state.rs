@@ -712,6 +712,7 @@ pub struct DefectObservation {
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub current_repository: Option<Repository>,
+    pub repository_generation: u64,
     pub is_loading: bool,
     pub error_message: Option<String>,
     pub view_mode: ViewMode,
@@ -882,6 +883,7 @@ impl AppState {
         };
         let mut state = Self {
             current_repository: None,
+            repository_generation: 0,
             is_loading: false,
             error_message: None,
             view_mode: ViewMode::Welcome,
@@ -1161,8 +1163,10 @@ impl AppState {
         let repository_changed = self
             .current_repository
             .as_ref()
-            .map(|current| current.path().to_path_buf())
-            != Some(repo.path().to_path_buf());
+            .is_none_or(|current| current.path() != repo.path() || current.path != repo.path);
+        if repository_changed {
+            self.repository_generation += 1;
+        }
 
         repo.retain_access(std::sync::Arc::new(std::mem::take(
             &mut self.pending_access,
@@ -1249,6 +1253,7 @@ impl AppState {
     }
 
     pub fn clear_repository(&mut self, i18n: &I18n) {
+        self.repository_generation += 1;
         self.current_repository = None;
         self.staged_changes.clear();
         self.unstaged_changes.clear();

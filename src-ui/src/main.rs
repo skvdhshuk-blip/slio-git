@@ -237,6 +237,59 @@ fn app_subscription(state: &AppState) -> Subscription<Message> {
 }
 
 fn update(state: &mut AppState, message: Message) -> Task<Message> {
+    let message = match message {
+        Message::RepositoryTaskCompleted(session, message) => {
+            if session != repository_session(state) {
+                return Task::none();
+            }
+            *message
+        }
+        message => message,
+    };
+    let task = update_inner(state, message);
+    // Capture after the handler: opening a repository establishes a new session.
+    let session = repository_session(state);
+    task.map(move |message| scope_repository_result(session.clone(), message))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositorySession {
+    git_dir: PathBuf,
+    generation: u64,
+}
+
+fn repository_session(state: &AppState) -> Option<RepositorySession> {
+    state
+        .current_repository
+        .as_ref()
+        .map(|repo| RepositorySession {
+            git_dir: repo.path.clone(),
+            generation: state.repository_generation,
+        })
+}
+
+fn scope_repository_result(session: Option<RepositorySession>, message: Message) -> Message {
+    match message {
+        Message::RefreshComplete(_)
+        | Message::GitOpComplete(..)
+        | Message::CommitComplete(..)
+        | Message::PushComplete(_)
+        | Message::CheckoutComplete(_)
+        | Message::RebaseCompleted(..)
+        | Message::HistoryRewriteCompleted(..)
+        | Message::TagPushCompleted(_)
+        | Message::AutoRemoteCheckFinished(_)
+        | Message::CommitDialogMessage(CommitDialogMessage::GenerateCommitMessageResult(_))
+        | Message::HistoryMessage(HistoryMessage::SignatureStatusReady(..))
+        | Message::HistoryMessage(HistoryMessage::LogFilterTextApply(..))
+        | Message::HistoryMessage(HistoryMessage::Refresh) => {
+            Message::RepositoryTaskCompleted(session, Box::new(message))
+        }
+        message => message,
+    }
+}
+
+fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
     if !matches!(
         &message,
         Message::AutoRefreshTick(_)
@@ -255,6 +308,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
     let i18n = i18n::locale(state.git_settings.language.as_deref());
 
     match message {
+        Message::RepositoryTaskCompleted(..) => unreachable!("handled by update"),
         Message::RebaseCompleted(path, result) => {
             if state.active_project_path() != Some(path.as_path()) {
                 return Task::none();
@@ -482,6 +536,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
         Message::CommitComplete(result, then_push) => {
             match result {
                 Ok((commit_id, refresh_data)) => {
+                    let committed_branch = refresh_data.current_branch.clone();
                     let i18n = i18n::locale(state.git_settings.language.as_deref());
                     state.commit_dialog.commit_success();
                     state.apply_refresh_result(refresh_data, &i18n);
@@ -518,7 +573,9 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
 
                     if then_push {
                         // Direct push to default remote (no dialog)
-                        let repo_path = state.current_repository.as_ref().unwrap().path().to_path_buf();
+                        let Some(repo_path) = state.active_project_path().map(Path::to_path_buf) else {
+                            return Task::none();
+                        };
                         let i18n_push = i18n::locale(state.git_settings.language.as_deref());
                         state.set_loading(
                             i18n_push.push,
@@ -526,7 +583,7 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                             "workspace.push",
                         );
                         return git_dispatch::run(
-                            move || run_push_blocking(repo_path),
+                            move || run_push_blocking(repo_path, committed_branch),
                             Message::PushComplete,
                         );
                     }
@@ -4877,18 +4934,25 @@ fn run_refresh_blocking(repo_path: std::path::PathBuf) -> Result<RefreshResult, 
 }
 
 /// Run a blocking push + refresh on a background thread.
-fn run_push_blocking(repo_path: std::path::PathBuf) -> Result<RefreshResult, String> {
+fn run_push_blocking(
+    repo_path: std::path::PathBuf,
+    expected_branch: Option<String>,
+) -> Result<RefreshResult, String> {
     let repo = git_core::Repository::discover(&repo_path)
         .map_err(|e| format!("Failed to open repository: {e}"))?;
 
-    // Get current branch and its upstream
-    let branch = repo.current_branch()
+    let branch = repo
+        .current_branch()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "No current branch".to_string())?;
 
-    // Push to the branch's upstream (default behavior)
-    git_core::push(&repo, "origin", &branch, None)
-        .map_err(|e| e.to_string())?;
+    if expected_branch
+        .as_ref()
+        .is_some_and(|expected| expected != &branch)
+    {
+        return Err("提交已完成，但当前分支已切换；请从原分支推送".into());
+    }
+    git_core::remote::push_current_upstream(&repo, None).map_err(|e| e.to_string())?;
 
     // Full refresh
     let mut repo = repo;
@@ -7699,6 +7763,7 @@ pub struct RefreshResult {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    RepositoryTaskCompleted(Option<RepositorySession>, Box<Message>),
     OpenRepository,
     InitRepository,
     Refresh,
@@ -8044,3 +8109,6 @@ mod tests {
         assert_eq!(popup.diff_presentation, DiffPresentation::Split);
     }
 }
+
+#[cfg(test)]
+mod repository_task_tests;
