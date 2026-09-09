@@ -381,7 +381,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
                 i18n.state_abort
             }
             StateAction::SkipCommit => i18n.state_skip,
-            StateAction::QuitMerge => i18n.state_abort,
+            StateAction::AbortMerge => i18n.state_abort,
             StateAction::ResolveConflicts => i18n.state_resolve_conflicts,
         }
     }
@@ -392,7 +392,7 @@ impl<'a, Message: Clone + 'a> MainWindow<'a, Message> {
             StateAction::ContinueRebase
                 | StateAction::ContinueCherryPick
                 | StateAction::ContinueRevert
-                | StateAction::QuitMerge
+                | StateAction::AbortMerge
         )
     }
 

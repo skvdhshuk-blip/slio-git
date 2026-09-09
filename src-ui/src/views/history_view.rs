@@ -749,23 +749,27 @@ fn build_commit_row<'a>(
                 .wrapping(text::Wrapping::None)
                 .color(theme::darcula::TEXT_DISABLED),
         )
-        .push_maybe(chips.map(|c| {
-            Container::new(c)
-                .max_width(HISTORY_CHIPS_MAX_WIDTH)
-                .clip(true)
-        }))
         .push(
-            // Subject wraps (CJK included via WordOrGlyph) but is height-capped and
-            // clipped, so it grows to at most ~2 lines and never balloons even when
-            // the available width is tiny.
-            Container::new(
-                Text::new(subject)
-                    .size(12)
-                    .wrapping(text::Wrapping::WordOrGlyph),
-            )
-            .width(Length::Fill)
-            .max_height(HISTORY_MSG_MAX_HEIGHT)
-            .clip(true),
+            // Keep refs and subject in the same flexible column: on narrow
+            // windows, badges must not consume the entire message width.
+            Column::new()
+                .spacing(2)
+                .width(Length::Fill)
+                .push_maybe(chips.map(|chips| {
+                    Container::new(chips)
+                        .max_width(HISTORY_CHIPS_MAX_WIDTH)
+                        .clip(true)
+                }))
+                .push(
+                    Container::new(
+                        Text::new(subject)
+                            .size(12)
+                            .wrapping(text::Wrapping::WordOrGlyph),
+                    )
+                    .width(Length::Fill)
+                    .max_height(HISTORY_MSG_MAX_HEIGHT)
+                    .clip(true),
+                ),
         )
         .push(
             Text::new(&entry.author_name)

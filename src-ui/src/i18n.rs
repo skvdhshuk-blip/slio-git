@@ -1502,6 +1502,7 @@ pub struct I18n {
     pub clone_progress_fmt: &'static str,
     pub clone_error_invalid_url: &'static str,
     pub clone_error_dir_exists: &'static str,
+    pub clone_error_options: &'static str,
 }
 
 impl I18n {
@@ -2959,6 +2960,7 @@ impl I18n {
             clone_progress_fmt: "正在克隆...",
             clone_error_invalid_url: "URL 无效",
             clone_error_dir_exists: "目标目录已存在",
+            clone_error_options: "目录名必须是所选目录下的一个子目录；浅克隆深度须为 1 到 2147483647 的整数。",
             // State-aware banner
             state_merging: "正在合并",
             state_rebasing: "正在变基",
@@ -4428,6 +4430,7 @@ pub static ZH_CN: I18n = I18n {
     clone_progress_fmt: "正在克隆...",
     clone_error_invalid_url: "URL 无效",
     clone_error_dir_exists: "目标目录已存在",
+    clone_error_options: "目录名必须是所选目录下的一个子目录；浅克隆深度须为 1 到 2147483647 的整数。",
 };
 
 pub static EN: I18n = I18n {
@@ -5887,4 +5890,5 @@ pub static EN: I18n = I18n {
     clone_progress_fmt: "Cloning...",
     clone_error_invalid_url: "Invalid URL",
     clone_error_dir_exists: "Target directory already exists",
+    clone_error_options: "Use a single child directory name; shallow depth must be an integer from 1 to 2147483647.",
 };

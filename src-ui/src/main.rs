@@ -274,6 +274,7 @@ fn scope_repository_result(session: Option<RepositorySession>, message: Message)
         | Message::GitOpComplete(..)
         | Message::CommitComplete(..)
         | Message::PushComplete(_)
+        | Message::NetworkCompleted(..)
         | Message::CheckoutComplete(_)
         | Message::RebaseCompleted(..)
         | Message::HistoryRewriteCompleted(..)
@@ -309,6 +310,74 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
 
     match message {
         Message::RepositoryTaskCompleted(..) => unreachable!("handled by update"),
+        Message::NetworkCompleted(surface, result) => {
+            state.network_operation = None;
+            state.is_loading = false;
+            match surface {
+                NetworkSurface::Remote => state.remote_dialog.is_loading = false,
+                NetworkSurface::Branches => state.branch_popup.is_loading = false,
+                NetworkSurface::Tags => state.tag_dialog.is_pushing = false,
+                NetworkSurface::Workspace => {}
+            }
+            let outcome = match result {
+                Ok((outcome, refresh)) => {
+                    match refresh {
+                        Ok(refresh) => {
+                            state.apply_refresh_result(refresh, i18n);
+                            refresh_workspace_views(state);
+                        }
+                        Err(error) => {
+                            let detail = match outcome {
+                                Ok(message) => format!(
+                                    "{message}; {}: {error}",
+                                    i18n.refresh_repo_state_failed
+                                ),
+                                Err(operation_error) => format!("{operation_error}; {error}"),
+                            };
+                            state.set_error(detail.clone());
+                            return Task::none();
+                        }
+                    }
+                    outcome
+                }
+                Err(error) => Err(error),
+            };
+            let (success, error) = match outcome {
+                Ok(message) => {
+                    state.set_success(message.clone(), None, "workspace.network");
+                    (Some(message), None)
+                }
+                Err(error) => {
+                    state.set_error(error.clone());
+                    (None, Some(error))
+                }
+            };
+            match surface {
+                NetworkSurface::Remote => {
+                    state.remote_dialog.success_message = success;
+                    state.remote_dialog.error = error;
+                }
+                NetworkSurface::Branches => {
+                    state.branch_popup.success_message = success;
+                    state.branch_popup.error = error;
+                }
+                NetworkSurface::Tags => {
+                    state.tag_dialog.success_message = success;
+                    state.tag_dialog.error = error;
+                }
+                NetworkSurface::Workspace => {}
+            }
+            if let Some(repo) = state.current_repository.clone() {
+                sync_merge_commit_message_default(state, &repo);
+            }
+            if state.has_conflicts() {
+                state.close_auxiliary_view(i18n);
+                if let Err(error) = state.open_conflict_resolver(i18n) {
+                    state.set_error(error);
+                }
+            }
+        }
+
         Message::RebaseCompleted(path, result) => {
             if state.active_project_path() != Some(path.as_path()) {
                 return Task::none();
@@ -671,8 +740,25 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
             }
         }
         Message::StateActionMessage(action) => match action {
-            StateAction::QuitMerge => {
-                return update(state, Message::QuitMergeState);
+            StateAction::AbortMerge => {
+                if let Some(repo) = state.current_repository.clone() {
+                    match git_core::repository::abort_merge(&repo) {
+                        Ok(()) => {
+                            if let Err(error) =
+                                refresh_repository_after_action(state, &repo, false, i18n)
+                            {
+                                state.set_error(error);
+                            } else {
+                                state.set_success(
+                                    i18n.state_abort,
+                                    Some(i18n.state_merging.to_string()),
+                                    "workspace.merge.abort",
+                                );
+                            }
+                        }
+                        Err(error) => state.set_error(error.to_string()),
+                    }
+                }
             }
             StateAction::ContinueRebase => {
                 return update(
@@ -1364,7 +1450,7 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
             state.blame_active = !state.blame_active;
         }
         Message::CancelNetworkOperation => {
-            state.network_operation = None;
+            // Transfers remain active until their actual completion is received.
         }
         Message::TogglePullStrategy => {
             state.pull_strategy = match state.pull_strategy {
@@ -1373,42 +1459,17 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
             };
         }
         Message::ForcePushCurrent => {
-            if let Some(repo) = &state.current_repository {
-                if let Ok(Some(branch)) = repo.current_branch() {
-                    let remote = repo
-                        .current_upstream_remote()
-                        .unwrap_or_else(|| "origin".to_string());
-                    state.network_operation = Some(state::NetworkOperation {
-                        label: i18n
-                            .force_push_label_fmt
-                            .replace("{}", &branch)
-                            .replacen("{}", &remote, 1),
-                        progress: None,
-                        status: Some("--force-with-lease".to_string()),
-                    });
-                    match git_core::force_push(repo, &remote, &branch) {
-                        Ok(()) => {
-                            state.network_operation = None;
-                            state.set_success(
-                                i18n.force_push_success,
-                                Some(format!("{branch} → {remote}")),
-                                "workspace.push.force",
-                            );
-                        }
-                        Err(e) => {
-                            state.network_operation = None;
-                            report_async_failure(
-                                state,
-                                i18n.force_push_failed,
-                                e.to_string(),
-                                "workspace.push.force",
-                                "workspace.push.force",
-                                i18n,
-                            );
-                        }
-                    }
-                }
-            }
+            return dispatch_network(state, NetworkSurface::Workspace, move |repo| {
+                let branch = repo
+                    .current_branch()
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| i18n.detached_no_push.to_string())?;
+                let remote = repo
+                    .current_upstream_remote()
+                    .unwrap_or_else(|| "origin".into());
+                git_core::force_push(repo, &remote, &branch).map_err(|error| error.to_string())?;
+                Ok(i18n.force_push_success.to_string())
+            });
         }
         Message::SetUpstreamAndPush { branch, remote } => {
             if let Some(repo) = &state.current_repository {
@@ -1443,6 +1504,7 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
             state.available_update = None;
         }
         Message::ShowWorktrees => {
+            state.show_project_dropdown = false;
             if let Ok(repo) = require_repository(state) {
                 state.worktree_state.load_worktrees(&repo);
                 state.open_auxiliary_view(state::AuxiliaryView::Worktrees, i18n);
@@ -1786,17 +1848,27 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
         Message::CloseHistoryCommitDiffPopup => state.close_history_commit_diff_popup(),
         Message::CloseAuxiliary => state.close_auxiliary_view(i18n),
         Message::ToolbarRemoteActionSelected { action, remote } => {
-            if let Err(error) = run_toolbar_remote_action(state, action, remote) {
-                let (title, source) = match action {
+            state.close_toolbar_remote_menu();
+            return dispatch_network(state, NetworkSurface::Workspace, move |repo| {
+                let branch = repo
+                    .current_branch()
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| i18n.detached_no_push.to_string())?;
+                match action {
                     ToolbarRemoteAction::Pull => {
-                        (i18n.pull_remote_failed, "workspace.remote.toolbar.pull")
+                        git_core::remote::pull(repo, &remote, &branch, None)
                     }
                     ToolbarRemoteAction::Push => {
-                        (i18n.push_remote_failed, "workspace.remote.toolbar.push")
+                        git_core::remote::push(repo, &remote, &branch, None)
                     }
-                };
-                report_async_failure(state, title, error, source, source, i18n);
-            }
+                }
+                .map_err(|error| error.to_string())?;
+                Ok(match action {
+                    ToolbarRemoteAction::Pull => i18n.pull_toast_success,
+                    ToolbarRemoteAction::Push => i18n.push_success,
+                }
+                .to_string())
+            });
         }
         Message::Stash => {
             if let Err(error) = open_stash_panel(state) {
@@ -1897,7 +1969,11 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
         Message::CloneMessage(msg) => {
             return handle_clone_message(state, msg, i18n);
         }
-        Message::CloneComplete(result) => {
+        Message::CloneComplete(generation, result) => {
+            if generation != state.clone_dialog.generation {
+                return Task::none();
+            }
+            state.clone_dialog.cancellation = None;
             state.clone_dialog.is_cloning = false;
             state.clone_dialog.progress = None;
             match result {
@@ -2789,54 +2865,18 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
                     }
                 }
                 BranchPopupMessage::FetchRemote(remote_name) => {
-                    if let Ok(repo) = require_repository(state) {
-                        state.branch_popup.fetch_remote(&repo, &remote_name, i18n);
-                        if let Some(error) = state.branch_popup.error.clone() {
-                            report_async_failure(
-                                state,
-                                i18n.update_remote_failed,
-                                error,
-                                "workspace.branches",
-                                "workspace.branches.fetch",
-                                i18n,
-                            );
-                        } else {
-                            let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                            if let Some(current) = state.current_repository.clone() {
-                                state.branch_popup.load_branches(&current, i18n);
-                            }
-                            state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
-                            if let Some(message) = state.branch_popup.success_message.clone() {
-                                state.set_success(message, None, "workspace.branches");
-                            }
-                        }
-                    }
+                    return dispatch_network(state, NetworkSurface::Branches, move |repo| {
+                        git_core::remote::fetch(repo, &remote_name, None)
+                            .map_err(|error| error.to_string())?;
+                        Ok(format!("{} {remote_name}", i18n.refresh))
+                    });
                 }
                 BranchPopupMessage::PushBranch { branch, remote } => {
-                    if let Ok(repo) = require_repository(state) {
-                        state
-                            .branch_popup
-                            .push_branch_to_remote(&repo, &remote, &branch, i18n);
-                        if let Some(error) = state.branch_popup.error.clone() {
-                            report_async_failure(
-                                state,
-                                i18n.push_branch_failed,
-                                error,
-                                "workspace.branches",
-                                "workspace.branches.push",
-                                i18n,
-                            );
-                        } else {
-                            let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                            if let Some(current) = state.current_repository.clone() {
-                                state.branch_popup.load_branches(&current, i18n);
-                            }
-                            state.open_auxiliary_view(AuxiliaryView::Branches, i18n);
-                            if let Some(message) = state.branch_popup.success_message.clone() {
-                                state.set_success(message, None, "workspace.branches");
-                            }
-                        }
-                    }
+                    return dispatch_network(state, NetworkSurface::Branches, move |repo| {
+                        git_core::remote::push(repo, &remote, &branch, None)
+                            .map_err(|error| error.to_string())?;
+                        Ok(format!("{} {branch} → {remote}", i18n.push_success))
+                    });
                 }
                 BranchPopupMessage::SetUpstream { branch, upstream } => {
                     if let Ok(repo) = require_repository(state) {
@@ -3080,6 +3120,21 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
                 BranchPopupMessage::ConfirmPendingCommitAction => {
                     if let Ok(repo) = require_repository(state) {
                         if let Some(confirmation) = state.pending_commit_action.take() {
+                            if let branch_popup::PendingCommitAction::PushCurrentBranchToCommit {
+                                target,
+                            } = &confirmation.action
+                            {
+                                let target = target.clone();
+                                return dispatch_network(
+                                    state,
+                                    NetworkSurface::Branches,
+                                    move |repo| {
+                                        git_core::push_current_branch_to_commit(repo, &target)
+                                            .map_err(|error| error.to_string())?;
+                                        Ok(i18n.push_success.to_string())
+                                    },
+                                );
+                            }
                             let action_kind = confirmation.action.kind();
                             let keep_branch_popup_open =
                                 state.auxiliary_view == Some(AuxiliaryView::Branches);
@@ -3701,37 +3756,19 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
                     }
                 }
                 HistoryMessage::PushUpToCommit(commit_id) => {
-                    if let Ok(repo) = require_repository(state) {
-                        if let Ok(Some(branch)) = repo.current_branch() {
-                            let remote = repo
-                                .current_upstream_remote()
-                                .unwrap_or_else(|| "origin".to_string());
-                            let refspec = format!("{}:refs/heads/{}", commit_id, branch);
-                            match git_core::push(&repo, &remote, &refspec, None) {
-                                Ok(()) => {
-                                    state.set_success(
-                                        i18n.push_success,
-                                        Some(
-                                            i18n.pushed_to_fmt
-                                                .replace("{}", &commit_id[..7.min(commit_id.len())])
-                                                .replacen("{}", &remote, 1),
-                                        ),
-                                        "workspace.push.up_to",
-                                    );
-                                }
-                                Err(e) => {
-                                    report_async_failure(
-                                        state,
-                                        i18n.push_to_commit_failed,
-                                        e.to_string(),
-                                        "workspace.push.up_to",
-                                        "workspace.push.up_to",
-                                        i18n,
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    return dispatch_network(state, NetworkSurface::Workspace, move |repo| {
+                        let branch = repo
+                            .current_branch()
+                            .map_err(|error| error.to_string())?
+                            .ok_or_else(|| i18n.detached_no_push.to_string())?;
+                        let remote = repo
+                            .current_upstream_remote()
+                            .unwrap_or_else(|| "origin".into());
+                        let refspec = format!("{commit_id}:refs/heads/{branch}");
+                        git_core::push(repo, &remote, &refspec, None)
+                            .map_err(|error| error.to_string())?;
+                        Ok(i18n.push_success.to_string())
+                    });
                 }
                 HistoryMessage::SetSearchQuery(query) => state.history_view.set_search_query(query),
                 HistoryMessage::Search => {
@@ -3949,100 +3986,28 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
             RemoteDialogMessage::SelectRemote(name) => {
                 state.remote_dialog.select_remote(name);
             }
-            RemoteDialogMessage::Fetch => {
-                if let Ok(repo) = require_repository(state) {
-                    state.remote_dialog.fetch_selected(&repo);
-                    if let Some(error) = state.remote_dialog.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.fetch_remote_failed,
-                            error,
-                            "workspace.remote",
-                            "workspace.remote.fetch",
-                            i18n,
-                        );
-                    } else {
-                        let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                        if let Some(current) = state.current_repository.clone() {
-                            state.remote_dialog.load_remotes(&current, i18n);
+            action @ (RemoteDialogMessage::Fetch
+            | RemoteDialogMessage::Push
+            | RemoteDialogMessage::Pull
+            | RemoteDialogMessage::ExecutePush
+            | RemoteDialogMessage::ExecutePull) => {
+                let mut dialog = state.remote_dialog.clone();
+                let autocrlf = cfg!(windows) && state.git_settings.pull_autocrlf_true;
+                return dispatch_network(state, NetworkSurface::Remote, move |repo| {
+                    match action {
+                        RemoteDialogMessage::Fetch => dialog.fetch_selected(repo),
+                        RemoteDialogMessage::Push => dialog.push_selected(repo),
+                        RemoteDialogMessage::ExecutePush => dialog.execute_push(repo),
+                        RemoteDialogMessage::Pull | RemoteDialogMessage::ExecutePull => {
+                            dialog.pull_selected(repo, autocrlf)
                         }
-                        state.open_auxiliary_view(AuxiliaryView::Remotes, i18n);
-                        if let Some(message) = state.remote_dialog.success_message.clone() {
-                            state.set_success(message, None, "workspace.remote");
-                        }
+                        _ => unreachable!(),
                     }
-                }
-            }
-            RemoteDialogMessage::Push => {
-                if let Ok(repo) = require_repository(state) {
-                    state.remote_dialog.push_selected(&repo);
-                    if let Some(error) = state.remote_dialog.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.push_remote_dialog_failed,
-                            error,
-                            "workspace.remote",
-                            "workspace.remote.push",
-                            i18n,
-                        );
-                    } else {
-                        let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                        if let Some(current) = state.current_repository.clone() {
-                            state.remote_dialog.load_remotes(&current, i18n);
-                        }
-                        state.open_auxiliary_view(AuxiliaryView::Remotes, i18n);
-                        if let Some(message) = state.remote_dialog.success_message.clone() {
-                            state.set_success(message, None, "workspace.remote");
-                            state.show_toast(
-                                crate::state::FeedbackLevel::Success,
-                                i18n.push_toast_success,
-                                Some(i18n.push_toast_detail.to_string()),
-                            );
-                        }
+                    match dialog.error {
+                        Some(error) => Err(error),
+                        None => Ok(dialog.success_message.unwrap_or_default()),
                     }
-                }
-            }
-            RemoteDialogMessage::Pull => {
-                if let Ok(repo) = require_repository(state) {
-                    state.remote_dialog.pull_selected(
-                        &repo,
-                        cfg!(windows) && state.git_settings.pull_autocrlf_true,
-                    );
-                    if let Some(error) = state.remote_dialog.error.clone() {
-                        report_async_failure(
-                            state,
-                            i18n.pull_remote_dialog_failed,
-                            error,
-                            "workspace.remote",
-                            "workspace.remote.pull",
-                            i18n,
-                        );
-                    } else if let Err(error) =
-                        refresh_repository_after_action(state, &repo, true, i18n)
-                    {
-                        report_async_failure(
-                            state,
-                            i18n.refresh_repo_state_failed,
-                            error,
-                            "workspace.remote",
-                            "workspace.remote.pull",
-                            i18n,
-                        );
-                    } else if !state.has_conflicts() {
-                        if let Some(current) = state.current_repository.clone() {
-                            state.remote_dialog.load_remotes(&current, i18n);
-                        }
-                        state.open_auxiliary_view(AuxiliaryView::Remotes, i18n);
-                        if let Some(message) = state.remote_dialog.success_message.clone() {
-                            state.set_success(message, None, "workspace.remote");
-                            state.show_toast(
-                                crate::state::FeedbackLevel::Success,
-                                i18n.pull_toast_success,
-                                Some(i18n.pull_toast_detail.to_string()),
-                            );
-                        }
-                    }
-                }
+                });
             }
             RemoteDialogMessage::SetUsername(value) => state.remote_dialog.username = value,
             RemoteDialogMessage::SetPassword(value) => state.remote_dialog.password = value,
@@ -4081,14 +4046,6 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
             RemoteDialogMessage::ToggleSetUpstream => {
                 state.remote_dialog.set_upstream = !state.remote_dialog.set_upstream;
             }
-            RemoteDialogMessage::ExecutePush => {
-                if let Ok(repo) = require_repository(state) {
-                    state.remote_dialog.execute_push(&repo);
-                    if state.remote_dialog.error.is_none() {
-                        let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                    }
-                }
-            }
             RemoteDialogMessage::SetPullBranch(branch) => {
                 state.remote_dialog.pull_branch = branch;
             }
@@ -4122,56 +4079,6 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
                     state.remote_dialog.pull_rebase = false;
                     state.remote_dialog.pull_ff_only = false;
                     state.remote_dialog.pull_no_ff = false;
-                }
-            }
-            RemoteDialogMessage::ExecutePull => {
-                if let Ok(repo) = require_repository(state) {
-                    let remote = state
-                        .remote_dialog
-                        .selected_remote
-                        .clone()
-                        .or_else(|| state.remote_dialog.preferred_remote.clone())
-                        .unwrap_or_else(|| "origin".to_string());
-                    let branch = state.remote_dialog.pull_branch.trim().to_string();
-                    let pull_options = git_core::PullOptions {
-                        branch_name: (!branch.is_empty()).then_some(branch.as_str()),
-                        rebase: state.remote_dialog.pull_rebase,
-                        ff_only: state.remote_dialog.pull_ff_only,
-                        no_ff: state.remote_dialog.pull_no_ff,
-                        squash: state.remote_dialog.pull_squash,
-                        force_autocrlf_true: cfg!(windows) && state.git_settings.pull_autocrlf_true,
-                    };
-                    let branch_label = if branch.is_empty() {
-                        state
-                            .remote_dialog
-                            .current_upstream_ref
-                            .clone()
-                            .or_else(|| state.remote_dialog.current_branch_name.clone())
-                            .unwrap_or_else(|| "main".to_string())
-                    } else {
-                        branch.clone()
-                    };
-
-                    state.remote_dialog.is_loading = true;
-                    state.remote_dialog.error = None;
-
-                    let result = git_core::pull_with_options(&repo, &remote, pull_options, None);
-
-                    state.remote_dialog.is_loading = false;
-                    match result {
-                        Ok(()) => {
-                            state.remote_dialog.success_message = Some(
-                                i18n.pulled_fmt
-                                    .replace("{}", &remote)
-                                    .replacen("{}", &branch_label, 1)
-                                    .replacen("{}", &branch_label, 1),
-                            );
-                            let _ = refresh_repository_after_action(state, &repo, false, i18n);
-                        }
-                        Err(e) => {
-                            state.remote_dialog.error = Some(e.to_string());
-                        }
-                    }
                 }
             }
         },
@@ -4231,59 +4138,29 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
                     }
                 }
             }
+            TagDialogMessage::SetUsername(value) => state.tag_dialog.username = value,
+            TagDialogMessage::SetPassword(value) => state.tag_dialog.password = value,
             TagDialogMessage::PushTag(name, remote) => {
-                if let Ok(repo) = require_repository(state) {
-                    state.tag_dialog.is_pushing = true;
-                    state.tag_dialog.error = None;
-                    state.tag_dialog.success_message = None;
-                    let repo_path = repo.path().to_path_buf();
-                    let tag_name = name.clone();
-                    let remote_name = remote.clone();
-                    let access = sandbox_access::snapshot();
-                    return Task::perform(
-                        async move {
-                            tokio::task::spawn_blocking(move || {
-                                let _access = access;
-                                let repo =
-                                    git_core::Repository::discover(&repo_path).map_err(|e| {
-                                        (tag_name.clone(), remote_name.clone(), e.to_string())
-                                    })?;
-                                git_core::push_tag(&repo, &tag_name, &remote_name)
-                                    .map(|()| (tag_name.clone(), remote_name.clone()))
-                                    .map_err(|e| {
-                                        (tag_name.clone(), remote_name.clone(), e.to_string())
-                                    })
-                            })
-                            .await
-                            .unwrap_or_else(|join_err| {
-                                Err((name.clone(), remote.clone(), join_err.to_string()))
-                            })
-                        },
-                        Message::TagPushCompleted,
-                    );
-                }
+                let username = state.tag_dialog.username.clone();
+                let password = state.tag_dialog.password.clone();
+                return dispatch_network(state, NetworkSurface::Tags, move |repo| {
+                    let spec = format!("refs/tags/{name}:refs/tags/{name}");
+                    git_core::remote::push(
+                        repo,
+                        &remote,
+                        &spec,
+                        (!username.trim().is_empty())
+                            .then_some((username.trim(), password.as_str())),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    Ok(i18n
+                        .tag_pushed_fmt
+                        .replacen("{}", &name, 1)
+                        .replacen("{}", &remote, 1))
+                });
             }
             TagDialogMessage::DeleteRemoteTag(name) => {
-                if let Ok(repo) = require_repository(state) {
-                    let remote = repo
-                        .current_upstream_remote()
-                        .unwrap_or_else(|| "origin".to_string());
-                    match git_core::delete_remote_tag(&repo, &name, &remote) {
-                        Ok(()) => {
-                            state.tag_dialog.success_message = Some(
-                                i18n.remote_tag_deleted_fmt
-                                    .replace("{}", &name)
-                                    .replacen("{}", &remote, 1),
-                            );
-                        }
-                        Err(e) => {
-                            state.tag_dialog.error = Some(
-                                i18n.delete_remote_tag_failed_fmt
-                                    .replace("{}", &e.to_string()),
-                            );
-                        }
-                    }
-                }
+                return dispatch_tag_delete(state, name, false);
             }
             TagDialogMessage::SetForceTag(value) => state.tag_dialog.is_force = value,
             TagDialogMessage::ValidateCommitRef => {
@@ -4302,31 +4179,7 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
                 }
             }
             TagDialogMessage::DeleteLocalAndRemote(name) => {
-                if let Ok(repo) = require_repository(state) {
-                    // Delete local first
-                    if let Err(e) = git_core::delete_tag(&repo, &name) {
-                        state.tag_dialog.error = Some(
-                            i18n.delete_local_tag_failed_fmt
-                                .replace("{}", &e.to_string()),
-                        );
-                    } else {
-                        let remote = repo
-                            .current_upstream_remote()
-                            .unwrap_or_else(|| "origin".to_string());
-                        if let Err(e) = git_core::delete_remote_tag(&repo, &name, &remote) {
-                            state.tag_dialog.error = Some(
-                                i18n.delete_remote_tag_failed_fmt
-                                    .replace("{}", &e.to_string()),
-                            );
-                        } else {
-                            state.tag_dialog.success_message =
-                                Some(i18n.tag_deleted_local_remote_fmt.replace("{}", &name));
-                            if let Some(current) = state.current_repository.clone() {
-                                state.tag_dialog.load_tags(&current);
-                            }
-                        }
-                    }
-                }
+                return dispatch_tag_delete(state, name, true);
             }
             TagDialogMessage::SetTagName(value) => state.tag_dialog.tag_name = value,
             TagDialogMessage::SetTarget(value) => state.tag_dialog.target = value,
@@ -5202,91 +5055,90 @@ fn auto_refresh_remote_status(repo_path: PathBuf) -> AutoRemoteCheckResult {
     AutoRemoteCheckResult { repo_path, outcome }
 }
 
-fn run_toolbar_remote_action(
-    state: &mut AppState,
-    action: ToolbarRemoteAction,
-    remote_name: String,
-) -> Result<(), String> {
-    state.close_toolbar_remote_menu();
+fn dispatch_tag_delete(state: &mut AppState, name: String, delete_local: bool) -> Task<Message> {
+    let remote = state.tag_dialog.selected_remote.clone();
+    let username = state.tag_dialog.username.clone();
+    let password = state.tag_dialog.password.clone();
     let i18n = i18n::locale(state.git_settings.language.as_deref());
+    dispatch_network(state, NetworkSurface::Tags, move |repo| {
+        let remote = remote
+            .or_else(|| repo.current_upstream_remote())
+            .unwrap_or_else(|| "origin".into());
+        git_core::remote::push(
+            repo,
+            &remote,
+            &format!(":refs/tags/{name}"),
+            (!username.trim().is_empty()).then_some((username.trim(), password.as_str())),
+        )
+        .map_err(|error| error.to_string())?;
+        if delete_local {
+            git_core::delete_tag(repo, &name).map_err(|error| error.to_string())?;
+        }
+        Ok(if delete_local {
+            i18n.tag_deleted_local_remote_fmt.replacen("{}", &name, 1)
+        } else {
+            i18n.remote_tag_deleted_fmt
+                .replacen("{}", &name, 1)
+                .replacen("{}", &remote, 1)
+        })
+    })
+}
 
-    let repo = require_repository(state)?;
-    let branch_name = match repo.current_branch() {
-        Ok(Some(branch)) => branch,
-        Ok(None) => {
-            return Err(match action {
-                ToolbarRemoteAction::Pull => i18n.detached_no_pull.to_string(),
-                ToolbarRemoteAction::Push => i18n.detached_no_push.to_string(),
-            });
-        }
-        Err(error) => {
-            return Err(i18n
-                .read_branch_failed_fmt
-                .replace("{}", &error.to_string()));
-        }
-    };
+#[derive(Debug, Clone, Copy)]
+pub enum NetworkSurface {
+    Workspace,
+    Remote,
+    Branches,
+    Tags,
+}
 
-    match action {
-        ToolbarRemoteAction::Pull => {
-            git_core::remote::pull(&repo, &remote_name, &branch_name, None).map_err(|error| {
-                i18n.pull_remote_failed_fmt
-                    .replace("{}", &error.to_string())
-            })?;
-            refresh_repository_after_action(state, &repo, true, i18n)?;
-
-            if state.has_conflicts() {
-                state.set_warning(
-                    i18n.pulled_remote_fmt.replace("{}", &remote_name).replacen(
-                        "{}",
-                        &branch_name,
-                        1,
-                    ),
-                    Some(i18n.merge_conflict_found_detail.to_string()),
-                    "workspace.remote.toolbar.pull",
-                );
-            } else {
-                state.set_success(
-                    i18n.pulled_remote_fmt.replace("{}", &remote_name).replacen(
-                        "{}",
-                        &branch_name,
-                        1,
-                    ),
-                    Some(i18n.repo_state_refreshed.to_string()),
-                    "workspace.remote.toolbar.pull",
-                );
-                state.show_toast(
-                    crate::state::FeedbackLevel::Success,
-                    i18n.pull_toast_success,
-                    Some(i18n.pull_toast_detail_fmt.replace("{}", &remote_name)),
-                );
-            }
-        }
-        ToolbarRemoteAction::Push => {
-            git_core::remote::push(&repo, &remote_name, &branch_name, None).map_err(|error| {
-                i18n.push_remote_failed_fmt
-                    .replace("{}", &error.to_string())
-            })?;
-            refresh_repository_after_action(state, &repo, false, i18n)?;
-            state.set_success(
-                i18n.pushed_remote_fmt
-                    .replace("{}", &branch_name)
-                    .replacen("{}", &remote_name, 1),
-                Some(i18n.repo_state_refreshed.to_string()),
-                "workspace.remote.toolbar.push",
-            );
-            state.show_toast(
-                crate::state::FeedbackLevel::Success,
-                i18n.push_toast_success,
-                Some(
-                    i18n.push_toast_detail_fmt
-                        .replace("{}", &branch_name)
-                        .replacen("{}", &remote_name, 1),
-                ),
-            );
-        }
+fn dispatch_network<F>(state: &mut AppState, surface: NetworkSurface, operation: F) -> Task<Message>
+where
+    F: FnOnce(&Repository) -> Result<String, String> + Send + 'static,
+{
+    if state.network_operation.is_some() {
+        return Task::none();
     }
-
-    Ok(())
+    let Some(path) = state
+        .current_repository
+        .as_ref()
+        .map(|repo| repo.path().to_path_buf())
+    else {
+        return Task::none();
+    };
+    let i18n = i18n::locale(state.git_settings.language.as_deref());
+    state.network_operation = Some(state::NetworkOperation {
+        label: i18n.refreshing_workspace.into(),
+        progress: None,
+        status: None,
+    });
+    state.set_loading(i18n.refreshing_workspace, None, "workspace.network");
+    match surface {
+        NetworkSurface::Remote => {
+            state.remote_dialog.is_loading = true;
+            state.remote_dialog.error = None;
+            state.remote_dialog.success_message = None;
+        }
+        NetworkSurface::Branches => {
+            state.branch_popup.is_loading = true;
+            state.branch_popup.error = None;
+        }
+        NetworkSurface::Tags => {
+            state.tag_dialog.is_pushing = true;
+            state.tag_dialog.error = None;
+        }
+        NetworkSurface::Workspace => {}
+    }
+    git_dispatch::run(
+        move || {
+            let repo = Repository::discover(&path).map_err(|error| error.to_string())?;
+            let outcome = operation(&repo);
+            // A failed pull may already have created conflicts: always refresh.
+            let refresh = run_refresh_blocking(path);
+            Ok((outcome, refresh))
+        },
+        move |result| Message::NetworkCompleted(surface, result),
+    )
 }
 
 fn open_commit_dialog(state: &mut AppState) -> Result<(), String> {
@@ -5599,6 +5451,14 @@ fn handle_clone_message(
             state.clone_dialog.auto_fill_directory();
             Task::none()
         }
+        CloneMessage::SetUsername(value) => {
+            state.clone_dialog.username = value;
+            Task::none()
+        }
+        CloneMessage::SetPassword(value) => {
+            state.clone_dialog.password = value;
+            Task::none()
+        }
         CloneMessage::SetDirectory(dir) => {
             state.clone_dialog.directory = dir;
             Task::none()
@@ -5625,8 +5485,11 @@ fn handle_clone_message(
             Task::none()
         }
         CloneMessage::Execute => {
+            if state.clone_dialog.is_cloning {
+                return Task::none();
+            }
             let Some(mut options) = state.clone_dialog.build_options() else {
-                state.clone_dialog.error = Some(i18n.clone_error_invalid_url.to_string());
+                state.clone_dialog.error = Some(i18n.clone_error_options.to_string());
                 return Task::none();
             };
             let source_access =
@@ -5660,9 +5523,22 @@ fn handle_clone_message(
             state.clone_dialog.is_cloning = true;
             state.clone_dialog.progress = None;
             state.clone_dialog.error = None;
+            let generation = state.clone_dialog.generation;
+            let cancellation = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            state.clone_dialog.cancellation = Some(cancellation.clone());
+            let username = state.clone_dialog.username.trim().to_string();
+            let password = state.clone_dialog.password.clone();
             git_dispatch::run(
-                move || git_core::clone::clone(&options, None, None).map_err(|e| e.to_string()),
-                Message::CloneComplete,
+                move || {
+                    git_core::clone::clone_cancellable(
+                        &options,
+                        None,
+                        (!username.is_empty()).then_some((username.as_str(), password.as_str())),
+                        cancellation,
+                    )
+                    .map_err(|e| e.to_string())
+                },
+                move |result| Message::CloneComplete(generation, result),
             )
         }
         CloneMessage::Cancel => {
@@ -6168,6 +6044,16 @@ fn view(state: &AppState) -> Element<'_, Message> {
             .width(Length::Fill)
             .on_press(Message::OpenRepository),
         );
+
+        if state.current_repository.is_some() {
+            project_list = project_list.push(
+                Button::new(Text::new(i18n.worktrees).size(12))
+                    .style(theme::button_style(theme::ButtonTone::Ghost))
+                    .padding([6, 12])
+                    .width(Length::Fill)
+                    .on_press(Message::ShowWorktrees),
+            );
+        }
 
         project_list = project_list
             .push(iced::widget::rule::horizontal(1).style(theme::separator_rule_style()));
@@ -7837,6 +7723,10 @@ pub enum Message {
     Commit,
     Pull,
     Push,
+    NetworkCompleted(
+        NetworkSurface,
+        Result<(Result<String, String>, Result<RefreshResult, String>), String>,
+    ),
     ToggleToolbarRemoteMenu(ToolbarRemoteAction),
     CloseToolbarRemoteMenu,
     CloseHistoryCommitDiffPopup,
@@ -7880,8 +7770,11 @@ pub enum Message {
     TagDialogMessage(TagDialogMessage),
     OpenCloneDialog,
     CloneMessage(CloneMessage),
-    CloneComplete(Result<std::path::PathBuf, String>),
-    RebaseCompleted(PathBuf, Result<Box<rebase_editor::RebaseEditorState>, String>),
+    CloneComplete(u64, Result<std::path::PathBuf, String>),
+    RebaseCompleted(
+        PathBuf,
+        Result<Box<rebase_editor::RebaseEditorState>, String>,
+    ),
     HistoryRewriteCompleted(PathBuf, String, HistoryRewrite, Result<(), String>),
     StashPanelMessage(StashPanelMessage),
     RebaseEditorMessage(RebaseEditorMessage),

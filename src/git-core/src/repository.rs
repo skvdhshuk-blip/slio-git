@@ -327,6 +327,15 @@ pub fn quit_merge(repo: &Repository) -> Result<(), GitError> {
     }
 }
 
+/// Abort a merge and restore its original HEAD, index and tracked files.
+pub fn abort_merge(repo: &Repository) -> Result<(), GitError> {
+    if crate::native::active(repo) {
+        crate::native::require_kind(repo, crate::native::journal::Kind::Merge)?;
+        return crate::native::sequencer::abort(repo);
+    }
+    backend::abort_merge(repo)
+}
+
 /// Convert git2 repository state to our state enum
 fn convert_state(state: git2::RepositoryState) -> RepositoryState {
     use crate::repository::RepositoryState as OurState;

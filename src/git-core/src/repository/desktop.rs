@@ -3,6 +3,21 @@
 use super::*;
 use crate::process::git_command;
 
+pub(super) fn abort_merge(repo: &Repository) -> Result<(), GitError> {
+    let output = git_command()
+        .args(["merge", "--abort"])
+        .current_dir(repo.command_cwd())
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(GitError::OperationFailed {
+            operation: "merge_abort".into(),
+            details: String::from_utf8_lossy(&output.stderr).trim().into(),
+        })
+    }
+}
+
 pub(super) fn current_upstream_ref(repo: &Repository) -> Option<String> {
     let branch_name = repo.current_branch().ok().flatten()?;
     let upstream_ref_spec = format!("{branch_name}@{{upstream}}");

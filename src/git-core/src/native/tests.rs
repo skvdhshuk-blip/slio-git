@@ -548,6 +548,7 @@ fn mas_leaves_foreign_conflicts_untouched() {
         assert!(crate::commit::create_commit(&repo, "foreign", "", "").is_err());
         assert!(crate::rebase::rebase_continue(&repo).is_err());
         assert!(crate::rebase::rebase_abort(&repo).is_err());
+        assert!(crate::repository::abort_merge(&repo).is_err());
         assert_eq!(git(dir.path(), &["rev-parse", "HEAD"]), before_head);
         assert_eq!(
             fs::read(dir.path().join(".git/index")).unwrap(),

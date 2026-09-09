@@ -63,6 +63,8 @@ pub fn create_commit(
         details: e.to_string(),
     })?;
 
+    index.read(true)?;
+
     // Write the tree
     let tree_oid = index.write_tree().map_err(|e| GitError::OperationFailed {
         operation: "create_commit".to_string(),

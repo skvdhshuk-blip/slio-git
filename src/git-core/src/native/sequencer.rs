@@ -147,7 +147,16 @@ pub(crate) fn start(
         .map(|entry| checked_relative(entry.path_bytes()))
         .collect::<Result<Vec<_>, _>>()?;
     drop(statuses);
-    let committer = crate::auth::native_signature(&repo)?;
+    // Fast-forward reuses an existing commit and must work before the user has
+    // configured a commit identity. These journal fields are unused for writing
+    // commits in this action, so retain the existing commit's identity.
+    let committer = if kind == Kind::Merge && steps[0].action == "fast-forward" {
+        repo.find_commit(oid(&steps[0].commit)?)?
+            .committer()
+            .to_owned()
+    } else {
+        crate::auth::native_signature(&repo)?
+    };
     let mut journal = Journal {
         version: 1,
         id: format!(

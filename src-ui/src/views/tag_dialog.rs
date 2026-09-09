@@ -31,12 +31,16 @@ pub enum TagDialogMessage {
     Refresh,
     Close,
     SetRemote(String),
+    SetUsername(String),
+    SetPassword(String),
 }
 
 /// State for the tag dialog.
 #[derive(Debug, Clone)]
 pub struct TagDialogState {
     pub tags: Vec<TagInfo>,
+    pub username: String,
+    pub password: String,
     pub selected_tag: Option<String>,
     pub tag_name: String,
     pub target: String,
@@ -56,6 +60,8 @@ impl TagDialogState {
     pub fn new() -> Self {
         Self {
             tags: Vec::new(),
+            username: String::new(),
+            password: String::new(),
             selected_tag: None,
             tag_name: String::new(),
             target: String::new(),
@@ -544,6 +550,23 @@ pub fn view<'a>(state: &'a TagDialogState, i18n: &'a I18n) -> Element<'a, TagDia
         )
         .push(build_tags_list(state, i18n))
         .push(build_tag_form(state, i18n))
+        .push(
+            Container::new(
+                Column::new()
+                    .spacing(theme::spacing::SM)
+                    .push(text_input::styled(
+                        i18n.rd_username_optional,
+                        &state.username,
+                        TagDialogMessage::SetUsername,
+                    ))
+                    .push(text_input::styled_password(
+                        i18n.rd_password_optional,
+                        &state.password,
+                        TagDialogMessage::SetPassword,
+                    )),
+            )
+            .padding([8, 14]),
+        )
         .push(build_action_buttons(state, i18n));
 
     Container::new(scrollable::styled(content).height(Length::Fill))

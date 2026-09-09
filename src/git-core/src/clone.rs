@@ -6,7 +6,10 @@ use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{Config, FetchOptions};
 use log::info;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// Options for cloning a repository.
 #[derive(Debug, Clone)]
@@ -53,6 +56,27 @@ pub fn clone(
     progress_callback: Option<Box<dyn FnMut(CloneProgress) + Send>>,
     credentials: Option<(&str, &str)>,
 ) -> Result<PathBuf, GitError> {
+    clone_cancellable(
+        options,
+        progress_callback,
+        credentials,
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+/// Clone with cooperative cancellation during transfer and checkout.
+pub fn clone_cancellable(
+    options: &CloneOptions,
+    progress_callback: Option<Box<dyn FnMut(CloneProgress) + Send>>,
+    credentials: Option<(&str, &str)>,
+    cancellation: Arc<AtomicBool>,
+) -> Result<PathBuf, GitError> {
+    if cancellation.load(Ordering::Relaxed) {
+        return Err(GitError::OperationFailed {
+            operation: "clone".into(),
+            details: "Clone cancelled".into(),
+        });
+    }
     let dest = options.parent_dir.join(&options.directory_name);
     info!("Cloning '{}' into '{}'", options.url, dest.display());
 
@@ -71,7 +95,12 @@ pub fn clone(
     let progress_cb: Option<Arc<Mutex<Box<dyn FnMut(CloneProgress) + Send>>>> =
         progress_callback.map(|cb| Arc::new(Mutex::new(cb)));
 
+    callbacks.sideband_progress({
+        let cancellation = cancellation.clone();
+        move |_| !cancellation.load(Ordering::Relaxed)
+    });
     callbacks.transfer_progress({
+        let cancellation = cancellation.clone();
         let progress_cb = progress_cb.clone();
         move |stats| {
             if let Some(ref cb) = progress_cb {
@@ -84,7 +113,7 @@ pub fn clone(
                     }
                 }
             }
-            true
+            !cancellation.load(Ordering::Relaxed)
         }
     });
 
@@ -98,6 +127,8 @@ pub fn clone(
     }
 
     let mut checkout_builder = CheckoutBuilder::new();
+    checkout_builder.notify_on(git2::CheckoutNotificationType::all());
+    checkout_builder.notify(move |_, _, _, _, _| !cancellation.load(Ordering::Relaxed));
     if let Some(ref progress_cb) = progress_cb {
         let progress_cb = progress_cb.clone();
         checkout_builder.progress(move |_path, current, total| {

@@ -567,7 +567,7 @@ fn build_credential_inputs<'a>(
                 &state.username,
                 RemoteDialogMessage::SetUsername,
             ))
-            .push(text_input::styled(
+            .push(text_input::styled_password(
                 i18n.rd_password_optional,
                 &state.password,
                 RemoteDialogMessage::SetPassword,
@@ -782,13 +782,14 @@ fn build_push_panel<'a>(
     body = body.push(iced::widget::rule::horizontal(1));
     body = body.push(cmd_row);
     body = body.push(options);
+    body = body.push(build_credential_inputs(state, i18n));
     if let Some(s) = status {
         body = body.push(s);
     }
     body = body.push(iced::widget::rule::horizontal(1));
     body = body.push(footer);
 
-    Container::new(body)
+    Container::new(scrollable::styled(body).height(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(theme::panel_style(Surface::Panel))
@@ -931,6 +932,7 @@ fn build_pull_panel<'a>(
     body = body.push(iced::widget::rule::horizontal(1));
     body = body.push(cmd_row);
     body = body.push(options);
+    body = body.push(build_credential_inputs(state, i18n));
     if cfg!(windows) {
         body = body.push(autocrlf_hint);
     }
@@ -940,7 +942,7 @@ fn build_pull_panel<'a>(
     body = body.push(iced::widget::rule::horizontal(1));
     body = body.push(footer);
 
-    Container::new(body)
+    Container::new(scrollable::styled(body).height(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(theme::panel_style(Surface::Panel))

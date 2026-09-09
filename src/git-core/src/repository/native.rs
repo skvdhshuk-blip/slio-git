@@ -2,6 +2,12 @@
 
 use super::*;
 
+pub(super) fn abort_merge(_repo: &Repository) -> Result<(), GitError> {
+    Err(GitError::RecoveryRequired {
+        reason: "请回到发起合并的工具中止当前流程".into(),
+    })
+}
+
 pub(super) fn current_upstream_ref(repo: &Repository) -> Option<String> {
     let branch_name = repo.current_branch().ok().flatten()?;
     let repo_lock = repo.inner.read().ok()?;

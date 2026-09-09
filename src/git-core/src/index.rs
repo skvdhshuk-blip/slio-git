@@ -48,10 +48,11 @@ pub struct IndexEntry {
 /// Get the current index
 pub fn get_index(repo: &Repository) -> Result<Index, GitError> {
     let repo_lock = repo.inner.read().unwrap();
-    let index = repo_lock.index().map_err(|e| GitError::OperationFailed {
+    let mut index = repo_lock.index().map_err(|e| GitError::OperationFailed {
         operation: "get_index".to_string(),
         details: e.to_string(),
     })?;
+    index.read(true)?;
 
     Ok(Index { inner: index })
 }
@@ -66,6 +67,7 @@ pub fn stage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
         operation: "stage_file".to_string(),
         details: e.to_string(),
     })?;
+    index.read(true)?;
 
     match std::fs::symlink_metadata(repo.command_cwd().join(path)) {
         Ok(_) => index.add_path(path)?,
@@ -96,6 +98,7 @@ pub fn unstage_file(repo: &Repository, path: &Path) -> Result<(), GitError> {
     let head = head_commit(&raw)?;
     let tree = head.as_ref().map(|commit| commit.tree()).transpose()?;
     let mut index = raw.index()?;
+    index.read(true)?;
     index.remove_path(path)?;
     if let Some(entry) = tree
         .as_ref()
@@ -146,6 +149,7 @@ pub fn stage_all(repo: &Repository) -> Result<(), GitError> {
         operation: "stage_all".to_string(),
         details: e.to_string(),
     })?;
+    index.read(true)?;
 
     index
         .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
@@ -815,6 +819,7 @@ pub fn discard_file(repo: &Repository, file_path: &Path) -> Result<(), GitError>
         }
         let raw = repo.inner.write().unwrap();
         let mut index = raw.index()?;
+        index.read(true)?;
         index.remove_path(file_path)?;
         index.write()?;
     }

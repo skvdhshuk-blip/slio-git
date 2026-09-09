@@ -520,3 +520,49 @@ fn review_symlink_conflict_does_not_overwrite_target_file() {
         PathBuf::from("target-b.txt")
     );
 }
+
+#[test]
+fn external_staging_survives_selected_file_operations() {
+    for unstage in [false, true] {
+        let (_dir, p, repo) = fixture("external-index", Some(b"base\n"));
+        fs::write(p.join("file.txt"), b"selected\n").unwrap();
+        index::stage_file(&repo, Path::new("file.txt")).unwrap();
+        fs::write(p.join("external.txt"), b"external\n").unwrap();
+        git(&p, &["add", "external.txt"]);
+        if unstage {
+            index::unstage_file(&repo, Path::new("file.txt")).unwrap();
+        } else {
+            fs::write(p.join("file.txt"), b"selected again\n").unwrap();
+            index::stage_file(&repo, Path::new("file.txt")).unwrap();
+        }
+        assert_eq!(git(&p, &["show", ":external.txt"]), "external");
+    }
+}
+
+#[test]
+fn commit_reads_staging_written_by_another_repository_handle() {
+    let (_dir, p, repo) = fixture("external-commit", Some(b"base\n"));
+    let _cached = index::get_index(&repo).unwrap();
+    fs::write(p.join("file.txt"), b"external commit\n").unwrap();
+    git(&p, &["add", "file.txt"]);
+    git_core::commit::create_commit(&repo, "external staged", "", "").unwrap();
+    assert_eq!(git(&p, &["show", "HEAD:file.txt"]), "external commit");
+    assert_eq!(git(&p, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn failed_clone_can_retry_the_same_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = git_core::clone::CloneOptions {
+        url: dir.path().join("missing-source").display().to_string(),
+        parent_dir: dir.path().to_path_buf(),
+        directory_name: "retry".into(),
+        depth: None,
+        branch: None,
+    };
+    assert!(git_core::clone::clone(&opts, None, None).is_err());
+    assert!(
+        !dir.path().join("retry").exists(),
+        "failed clone must not leave a destination that blocks retry"
+    );
+}

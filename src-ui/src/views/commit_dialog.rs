@@ -173,12 +173,12 @@ impl CommitDialogState {
         self.default_message = Some(default);
     }
 
-    /// Forget any previously seeded default without modifying the editor.
-    ///
-    /// User-authored text survives; only the tracking field is reset so that
-    /// a future `set_default_message` call can seed again if the repository
-    /// re-enters a state that wants one.
+    /// Remove an untouched template when its operation ends; retain user edits.
     pub fn clear_default_message(&mut self) {
+        if self.default_message.as_deref() == Some(self.message.as_str()) {
+            self.message.clear();
+            self.message_editor = text_editor::Content::new();
+        }
         self.default_message = None;
     }
 

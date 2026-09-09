@@ -86,6 +86,7 @@ pub(super) fn push_with_options(
             "push",
             remote_name,
             build_push_args(repo, remote_name, branch_name, options),
+            credentials,
         );
     }
 
@@ -149,6 +150,7 @@ pub(super) fn push_with_options(
         "push",
         remote_name,
         build_push_args(repo, remote_name, branch_name, options),
+        credentials,
     )
 }
 
@@ -156,7 +158,7 @@ pub(super) fn pull_with_options(
     repo: &Repository,
     remote_name: &str,
     options: PullOptions<'_>,
-    _credentials: Option<(&str, &str)>,
+    credentials: Option<(&str, &str)>,
 ) -> Result<(), GitError> {
     info!(
         "Pulling from remote '{}' with options {:?}",
@@ -165,7 +167,9 @@ pub(super) fn pull_with_options(
 
     let repo_path = repo.command_cwd();
     let args = build_pull_args(repo, remote_name, options)?;
-    let output = git_command()
+    let mut command = git_command();
+    configure_explicit_credentials(&mut command, repo, remote_name, "pull", credentials)?;
+    let output = command
         .args(&args)
         .current_dir(&repo_path)
         .output()
@@ -277,7 +281,19 @@ pub(super) fn run_git_remote_command(
     remote_name: &str,
     args: &[&str],
 ) -> Result<(), GitError> {
-    let output = git_command()
+    run_git_remote_command_with_credentials(repo, operation, remote_name, args, None)
+}
+
+fn run_git_remote_command_with_credentials(
+    repo: &Repository,
+    operation: &str,
+    remote_name: &str,
+    args: &[&str],
+    credentials: Option<(&str, &str)>,
+) -> Result<(), GitError> {
+    let mut command = git_command();
+    configure_explicit_credentials(&mut command, repo, remote_name, operation, credentials)?;
+    let output = command
         .args(args)
         .current_dir(repo.command_cwd())
         .output()
@@ -309,7 +325,50 @@ pub(super) fn run_git_remote_command_with_owned_args(
     operation: &str,
     remote_name: &str,
     args: Vec<String>,
+    credentials: Option<(&str, &str)>,
 ) -> Result<(), GitError> {
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_git_remote_command(repo, operation, remote_name, &arg_refs)
+    run_git_remote_command_with_credentials(repo, operation, remote_name, &arg_refs, credentials)
+}
+
+// Keep explicit form credentials in this child process only; never write them
+// to repository config, command arguments, a helper file, or the system keychain.
+fn configure_explicit_credentials(
+    command: &mut std::process::Command,
+    repo: &Repository,
+    remote_name: &str,
+    operation: &str,
+    credentials: Option<(&str, &str)>,
+) -> Result<(), GitError> {
+    let Some((username, password)) = credentials else {
+        return Ok(());
+    };
+    if username.contains(['\r', '\n']) || password.contains(['\r', '\n']) {
+        return Err(GitError::InvalidInput {
+            message: "Credentials cannot contain line breaks".into(),
+        });
+    }
+    let raw = repo.inner.read().unwrap();
+    let remote = raw.find_remote(remote_name)?;
+    let url = if operation == "push" {
+        remote.pushurl().or(remote.url())
+    } else {
+        remote.url()
+    }
+    .unwrap_or_default();
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Ok(());
+    }
+    let count = std::env::var("GIT_CONFIG_COUNT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    command.env("SLIO_GIT_AUTH_USER", username).env("SLIO_GIT_AUTH_PASSWORD", password)
+        .env("GIT_CONFIG_COUNT", (count + 2).to_string())
+        .env(format!("GIT_CONFIG_KEY_{count}"), format!("credential.{url}.helper"))
+        .env(format!("GIT_CONFIG_VALUE_{count}"), "")
+        .env(format!("GIT_CONFIG_KEY_{}", count + 1), format!("credential.{url}.helper"))
+        .env(format!("GIT_CONFIG_VALUE_{}", count + 1),
+            r#"!f() { if test "$1" = get; then printf '%s\n' "username=$SLIO_GIT_AUTH_USER" "password=$SLIO_GIT_AUTH_PASSWORD"; fi; }; f"#);
+    Ok(())
 }

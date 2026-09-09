@@ -520,7 +520,7 @@ pub enum StateAction {
     ContinueRebase,
     SkipCommit,
     AbortRebase,
-    QuitMerge,
+    AbortMerge,
     ResolveConflicts,
     ContinueCherryPick,
     AbortCherryPick,
@@ -1082,10 +1082,7 @@ impl AppState {
 
         match repo.get_state() {
             RepositoryState::Merging => {
-                vec![
-                    StateAction::QuitMerge,
-                    StateAction::ResolveConflicts,
-                ]
+                vec![StateAction::AbortMerge, StateAction::ResolveConflicts]
             }
             RepositoryState::Rebasing => {
                 vec![
@@ -2531,8 +2528,10 @@ impl AppState {
         self.history_view = HistoryState::default();
         self.history_commit_diff_popup = None;
         self.remote_dialog = RemoteDialogState::default();
+        self.network_operation = None;
         self.tag_dialog = TagDialogState::default();
-        self.clone_dialog = CloneDialogState::default();
+        self.clone_dialog.close();
+        self.clone_dialog.reset();
         self.stash_panel = StashPanelState::default();
         self.rebase_editor = RebaseEditorState::default();
         for tab in &mut self.log_tabs {

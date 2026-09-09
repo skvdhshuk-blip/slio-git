@@ -8,12 +8,18 @@ use crate::widgets::{self, OptionalPush, button, scrollable, text_input};
 use git_core::clone::CloneOptions;
 use iced::widget::{Column, Container, Row, Space, Text};
 use iced::{Alignment, Element, Length};
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// Message types for the clone dialog.
 #[derive(Debug, Clone)]
 pub enum CloneMessage {
     SetUrl(String),
+    SetUsername(String),
+    SetPassword(String),
     SetDirectory(String),
     BrowseParent,
     ToggleShallow,
@@ -26,6 +32,10 @@ pub enum CloneMessage {
 #[derive(Debug, Clone)]
 pub struct CloneDialogState {
     pub url: String,
+    pub username: String,
+    pub password: String,
+    pub generation: u64,
+    pub cancellation: Option<Arc<AtomicBool>>,
     pub directory: String,
     pub parent_dir: String,
     pub shallow: bool,
@@ -42,6 +52,10 @@ impl CloneDialogState {
     pub fn new() -> Self {
         Self {
             url: String::new(),
+            username: String::new(),
+            password: String::new(),
+            generation: 0,
+            cancellation: None,
             directory: String::new(),
             parent_dir: home_dir_string(),
             shallow: false,
@@ -56,7 +70,10 @@ impl CloneDialogState {
 
     /// Reset the dialog to its initial state (preserves open flag).
     pub fn reset(&mut self) {
+        self.cancel_operation();
         self.url.clear();
+        self.username.clear();
+        self.password.clear();
         self.directory.clear();
         self.parent_dir = home_dir_string();
         self.shallow = false;
@@ -75,7 +92,18 @@ impl CloneDialogState {
 
     /// Close the dialog.
     pub fn close(&mut self) {
+        self.cancel_operation();
+        self.password.clear();
         self.open = false;
+    }
+
+    fn cancel_operation(&mut self) {
+        if let Some(cancellation) = self.cancellation.take() {
+            cancellation.store(true, Ordering::Relaxed);
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.is_cloning = false;
+        self.progress = None;
     }
 
     /// Validate the URL and return an error message if invalid.
@@ -102,8 +130,19 @@ impl CloneDialogState {
         if self.url.trim().is_empty() || self.directory.trim().is_empty() {
             return None;
         }
+        let directory = PathBuf::from(self.directory.trim());
+        let mut parts = directory.components();
+        if !matches!(parts.next(), Some(Component::Normal(_))) || parts.next().is_some() {
+            return None;
+        }
         let depth = if self.shallow {
-            self.depth.trim().parse::<u32>().ok().filter(|&d| d > 0)
+            Some(
+                self.depth
+                    .trim()
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|&d| d > 0 && d <= i32::MAX as u32)?,
+            )
         } else {
             None
         };
@@ -295,19 +334,14 @@ pub fn view<'a>(state: &'a CloneDialogState, i18n: &'a I18n) -> Element<'a, Clon
     };
 
     // ── Error display ──
-    let error_section: Option<Element<'_, CloneMessage>> = state.error.as_ref().map(|err| {
-        widgets::status_banner(
-            i18n.clone_error_invalid_url,
-            err,
-            BadgeTone::Danger,
-        )
-    });
+    let error_section: Option<Element<'_, CloneMessage>> = state
+        .error
+        .as_ref()
+        .map(|err| widgets::status_banner(i18n.clone_title, err, BadgeTone::Danger));
 
     // ── Footer buttons ──
-    let can_clone = !state.is_cloning
-        && !state.url.trim().is_empty()
-        && !state.directory.trim().is_empty()
-        && state.url_validation.is_none();
+    let can_clone =
+        !state.is_cloning && state.build_options().is_some() && state.url_validation.is_none();
 
     let footer = Container::new(
         Row::new()
@@ -329,8 +363,38 @@ pub fn view<'a>(state: &'a CloneDialogState, i18n: &'a I18n) -> Element<'a, Clon
     body = body.push(header);
     body = body.push(iced::widget::rule::horizontal(1));
     body = body.push(url_section);
+    body = body.push(
+        Container::new(
+            Column::new()
+                .spacing(theme::spacing::SM)
+                .push(text_input::styled(
+                    i18n.rd_username_optional,
+                    &state.username,
+                    CloneMessage::SetUsername,
+                ))
+                .push(text_input::styled_password(
+                    i18n.rd_password_optional,
+                    &state.password,
+                    CloneMessage::SetPassword,
+                )),
+        )
+        .padding([8, 14]),
+    );
     body = body.push(dir_section);
     body = body.push(shallow_section);
+    if !state.directory.trim().is_empty()
+        && !state.url.trim().is_empty()
+        && state.build_options().is_none()
+    {
+        body = body.push(
+            Container::new(
+                Text::new(i18n.clone_error_options)
+                    .size(11)
+                    .color(theme::darcula::DANGER),
+            )
+            .padding([8, 14]),
+        );
+    }
     if let Some(p) = progress_section {
         body = body.push(p);
     }
@@ -351,6 +415,30 @@ pub fn view<'a>(state: &'a CloneDialogState, i18n: &'a I18n) -> Element<'a, Clon
 mod tests {
     use super::*;
 
+    #[test]
+    fn shallow_clone_rejects_invalid_depth_instead_of_fetching_full_history() {
+        let mut state = CloneDialogState::new();
+        state.url = "https://example.invalid/repo.git".into();
+        state.directory = "repo".into();
+        state.shallow = true;
+        for depth in ["", "zero", "0", "2147483648"] {
+            state.depth = depth.into();
+            assert!(state.build_options().is_none(), "invalid depth {depth}");
+        }
+    }
+
+    #[test]
+    fn clone_destination_is_one_child_of_the_authorized_parent() {
+        let mut state = CloneDialogState::new();
+        state.url = "https://example.invalid/repo.git".into();
+        for directory in ["/tmp/elsewhere", "../elsewhere", ".", "nested/repo"] {
+            state.directory = directory.into();
+            assert!(
+                state.build_options().is_none(),
+                "invalid directory {directory}"
+            );
+        }
+    }
     #[test]
     fn extract_repo_name_https() {
         assert_eq!(
@@ -438,7 +526,6 @@ mod tests {
         state.directory = "repo".to_string();
         state.shallow = true;
         state.depth = "0".to_string();
-        let opts = state.build_options().unwrap();
-        assert!(opts.depth.is_none());
+        assert!(state.build_options().is_none());
     }
 }

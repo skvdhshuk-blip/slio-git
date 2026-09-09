@@ -156,3 +156,158 @@ fn commit_push_stops_when_branch_changed_before_upload() {
     let error = run_push_blocking(p, Some("main".into())).unwrap_err();
     assert!(error.contains("current branch changed"), "{error}");
 }
+
+#[test]
+fn cancelled_clone_cannot_finish_a_new_dialog_or_open_an_old_project() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let mut state = AppState::new();
+    state.clone_dialog.open();
+    let old = state.clone_dialog.generation;
+    let cancellation = Arc::new(AtomicBool::new(false));
+    state.clone_dialog.cancellation = Some(cancellation.clone());
+    state.clone_dialog.is_cloning = true;
+    state.clone_dialog.password = "temporary test credential".into();
+    let _ = update(&mut state, Message::CloneMessage(CloneMessage::Cancel));
+    assert!(cancellation.load(Ordering::Relaxed));
+    assert!(!state.clone_dialog.is_cloning);
+    assert!(state.clone_dialog.password.is_empty());
+    state.clone_dialog.open();
+    state.clone_dialog.is_cloning = true;
+    for result in [Ok(PathBuf::from("/tmp/old-clone")), Err("old error".into())] {
+        let task = update(&mut state, Message::CloneComplete(old, result));
+        assert_eq!(task.units(), 0);
+        assert!(state.clone_dialog.open);
+        assert!(state.clone_dialog.is_cloning);
+        assert!(state.clone_dialog.error.is_none());
+    }
+}
+
+#[test]
+fn network_menu_actions_dispatch_work_without_blocking_the_event_handler() {
+    let (_dir, _p, repo) = fixture("network-dispatch");
+    for message in [
+        Message::RemoteDialogMessage(views::remote_dialog::RemoteDialogMessage::Fetch),
+        Message::RemoteDialogMessage(views::remote_dialog::RemoteDialogMessage::ExecutePush),
+        Message::RemoteDialogMessage(views::remote_dialog::RemoteDialogMessage::ExecutePull),
+        Message::BranchPopupMessage(BranchPopupMessage::FetchRemote("origin".into())),
+        Message::BranchPopupMessage(BranchPopupMessage::PushBranch {
+            branch: "main".into(),
+            remote: "origin".into(),
+        }),
+        Message::TagDialogMessage(views::tag_dialog::TagDialogMessage::DeleteRemoteTag(
+            "tag".into(),
+        )),
+        Message::ToolbarRemoteActionSelected {
+            action: ToolbarRemoteAction::Push,
+            remote: "origin".into(),
+        },
+    ] {
+        let mut state = AppState::new();
+        state.set_repository(repo.clone(), &i18n::EN);
+        let task = update(&mut state, message);
+        assert!(task.units() > 0, "network work must be returned as a task");
+        assert!(state.network_operation.is_some());
+    }
+}
+
+#[test]
+fn network_completion_is_scoped_and_resets_busy_state_after_failure() {
+    let (_da, a, ra) = fixture("network-a");
+    let (_db, _b, rb) = fixture("network-b");
+    let mut state = AppState::new();
+    state.set_repository(ra, &i18n::EN);
+    let old = repository_session(&state);
+    let _ = dispatch_network(
+        &mut state,
+        NetworkSurface::Remote,
+        |_| Err("offline".into()),
+    );
+    let refresh = run_refresh_blocking(a).unwrap();
+    let _ = update(
+        &mut state,
+        scope_repository_result(
+            old.clone(),
+            Message::NetworkCompleted(
+                NetworkSurface::Remote,
+                Ok((Err("offline".into()), Ok(refresh.clone()))),
+            ),
+        ),
+    );
+    assert!(!state.remote_dialog.is_loading);
+    assert!(state.network_operation.is_none());
+    assert_eq!(state.remote_dialog.error.as_deref(), Some("offline"));
+    state.set_repository(rb, &i18n::EN);
+    let _ = update(
+        &mut state,
+        scope_repository_result(
+            old,
+            Message::NetworkCompleted(
+                NetworkSurface::Remote,
+                Ok((Err("late failure".into()), Ok(refresh))),
+            ),
+        ),
+    );
+    assert!(state.remote_dialog.error.is_none());
+    assert!(state.network_operation.is_none());
+}
+
+#[test]
+fn switching_repository_cancels_clone_without_reusing_its_generation() {
+    let (_dir, _p, repo) = fixture("clone-switch");
+    let mut state = AppState::new();
+    state.clone_dialog.open();
+    let old = state.clone_dialog.generation;
+    let signal = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state.clone_dialog.cancellation = Some(signal.clone());
+    state.set_repository(repo, &i18n::EN);
+    state.clone_dialog.open();
+    assert_ne!(old, state.clone_dialog.generation);
+    assert!(signal.load(std::sync::atomic::Ordering::Relaxed));
+    let _ = update(
+        &mut state,
+        Message::CloneComplete(old, Err("old clone failed".into())),
+    );
+    assert!(state.clone_dialog.error.is_none());
+}
+
+#[test]
+fn merge_abort_button_restores_files_and_exits_conflict_view() {
+    let (_dir, path, _) = fixture("merge-abort-button");
+    git(&path, &["checkout", "-b", "incoming"]);
+    fs::write(path.join("base.txt"), "incoming\n").unwrap();
+    git(&path, &["commit", "-am", "incoming"]);
+    git(&path, &["checkout", "main"]);
+    fs::write(path.join("base.txt"), "local\n").unwrap();
+    git(&path, &["commit", "-am", "local"]);
+    let original = git(&path, &["rev-parse", "HEAD"]);
+    fs::write(path.join("keep.txt"), "untracked\n").unwrap();
+    let repo = Repository::open(&path).unwrap();
+    assert!(repo.merge_branch("incoming").is_err());
+    let mut state = AppState::new();
+    state.set_repository(repo, &i18n::EN);
+    state.open_conflict_resolver(&i18n::EN).unwrap();
+    let repo = state.current_repository.clone().unwrap();
+    sync_merge_commit_message_default(&mut state, &repo);
+    assert!(!state.commit_dialog.message.is_empty());
+    let _ = update(
+        &mut state,
+        Message::StateActionMessage(StateAction::AbortMerge),
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("base.txt")).unwrap(),
+        "local\n"
+    );
+    assert_eq!(git(&path, &["rev-parse", "HEAD"]), original);
+    assert_eq!(
+        fs::read_to_string(path.join("keep.txt")).unwrap(),
+        "untracked\n"
+    );
+    assert_eq!(git(&path, &["diff", "--name-only", "--diff-filter=U"]), "");
+    assert!(!state.has_conflicts());
+    assert!(state.conflict_resolver.is_none());
+    assert!(state.commit_dialog.message.is_empty());
+    assert_eq!(state.shell.active_section, ShellSection::Changes);
+}
