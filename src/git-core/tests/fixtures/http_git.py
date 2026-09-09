@@ -3,6 +3,7 @@ import base64
 import http.server
 import os
 import pathlib
+import socketserver
 import subprocess
 import sys
 import urllib.parse
@@ -56,6 +57,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
-server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+class GitHTTPServer(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # This fixture is loopback-only. HTTPServer's reverse DNS lookup is not
+        # needed and can delay readiness on hosted runners with slow DNS.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+server = GitHTTPServer(('127.0.0.1', 0), Handler)
 pathlib.Path(port_file).write_text(str(server.server_port))
 server.serve_forever()

@@ -48,18 +48,22 @@ fn authenticated_http_clone_and_failed_credentials_can_retry() {
     );
     let script =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/http_git.py");
-    let _server = Server(
+    let mut server = Server(
         Command::new("python3")
             .arg(script)
             .arg(root.path())
             .arg(&port)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .unwrap(),
     );
     let start = Instant::now();
     while !port.exists() {
+        assert!(
+            server.0.try_wait().unwrap().is_none(),
+            "HTTP fixture exited before becoming ready; see its stderr above"
+        );
         assert!(
             start.elapsed() < Duration::from_secs(10),
             "HTTP fixture failed to start"
