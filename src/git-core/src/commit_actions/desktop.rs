@@ -73,24 +73,12 @@ pub(super) fn continue_in_progress_commit_action(
         InProgressCommitActionKind::Revert => "revert",
     };
 
-    let add_output = git_command()
-        .args(["add", "-A"])
-        .current_dir(repo.command_cwd())
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: format!("{operation}_continue"),
-            details: format!("Failed to execute git add: {e}"),
-        })?;
-
-    if !add_output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: format!("{operation}_continue"),
-            details: format!(
-                "git add failed: {}",
-                String::from_utf8_lossy(&add_output.stderr)
-            ),
+    if get_in_progress_commit_action(repo)?.is_none_or(|action| action.kind != kind) {
+        return Err(GitError::InvalidInput {
+            message: "the requested commit operation is not active".into(),
         });
     }
+    crate::index::stage_resolved_conflicts(&repo.inner.write().unwrap())?;
 
     let args = match kind {
         InProgressCommitActionKind::CherryPick => {
@@ -218,7 +206,10 @@ pub(super) fn push_current_branch_to_commit(
     );
     let mut args = vec!["push".to_string()];
     if target.requires_force_with_lease {
-        args.push("--force-with-lease".to_string());
+        args.push(format!(
+            "--force-with-lease=refs/heads/{}:{}",
+            target.upstream_branch_name, target.expected_remote_oid
+        ));
     }
     args.push(target.remote_name.clone());
     args.push(refspec);

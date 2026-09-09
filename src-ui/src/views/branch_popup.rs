@@ -576,30 +576,37 @@ impl BranchPopupState {
     /// Prepare a branch for deletion by checking if it's fully merged.
     /// Sets `pending_delete_branch` and `pending_delete_not_merged` for the confirmation dialog.
     pub fn prepare_delete_branch(&mut self, repo: &Repository, name: String, i18n: &I18n) {
-        let can_delete = self
-            .local_branches
-            .iter()
-            .any(|branch| branch.name == name && !branch.is_head);
-
-        if !can_delete {
+        let current = repo.current_branch().ok().flatten();
+        if current.as_deref() == Some(name.as_str()) {
             self.error = Some(i18n.bp_only_delete_non_current.to_string());
             return;
         }
 
-        // Check if branch is fully merged into HEAD
-        let is_merged = repo.is_branch_merged(&name).unwrap_or(false);
-
-        self.pending_delete_branch = Some(name);
-        self.pending_delete_not_merged = !is_merged;
+        match repo.is_branch_merged(&name) {
+            Ok(is_merged) => {
+                self.error = None;
+                self.pending_delete_branch = Some(name);
+                self.pending_delete_not_merged = !is_merged;
+            }
+            Err(_) => {
+                self.error = Some(i18n.bp_only_delete_non_current.to_string());
+            }
+        }
     }
 
     pub fn delete_branch(&mut self, repo: &Repository, name: String, i18n: &I18n) {
-        let can_delete = self
-            .local_branches
-            .iter()
-            .any(|branch| branch.name == name && !branch.is_head);
+        self.delete_branch_with_force(repo, name, false, i18n);
+    }
 
-        if !can_delete {
+    pub fn delete_branch_with_force(
+        &mut self,
+        repo: &Repository,
+        name: String,
+        force: bool,
+        i18n: &I18n,
+    ) {
+        let current = repo.current_branch().ok().flatten();
+        if current.as_deref() == Some(name.as_str()) {
             self.error = Some(i18n.bp_only_delete_non_current.to_string());
             self.success_message = None;
             return;
@@ -609,7 +616,13 @@ impl BranchPopupState {
         self.error = None;
         self.success_message = None;
 
-        match repo.delete_branch(&name) {
+        let result = if force {
+            repo.force_delete_branch(&name)
+        } else {
+            repo.delete_branch(&name)
+        };
+
+        match result {
             Ok(()) => {
                 if self.selected_branch.as_deref() == Some(name.as_str()) {
                     self.selected_branch = None;
@@ -1808,22 +1821,7 @@ pub fn view<'a>(state: &'a BranchPopupState, i18n: &'a I18n) -> Element<'a, Bran
             build_smart_checkout_dialog(target_branch, &state.smart_checkout_affected_files, i18n);
         return stack![
             base,
-            opaque(
-                mouse_area(
-                    Container::new(dialog)
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .center_x(Length::Fill)
-                        .center_y(Length::Fill)
-                        .style(|_: &Theme| container::Style {
-                            background: Some(Background::Color(Color::from_rgba(
-                                0.0, 0.0, 0.0, 0.5
-                            ))),
-                            ..Default::default()
-                        })
-                )
-                .on_press(BranchPopupMessage::CancelSmartCheckout)
-            )
+            widgets::menu::dismissible_modal(dialog, BranchPopupMessage::CancelSmartCheckout)
         ]
         .into();
     }
@@ -2770,20 +2768,10 @@ fn build_branch_context_menu_overlay<'a>(
     .width(Length::Fixed(374.0))
     .style(widgets::menu::panel_style);
 
-    opaque(
-        mouse_area(
-            Container::new(
-                Row::new()
-                    .width(Length::Fill)
-                    .push(Space::new().width(Length::Fill))
-                    .push(menu),
-            )
-            .padding([10, 14])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(widgets::menu::scrim_style),
-        )
-        .on_press(BranchPopupMessage::CloseBranchContextMenu),
+    widgets::menu::dismissible_anchored_menu(
+        menu,
+        BranchPopupMessage::CloseBranchContextMenu,
+        [10, 14],
     )
 }
 
@@ -3383,20 +3371,10 @@ fn build_commit_context_menu_overlay<'a>(
     .width(Length::Fixed(374.0))
     .style(widgets::menu::panel_style);
 
-    opaque(
-        mouse_area(
-            Container::new(
-                Row::new()
-                    .width(Length::Fill)
-                    .push(Space::new().width(Length::Fill))
-                    .push(menu),
-            )
-            .padding([12, 16])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(widgets::menu::scrim_style),
-        )
-        .on_press(BranchPopupMessage::CloseCommitContextMenu),
+    widgets::menu::dismissible_anchored_menu(
+        menu,
+        BranchPopupMessage::CloseCommitContextMenu,
+        [12, 16],
     )
 }
 
@@ -3684,7 +3662,7 @@ fn build_branch_action_groups<'a>(
     let can_checkout_remote =
         !state.is_loading && !selected_branch.is_head && selected_branch.is_remote;
     let can_rename = !state.is_loading && !selected_branch.is_remote;
-    let can_delete = !state.is_loading && !selected_branch.is_remote && !selected_branch.is_head;
+    let can_delete = can_delete_local_branch(state.is_loading, selected_branch);
     let can_push =
         !state.is_loading && !selected_branch.is_remote && selected_remote_name.is_some();
     let can_fetch = !state.is_loading && selected_remote_name.is_some();
@@ -3953,7 +3931,7 @@ fn build_branch_action_groups<'a>(
                 } else {
                     i18n.bp_cannot_delete_current.to_string()
                 }),
-                can_delete.then(|| BranchPopupMessage::DeleteBranch(selected_branch.name.clone())),
+                local_branch_delete_action(state.is_loading, selected_branch),
                 CommitMenuTone::Danger,
             )],
         ),
@@ -4522,6 +4500,82 @@ fn short_commit_id(id: &str) -> &str {
     &id[..id.len().min(8)]
 }
 
+fn can_delete_local_branch(is_loading: bool, branch: &Branch) -> bool {
+    !is_loading && !branch.is_remote && !branch.is_head
+}
+
+fn local_branch_delete_action(is_loading: bool, branch: &Branch) -> Option<BranchPopupMessage> {
+    can_delete_local_branch(is_loading, branch)
+        .then(|| BranchPopupMessage::PrepareDeleteBranch(branch.name.clone()))
+}
+
+fn delete_confirm_is_pending(state: &BranchPopupState) -> bool {
+    state.pending_delete_branch.is_some()
+}
+
+pub fn build_pending_delete_branch_dialog<'a>(
+    pending_branch: Option<&'a str>,
+    not_merged: bool,
+    is_loading: bool,
+    i18n: &'a I18n,
+) -> Option<Element<'a, BranchPopupMessage>> {
+    let branch_name = pending_branch?;
+
+    let dialog = Container::new(
+        Column::new()
+            .spacing(theme::spacing::MD)
+            .push(
+                Text::new(i18n.confirm_delete_branch)
+                    .size(16)
+                    .color(theme::darcula::TEXT_PRIMARY),
+            )
+            .push(
+                Text::new(branch_name)
+                    .size(theme::typography::BODY_SIZE)
+                    .width(Length::Fill)
+                    .wrapping(text::Wrapping::WordOrGlyph)
+                    .color(theme::darcula::TEXT_PRIMARY),
+            )
+            .push_maybe(not_merged.then(|| {
+                Text::new(i18n.not_fully_merged_warning)
+                    .size(theme::typography::BODY_SIZE)
+                    .width(Length::Fill)
+                    .wrapping(text::Wrapping::WordOrGlyph)
+                    .color(theme::darcula::WARNING)
+            }))
+            .push(
+                Row::new()
+                    .spacing(theme::spacing::SM)
+                    .push(button::warning(
+                        i18n.delete,
+                        (!is_loading).then_some(BranchPopupMessage::ConfirmDeleteBranch),
+                    ))
+                    .push(button::ghost(
+                        i18n.cancel,
+                        (!is_loading).then_some(BranchPopupMessage::CancelDeleteBranch),
+                    )),
+            ),
+    )
+    .padding([20, 24])
+    .max_width(520)
+    .style(|_: &Theme| container::Style {
+        background: Some(Background::Color(theme::darcula::BG_PANEL)),
+        border: Border {
+            color: theme::darcula::BORDER,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+            offset: iced::Vector::new(0.0, 4.0),
+            blur_radius: 16.0,
+        },
+        ..Default::default()
+    });
+
+    Some(dialog.into())
+}
+
 fn map_commit_menu_tone(tone: CommitMenuTone) -> widgets::menu::MenuTone {
     match tone {
         CommitMenuTone::Neutral => widgets::menu::MenuTone::Neutral,
@@ -4670,5 +4724,42 @@ mod tests {
             panel.is_some(),
             "should render status panel when sync_hint is set"
         );
+    }
+
+    #[test]
+    fn delete_action_prepares_confirmation_for_local_non_current() {
+        let branch = branch("feature/login");
+        assert!(matches!(
+            local_branch_delete_action(false, &branch),
+            Some(BranchPopupMessage::PrepareDeleteBranch(name)) if name == "feature/login"
+        ));
+    }
+
+    #[test]
+    fn delete_action_disabled_for_current_remote_or_loading() {
+        let mut current = branch("main");
+        current.is_head = true;
+        assert!(local_branch_delete_action(false, &current).is_none());
+
+        let remote = branch_with_kind("origin/main", true);
+        assert!(local_branch_delete_action(false, &remote).is_none());
+
+        assert!(local_branch_delete_action(true, &branch("feature")).is_none());
+    }
+
+    #[test]
+    fn delete_confirm_is_pending_when_branch_queued() {
+        let mut state = BranchPopupState::new();
+        assert!(!delete_confirm_is_pending(&state));
+        state.pending_delete_branch = Some("feature".to_string());
+        assert!(delete_confirm_is_pending(&state));
+    }
+
+    #[test]
+    fn delete_confirm_dialog_renders_merged_and_unmerged_warning() {
+        let i18n = &crate::i18n::ZH_CN;
+        assert!(build_pending_delete_branch_dialog(None, false, false, i18n).is_none());
+        assert!(build_pending_delete_branch_dialog(Some("feature"), false, false, i18n).is_some());
+        assert!(build_pending_delete_branch_dialog(Some("feature"), true, false, i18n).is_some());
     }
 }

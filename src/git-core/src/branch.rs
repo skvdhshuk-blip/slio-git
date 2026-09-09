@@ -342,7 +342,13 @@ impl Repository {
     /// Delete a branch
     pub fn delete_branch(&self, name: &str) -> Result<(), GitError> {
         crate::native::reject_active(self)?;
-        backend::delete_branch(self, name)
+        backend::delete_branch(self, name, false)
+    }
+
+    /// Delete an unmerged local branch after explicit confirmation.
+    pub fn force_delete_branch(&self, name: &str) -> Result<(), GitError> {
+        crate::native::reject_active(self)?;
+        backend::delete_branch(self, name, true)
     }
 
     /// Rename a branch

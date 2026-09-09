@@ -2407,15 +2407,46 @@ fn update_inner(state: &mut AppState, message: Message) -> Task<Message> {
                 BranchPopupMessage::PrepareDeleteBranch(name) => {
                     if let Ok(repo) = require_repository(state) {
                         state.branch_popup.prepare_delete_branch(&repo, name, i18n);
+                        if let Some(error) = state.branch_popup.error.clone() {
+                            report_async_failure(
+                                state,
+                                i18n.delete_branch_failed,
+                                error,
+                                "workspace.branches",
+                                "workspace.branches.delete",
+                                i18n,
+                            );
+                        }
                     }
                 }
                 BranchPopupMessage::ConfirmDeleteBranch => {
-                    if let Some(name) = state.branch_popup.pending_delete_branch.take() {
+                    if let (Ok(repo), Some(name)) = (
+                        require_repository(state),
+                        state.branch_popup.pending_delete_branch.take(),
+                    ) {
+                        let force = state.branch_popup.pending_delete_not_merged;
                         state.branch_popup.pending_delete_not_merged = false;
-                        return update(
-                            state,
-                            Message::BranchPopupMessage(BranchPopupMessage::DeleteBranch(name)),
-                        );
+                        state
+                            .branch_popup
+                            .delete_branch_with_force(&repo, name, force, i18n);
+                        if let Some(error) = state.branch_popup.error.clone() {
+                            report_async_failure(
+                                state,
+                                i18n.delete_branch_failed,
+                                error,
+                                "workspace.branches",
+                                "workspace.branches.delete",
+                                i18n,
+                            );
+                        } else {
+                            let _ = refresh_repository_after_action(state, &repo, false, i18n);
+                            if let Some(current) = state.current_repository.clone() {
+                                state.branch_popup.load_branches(&current, i18n);
+                            }
+                            if let Some(message) = state.branch_popup.success_message.clone() {
+                                state.set_success(message, None, "workspace.branches");
+                            }
+                        }
                     }
                 }
                 BranchPopupMessage::CancelDeleteBranch => {
@@ -5294,6 +5325,7 @@ fn switch_commit_dialog_to_amend(state: &mut AppState) -> Result<(), String> {
     state.commit_dialog.diff = diff;
     state.commit_dialog.staged_files = state.staged_changes.clone();
     state.commit_dialog.enable_amend_mode(commit);
+    open_commit_dialog(state)?;
     state.set_info(
         i18n.switched_to_amend,
         Some(i18n.switched_to_amend_detail.to_string()),
@@ -6326,7 +6358,8 @@ fn view(state: &AppState) -> Element<'_, Message> {
 
     let layered = wrap_with_history_commit_diff_popup(state, i18n, layered);
     let layered = wrap_with_hud_overlay(state, layered);
-    wrap_with_pending_commit_action_dialog(state, layered)
+    let layered = wrap_with_pending_commit_action_dialog(state, layered);
+    wrap_with_pending_delete_branch_dialog(state, layered)
 }
 
 fn wrap_with_hud_overlay<'a>(
@@ -6397,21 +6430,37 @@ fn wrap_with_pending_commit_action_dialog<'a>(
 
     stack![
         base,
-        opaque(
-            mouse_area(
-                Container::new(dialog.map(Message::BranchPopupMessage))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .center_x(Length::Fill)
-                    .center_y(Length::Fill)
-                    .style(|_: &Theme| iced::widget::container::Style {
-                        background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.5,))),
-                        ..Default::default()
-                    }),
-            )
-            .on_press(Message::BranchPopupMessage(
-                branch_popup::BranchPopupMessage::CancelPendingCommitAction,
-            )),
+        crate::widgets::menu::dismissible_modal(
+            dialog.map(Message::BranchPopupMessage),
+            Message::BranchPopupMessage(
+                branch_popup::BranchPopupMessage::CancelPendingCommitAction
+            ),
+        )
+    ]
+    .into()
+}
+
+fn wrap_with_pending_delete_branch_dialog<'a>(
+    state: &'a AppState,
+    base: Element<'a, Message>,
+) -> Element<'a, Message> {
+    use crate::views::branch_popup;
+
+    let i18n = i18n::locale(state.git_settings.language.as_deref());
+    let Some(dialog) = branch_popup::build_pending_delete_branch_dialog(
+        state.branch_popup.pending_delete_branch.as_deref(),
+        state.branch_popup.pending_delete_not_merged,
+        state.branch_popup.is_loading,
+        i18n,
+    ) else {
+        return base;
+    };
+
+    stack![
+        base,
+        crate::widgets::menu::dismissible_modal(
+            dialog.map(Message::BranchPopupMessage),
+            Message::BranchPopupMessage(branch_popup::BranchPopupMessage::CancelDeleteBranch),
         )
     ]
     .into()
@@ -7939,6 +7988,57 @@ mod tests {
             b"new line\n",
         )
         .expect("editor diff")
+    }
+
+    #[test]
+    fn history_reword_opens_visible_amend_panel_for_selected_commit() {
+        let temp = tempfile::tempdir().unwrap();
+        let raw = git2::Repository::init(temp.path()).unwrap();
+        let mut config = raw.config().unwrap();
+        config.set_str("user.name", "Review").unwrap();
+        config.set_str("user.email", "review@example.test").unwrap();
+        let signature = raw.signature().unwrap();
+        let tree = raw
+            .find_tree(raw.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let first = raw
+            .commit(Some("HEAD"), &signature, &signature, "First", &tree, &[])
+            .unwrap();
+        let parent = raw.find_commit(first).unwrap();
+        raw.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Second",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+        let mut state = AppState::new();
+        state.set_repository(Repository::open(temp.path()).unwrap(), &EN);
+        state.switch_git_tool_window_tab(GitToolWindowTab::Log, &EN);
+        let _task = update(
+            &mut state,
+            Message::HistoryMessage(HistoryMessage::EditCommitMessage(first.to_string())),
+        );
+        assert!(state.is_loading);
+        let worker_repo = Repository::open(temp.path()).unwrap();
+        git_core::edit_commit_message(&worker_repo, &first.to_string()).unwrap();
+        let completion = scope_repository_result(
+            repository_session(&state),
+            Message::HistoryRewriteCompleted(
+                state.active_project_path().unwrap().to_path_buf(),
+                first.to_string(),
+                HistoryRewrite::Reword,
+                Ok(()),
+            ),
+        );
+        let _task = update(&mut state, completion);
+        assert!(state.commit_dialog.is_amend);
+        assert_eq!(state.commit_dialog.message.trim(), "First");
+        assert_eq!(state.shell.git_tool_window_tab, GitToolWindowTab::Changes);
+        assert!(state.auxiliary_view.is_none());
+        git_core::rebase_abort(state.current_repository.as_ref().unwrap()).unwrap();
     }
 
     #[test]

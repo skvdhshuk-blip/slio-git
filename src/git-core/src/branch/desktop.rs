@@ -92,14 +92,14 @@ pub(super) fn create_branch_from_start_point(
     })
 }
 
-pub(super) fn delete_branch(repo: &Repository, name: &str) -> Result<(), GitError> {
+pub(super) fn delete_branch(repo: &Repository, name: &str, force: bool) -> Result<(), GitError> {
     info!("Deleting branch '{}'", name);
 
     let repo_path = repo.command_cwd();
 
-    // Use git branch -d command
+    // Only an explicit confirmation permits deleting an unmerged branch.
     let output = git_command()
-        .args(["branch", "-d", name])
+        .args(["branch", if force { "-D" } else { "-d" }, "--", name])
         .current_dir(&repo_path)
         .output()
         .map_err(|e| GitError::OperationFailed {
@@ -111,7 +111,7 @@ pub(super) fn delete_branch(repo: &Repository, name: &str) -> Result<(), GitErro
         return Err(GitError::OperationFailed {
             operation: "delete_branch".to_string(),
             details: format!(
-                "git branch -d failed: {}",
+                "git branch deletion failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             ),
         });

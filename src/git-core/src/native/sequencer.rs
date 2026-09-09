@@ -566,7 +566,14 @@ pub(crate) fn continue_operation(repo: &Repository) -> Result<bool, GitError> {
         for path in conflicts {
             let relative = checked_relative(&path)?;
             let full = repo.workdir().unwrap().join(&relative);
-            if fs::symlink_metadata(full).is_ok() {
+            if fs::symlink_metadata(&full).is_ok() {
+                if fs::read(&full).is_ok_and(|contents| {
+                    contents
+                        .split(|byte| *byte == b'\n')
+                        .any(|line| line.starts_with(b"<<<<<<< "))
+                }) {
+                    return Err(GitError::MergeConflict);
+                }
                 index.add_path(Path::new(&relative))?;
             } else {
                 index.remove_path(Path::new(&relative))?;

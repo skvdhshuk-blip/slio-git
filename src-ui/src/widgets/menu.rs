@@ -2,7 +2,9 @@
 
 use crate::theme::{self, BadgeTone};
 // OptionalPush removed — no longer needed after compact menu refactor
-use iced::widget::{Button, Column, Container, Row, Text, button, container};
+use iced::widget::{
+    Button, Column, Container, Row, Space, Text, button, container, mouse_area, opaque, stack,
+};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme, Vector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +54,61 @@ pub fn scrim_style(_theme: &Theme) -> container::Style {
         border: Border::default(),
         ..Default::default()
     }
+}
+
+/// Full-screen dimmer that dismisses on outside click. The dialog sits on a
+/// separate layer so its buttons stay clickable.
+pub fn dismissible_modal<'a, Message: Clone + 'a>(
+    dialog: impl Into<Element<'a, Message>>,
+    on_dismiss: Message,
+) -> Element<'a, Message> {
+    stack![
+        opaque(
+            mouse_area(
+                Container::new(Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(scrim_style),
+            )
+            .on_press(on_dismiss),
+        ),
+        Container::new(opaque(dialog.into()))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    ]
+    .into()
+}
+
+/// Right-anchored menu over a dismissible scrim. Menu is not a child of the
+/// scrim mouse area, so action rows receive clicks.
+pub fn dismissible_anchored_menu<'a, Message: Clone + 'a>(
+    menu: impl Into<Element<'a, Message>>,
+    on_dismiss: Message,
+    padding: [u16; 2],
+) -> Element<'a, Message> {
+    stack![
+        opaque(
+            mouse_area(
+                Container::new(Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(scrim_style),
+            )
+            .on_press(on_dismiss),
+        ),
+        Container::new(
+            Row::new()
+                .width(Length::Fill)
+                .push(Space::new().width(Length::Fill))
+                .push(opaque(menu.into())),
+        )
+        .padding(padding)
+        .width(Length::Fill)
+        .height(Length::Fill),
+    ]
+    .into()
 }
 
 pub fn group<'a, Message: 'a>(

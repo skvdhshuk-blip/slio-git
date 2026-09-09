@@ -120,5 +120,8 @@ pub(super) fn rebase_skip(_repo: &Repository) -> Result<RebaseResult, GitError> 
     Err(foreign())
 }
 pub(super) fn has_rebase_conflicts(repo: &Repository) -> Result<bool, GitError> {
-    Ok(repo.inner.read().unwrap().index()?.has_conflicts())
+    let raw = repo.inner.read().unwrap();
+    let mut index = raw.index()?;
+    index.read(true)?;
+    Ok(index.has_conflicts())
 }

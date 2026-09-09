@@ -120,29 +120,16 @@ pub(super) fn rebase_continue(repo: &Repository) -> Result<RebaseResult, GitErro
 
     let repo_path = repo.command_cwd();
 
-    // First add the resolved files
-    let add_output = git_command()
-        .args(["add", "-A"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "rebase_continue".to_string(),
-            details: format!("Failed to execute git add: {}", e),
-        })?;
-
-    if !add_output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "rebase_continue".to_string(),
-            details: format!(
-                "git add failed: {}",
-                String::from_utf8_lossy(&add_output.stderr)
-            ),
+    if !repo.path.join("rebase-merge").exists() && !repo.path.join("rebase-apply").exists() {
+        return Err(GitError::InvalidInput {
+            message: "no rebase is active".into(),
         });
     }
+    crate::index::stage_resolved_conflicts(&repo.inner.write().unwrap())?;
 
     // Then continue the rebase
     let output = git_command()
-        .args(["rebase", "--continue"])
+        .args(["-c", "core.editor=true", "rebase", "--continue"])
         .current_dir(&repo_path)
         .output()
         .map_err(|e| GitError::OperationFailed {

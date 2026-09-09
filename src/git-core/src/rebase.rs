@@ -534,7 +534,10 @@ pub fn get_current_rebase_step(repo: &Repository) -> Result<Option<RebaseTodoEnt
 /// Check if there are rebase conflicts
 pub fn has_rebase_conflicts(repo: &Repository) -> Result<bool, GitError> {
     if crate::native::active(repo) {
-        return Ok(repo.inner.read().unwrap().index()?.has_conflicts());
+        let raw = repo.inner.read().unwrap();
+        let mut index = raw.index()?;
+        index.read(true)?;
+        return Ok(index.has_conflicts());
     }
     backend::has_rebase_conflicts(repo)
 }

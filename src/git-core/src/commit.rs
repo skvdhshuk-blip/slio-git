@@ -317,6 +317,7 @@ pub fn amend_commit(repo: &Repository, commit_id: &str, message: &str) -> Result
         })?;
 
     let mut index = repo_lock.index()?;
+    index.read(true)?;
     if index.has_conflicts() {
         return Err(GitError::MergeConflict);
     }

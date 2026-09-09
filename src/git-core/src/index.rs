@@ -832,3 +832,49 @@ pub fn generate_line_patch_for_test(
 ) -> String {
     generate_line_patch(file_path, hunk, selected, side).unwrap()
 }
+
+#[cfg(not(feature = "app-store"))]
+pub(crate) fn stage_resolved_conflicts(raw: &git2::Repository) -> Result<(), GitError> {
+    let mut index = raw.index()?;
+    index.read(true)?;
+    let paths: Vec<_> = index
+        .conflicts()?
+        .map(|entry| {
+            let entry = entry?;
+            Ok(entry.our.or(entry.their).or(entry.ancestor).unwrap().path)
+        })
+        .collect::<Result<_, git2::Error>>()?;
+    for bytes in paths {
+        #[cfg(unix)]
+        let path = {
+            use std::os::unix::ffi::OsStrExt;
+            Path::new(std::ffi::OsStr::from_bytes(&bytes))
+        };
+        #[cfg(not(unix))]
+        let path = Path::new(
+            std::str::from_utf8(&bytes).map_err(|_| GitError::InvalidInput {
+                message: "invalid conflict path".into(),
+            })?,
+        );
+        let full_path = raw
+            .workdir()
+            .ok_or_else(|| GitError::InvalidInput {
+                message: "bare repository".into(),
+            })?
+            .join(path);
+        if full_path.symlink_metadata().is_ok() {
+            if std::fs::read(&full_path).is_ok_and(|contents| {
+                contents
+                    .split(|byte| *byte == b'\n')
+                    .any(|line| line.starts_with(b"<<<<<<< "))
+            }) {
+                return Err(GitError::MergeConflict);
+            }
+            index.add_path(path)?;
+        } else {
+            index.remove_path(path)?;
+        }
+    }
+    index.write()?;
+    Ok(())
+}

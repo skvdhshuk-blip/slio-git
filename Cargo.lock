@@ -1429,7 +1429,7 @@ dependencies = [
 
 [[package]]
 name = "git-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4604,7 +4604,7 @@ dependencies = [
 
 [[package]]
 name = "src-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",

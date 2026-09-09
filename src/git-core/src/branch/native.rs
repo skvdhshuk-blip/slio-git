@@ -81,9 +81,9 @@ pub(super) fn create_branch_from_start_point(
     })
 }
 
-pub(super) fn delete_branch(repo: &Repository, name: &str) -> Result<(), GitError> {
+pub(super) fn delete_branch(repo: &Repository, name: &str, force: bool) -> Result<(), GitError> {
     info!("Deleting branch '{}'", name);
-    if !repo.is_branch_merged(name).unwrap_or(false) {
+    if !force && !repo.is_branch_merged(name)? {
         return Err(GitError::OperationFailed {
             operation: "delete_branch".to_string(),
             details: format!("branch '{name}' is not fully merged"),

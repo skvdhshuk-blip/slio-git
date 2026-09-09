@@ -235,6 +235,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ${{ needs.validate.outputs.release_title }}
           body_path: dist/publish/RELEASE_BODY.md
           files: |
