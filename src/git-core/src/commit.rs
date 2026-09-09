@@ -37,6 +37,24 @@ pub struct CommitChangedFile {
     pub status: CommitChangeStatus,
 }
 
+/// Signature that prefers AuthContext identity (App Store / sandbox) over gitconfig.
+pub(crate) fn signature_from_locked(
+    repo_lock: &git2::Repository,
+) -> Result<git2::Signature<'static>, GitError> {
+    if let Some((name, email)) = crate::auth::configured_identity() {
+        return git2::Signature::now(&name, &email).map_err(|e| GitError::OperationFailed {
+            operation: "create_signature".to_string(),
+            details: e.to_string(),
+        });
+    }
+    repo_lock
+        .signature()
+        .map_err(|e| GitError::OperationFailed {
+            operation: "get_default_signature".to_string(),
+            details: e.to_string(),
+        })
+}
+
 /// Create a new commit
 pub fn create_commit(
     repo: &Repository,
@@ -81,13 +99,8 @@ pub fn create_commit(
     }
     let parent_refs: Vec<&git2::Commit<'_>> = parent_commits.iter().collect();
 
-    // Create signature
-    let signature = repo_lock
-        .signature()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "create_commit".to_string(),
-            details: e.to_string(),
-        })?;
+    // Create signature (AuthContext first so App Store works without gitconfig)
+    let signature = signature_from_locked(&repo_lock)?;
 
     let commit_oid = repo_lock
         .commit(
@@ -304,19 +317,14 @@ pub fn amend_commit(repo: &Repository, commit_id: &str, message: &str) -> Result
         details: e.to_string(),
     })?;
 
-    // Create signature
-    let signature = repo_lock
-        .signature()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "amend_commit".to_string(),
-            details: e.to_string(),
-        })?;
+    // Create signature (AuthContext first so App Store works without gitconfig)
+    let signature = signature_from_locked(&repo_lock)?;
 
     // Amend the commit using the commit object
     let amend_oid = commit
         .amend(
             Some("HEAD"),
-            Some(&signature),
+            None,
             Some(&signature),
             None,
             Some(message),

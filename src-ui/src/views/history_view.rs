@@ -2102,19 +2102,26 @@ fn build_branches_dashboard<'a>(
             theme::darcula::TEXT_PRIMARY
         };
 
+        let row: Element<'_, HistoryMessage> = Button::new(
+            Row::new()
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .push(Space::new().width(Length::Fixed(12.0)))
+                .push(Text::new(icon).size(10).color(theme::darcula::ACCENT))
+                .push(Text::new(display).size(11).color(label_color)),
+        )
+        .style(theme::button_style(theme::ButtonTone::Ghost))
+        .padding([2, 4])
+        .width(Length::Fill)
+        .on_press(HistoryMessage::DashboardSelectBranch(name))
+        .into();
+
         tree = tree.push(
-            Button::new(
-                Row::new()
-                    .spacing(4)
-                    .align_y(Alignment::Center)
-                    .push(Space::new().width(Length::Fixed(12.0)))
-                    .push(Text::new(icon).size(10).color(theme::darcula::ACCENT))
-                    .push(Text::new(display).size(11).color(label_color)),
-            )
-            .style(theme::button_style(theme::ButtonTone::Ghost))
-            .padding([2, 4])
-            .width(Length::Fill)
-            .on_press(HistoryMessage::DashboardSelectBranch(name)),
+            if let Some(delete) = dashboard_branch_delete_action(branch) {
+                mouse_area(row).on_right_press(delete).into()
+            } else {
+                row
+            },
         );
     }
 
@@ -2153,6 +2160,11 @@ fn build_branches_dashboard<'a>(
                 .height(Length::Fill),
         )
         .into()
+}
+
+fn dashboard_branch_delete_action(branch: &git_core::branch::Branch) -> Option<HistoryMessage> {
+    (!branch.is_remote && !branch.is_head)
+        .then(|| HistoryMessage::DashboardDeleteBranch(branch.name.clone()))
 }
 
 pub fn view<'a>(state: &'a HistoryState, i18n: &'a I18n) -> Element<'a, HistoryMessage> {
@@ -2397,6 +2409,36 @@ mod tests {
             panel.is_none(),
             "refs panel should be None when refs is empty"
         );
+    }
+
+    fn dashboard_branch(name: &str, is_head: bool, is_remote: bool) -> git_core::branch::Branch {
+        git_core::branch::Branch {
+            name: name.to_string(),
+            oid: String::new(),
+            is_remote,
+            is_head,
+            upstream: None,
+            tracking_status: None,
+            sync_hint: None,
+            recency_hint: None,
+            last_commit_timestamp: None,
+            group_path: None,
+        }
+    }
+
+    #[test]
+    fn dashboard_delete_enabled_only_for_non_current_local() {
+        let feature = dashboard_branch("feature", false, false);
+        assert!(matches!(
+            dashboard_branch_delete_action(&feature),
+            Some(HistoryMessage::DashboardDeleteBranch(name)) if name == "feature"
+        ));
+
+        let current = dashboard_branch("main", true, false);
+        assert!(dashboard_branch_delete_action(&current).is_none());
+
+        let remote = dashboard_branch("origin/main", false, true);
+        assert!(dashboard_branch_delete_action(&remote).is_none());
     }
 
     #[test]

@@ -1005,6 +1005,97 @@ fn is_branch_merged_nonexistent_branch_errors() {
     assert!(result.is_err(), "nonexistent branch should error");
 }
 
+fn checkout_new_branch(repo: &TestRepo, name: &str) {
+    let output = std::process::Command::new("git")
+        .args(["checkout", "-b", name])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "checkout -b {name}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn checkout_branch(repo: &TestRepo, name: &str) {
+    let output = std::process::Command::new("git")
+        .args(["checkout", name])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "checkout {name}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn delete_branch_rejects_unmerged_without_force() {
+    let repo = TestRepo::new().unwrap();
+    repo.add_and_commit("a.txt", "a", "init").unwrap();
+    let r = Repository::discover(repo.path()).unwrap();
+    let base = r.current_branch().unwrap().unwrap();
+
+    checkout_new_branch(&repo, "feature");
+    repo.add_and_commit("b.txt", "b", "feature commit").unwrap();
+    checkout_branch(&repo, &base);
+
+    let r = Repository::discover(repo.path()).unwrap();
+    let error = r
+        .delete_branch("feature")
+        .expect_err("unmerged branch must require confirmation/force");
+    assert!(
+        error.to_string().contains("not fully merged"),
+        "got {error}"
+    );
+}
+
+#[test]
+fn force_delete_branch_removes_unmerged_local_branch() {
+    let repo = TestRepo::new().unwrap();
+    repo.add_and_commit("a.txt", "a", "init").unwrap();
+    let r = Repository::discover(repo.path()).unwrap();
+    let base = r.current_branch().unwrap().unwrap();
+
+    checkout_new_branch(&repo, "feature");
+    repo.add_and_commit("b.txt", "b", "feature commit").unwrap();
+    checkout_branch(&repo, &base);
+
+    let r = Repository::discover(repo.path()).unwrap();
+    r.force_delete_branch("feature")
+        .expect("confirmed delete must allow unmerged local branches");
+
+    let names: Vec<_> = r
+        .list_branches()
+        .unwrap()
+        .into_iter()
+        .filter(|branch| !branch.is_remote)
+        .map(|branch| branch.name)
+        .collect();
+    assert!(
+        !names.iter().any(|name| name == "feature"),
+        "feature should be gone, got {names:?}"
+    );
+}
+
+#[test]
+fn force_delete_branch_rejects_current_branch() {
+    let repo = TestRepo::new().unwrap();
+    repo.add_and_commit("a.txt", "a", "init").unwrap();
+    let r = Repository::discover(repo.path()).unwrap();
+    let current = r.current_branch().unwrap().unwrap();
+
+    let error = r
+        .force_delete_branch(&current)
+        .expect_err("current branch must stay protected");
+    assert!(
+        error.to_string().contains("checked-out") || error.to_string().contains("current"),
+        "got {error}"
+    );
+}
+
 // ── History: search by message text ───────────────────────────────────────
 
 #[test]

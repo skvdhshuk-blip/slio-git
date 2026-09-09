@@ -1,16 +1,18 @@
 //! Rebase operations for git-core
 //!
-//! Provides rebase functionality using git commands
+//! Implemented with libgit2 only — no system `git` process — so the App Store
+//! sandbox build can rebase.
 
+mod interactive;
+
+use crate::commit::signature_from_locked;
 use crate::error::GitError;
 use crate::index;
-use crate::process::git_command;
 use crate::repository::{Repository, RepositoryState};
 use git2::Oid;
 use log::info;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Rebase operation result
 #[derive(Debug, Clone)]
@@ -19,7 +21,7 @@ pub struct RebaseResult {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RebaseTodoEntry {
     pub action: String,
     pub commit: String,
@@ -55,6 +57,7 @@ fn git_dir(repo: &Repository) -> PathBuf {
     repo.path.join(".git")
 }
 
+#[cfg(test)]
 fn is_rebase_in_progress(repo: &Repository) -> bool {
     let git_dir = git_dir(repo);
     git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
@@ -201,38 +204,6 @@ fn ensure_local_interactive_rebase_allowed(
     Ok(())
 }
 
-fn interactive_rebase_temp_dir(operation: &str) -> PathBuf {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    std::env::temp_dir().join(format!(
-        "slio-git-{operation}-{}-{timestamp}",
-        std::process::id()
-    ))
-}
-
-fn write_sequence_editor_script(todo_path: &Path, script_path: &Path) -> Result<(), GitError> {
-    #[cfg(unix)]
-    let contents = format!("#!/bin/sh\ncat '{}' > \"$1\"\n", todo_path.display());
-    #[cfg(windows)]
-    let contents = format!("@echo off\r\ntype \"{}\" > %1\r\n", todo_path.display());
-
-    fs::write(script_path, contents).map_err(GitError::Io)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(script_path)
-            .map_err(GitError::Io)?
-            .permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(script_path, permissions).map_err(GitError::Io)?;
-    }
-
-    Ok(())
-}
-
 fn parse_todo_line(line: &str) -> Option<RebaseTodoEntry> {
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.starts_with('#') || trimmed == "noop" {
@@ -314,50 +285,64 @@ fn build_todo_contents(entries: &[RebaseTodoEntry]) -> Result<String, GitError> 
     Ok(contents)
 }
 
-fn command_result_message(output: &std::process::Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => stdout,
-        (true, false) => stderr,
-        (false, false) => format!("{stderr}\n{stdout}"),
-    }
-}
-
-/// Start a rebase onto the given branch / ref.
+/// Start a rebase onto the given branch / ref (libgit2).
 pub fn rebase_start(repo: &Repository, onto: &str) -> Result<String, GitError> {
     info!("Starting rebase onto '{}'", onto);
+    ensure_clean_worktree(repo, "rebase_start")?;
 
-    let repo_path = repo.command_cwd();
+    let head_oid = current_head_oid(repo, "rebase_start")?;
+    let onto_oid = resolve_commit_oid(repo, onto, "rebase_start")?;
+    let repo_lock = repo.inner.write().unwrap();
+    if head_oid == onto_oid {
+        return Ok(format!("Already up to date with {onto}"));
+    }
 
-    let output = git_command()?
-        .args(["rebase", onto])
-        .current_dir(&repo_path)
-        .output()
+    let onto_ac =
+        repo_lock
+            .find_annotated_commit(onto_oid)
+            .map_err(|e| GitError::OperationFailed {
+                operation: "rebase_start".to_string(),
+                details: e.to_string(),
+            })?;
+
+    let signature = signature_from_locked(&repo_lock)?;
+    let mut rebase = repo_lock
+        .rebase(None, Some(&onto_ac), None, None)
         .map_err(|e| GitError::OperationFailed {
             operation: "rebase_start".to_string(),
-            details: format!("Failed to execute git rebase: {}", e),
+            details: e.to_string(),
         })?;
 
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
+    loop {
+        match rebase.next() {
+            Some(Ok(_op)) => match rebase.commit(None, &signature, None) {
+                Ok(_) => {}
+                Err(error) if error.code() == git2::ErrorCode::Applied => {}
+                Err(error) => {
+                    return Err(GitError::OperationFailed {
+                        operation: "rebase_start".into(),
+                        details: error.to_string(),
+                    });
+                }
+            },
+            Some(Err(e)) => {
+                return Err(GitError::OperationFailed {
+                    operation: "rebase_start".to_string(),
+                    details: e.to_string(),
+                });
+            }
+            None => break,
+        }
+    }
+    rebase
+        .finish(Some(&signature))
+        .map_err(|e| GitError::OperationFailed {
             operation: "rebase_start".to_string(),
-            details: format!(
-                "git rebase failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
+            details: e.to_string(),
+        })?;
 
-    info!("Rebase started successfully");
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        Ok(format!("Rebase started onto {onto}"))
-    } else {
-        Ok(stdout)
-    }
+    info!("Rebase completed onto {onto}");
+    Ok(format!("Rebase completed onto {onto}"))
 }
 
 pub fn prepare_interactive_rebase_plan(
@@ -437,6 +422,60 @@ pub fn prepare_interactive_rebase_plan(
     })
 }
 
+fn validate_interactive_plan(
+    repo: &Repository,
+    base: Option<&str>,
+    entries: &[RebaseTodoEntry],
+) -> Result<(), GitError> {
+    let chain = current_branch_first_parent_chain(repo, "interactive_rebase")?;
+    let start =
+        match base {
+            Some(base) => {
+                let id = resolve_commit_oid(repo, base, "interactive_rebase")?;
+                chain.iter().position(|value| *value == id).ok_or_else(|| {
+                    GitError::InvalidInput {
+                        message: "基点不在当前分支上".into(),
+                    }
+                })? + 1
+            }
+            None => 0,
+        };
+    let mut seen = std::collections::HashSet::new();
+    let mut retained = false;
+    let raw = repo.inner.read().unwrap();
+    for entry in entries {
+        let oid = Oid::from_str(&entry.commit)?;
+        if !chain[start..].contains(&oid)
+            || !seen.insert(oid)
+            || raw.find_commit(oid)?.parent_count() > 1
+        {
+            return Err(GitError::InvalidInput {
+                message: "提交计划与当前分支不匹配".into(),
+            });
+        }
+        if !matches!(
+            entry.action.as_str(),
+            "pick" | "edit" | "reword" | "drop" | "fixup" | "squash"
+        ) || (!retained && matches!(entry.action.as_str(), "fixup" | "squash"))
+        {
+            return Err(GitError::InvalidInput {
+                message: "无效的提交动作".into(),
+            });
+        }
+        retained |= entry.action != "drop";
+    }
+    if !retained && start == 0 {
+        return Err(GitError::InvalidInput {
+            message: "不能删除全部历史".into(),
+        });
+    }
+    drop(raw);
+    if let Some(id) = chain.get(start) {
+        ensure_local_interactive_rebase_allowed(repo, *id, "interactive_rebase")?;
+    }
+    Ok(())
+}
+
 pub fn start_interactive_rebase(
     repo: &Repository,
     base_ref: Option<&str>,
@@ -447,180 +486,202 @@ pub fn start_interactive_rebase(
         entries.len()
     );
     ensure_clean_worktree(repo, "interactive_rebase_start")?;
+    build_todo_contents(entries)?;
+    validate_interactive_plan(repo, base_ref, entries)?;
+    interactive::start(repo, base_ref, entries)
+}
 
-    let todo_contents = build_todo_contents(entries)?;
-    let temp_dir = interactive_rebase_temp_dir("interactive_rebase");
-    fs::create_dir_all(&temp_dir).map_err(GitError::Io)?;
-
-    let todo_path = temp_dir.join("git-rebase-todo");
-    let script_path = if cfg!(windows) {
-        temp_dir.join("sequence-editor.cmd")
-    } else {
-        temp_dir.join("sequence-editor.sh")
-    };
-
-    fs::write(&todo_path, todo_contents).map_err(GitError::Io)?;
-    write_sequence_editor_script(&todo_path, &script_path)?;
-
-    let mut command = git_command()?;
-    command.current_dir(repo.command_cwd());
-    command.env("GIT_SEQUENCE_EDITOR", &script_path);
-    if entries
-        .iter()
-        .any(|entry| entry.action.eq_ignore_ascii_case("squash"))
-    {
-        command.env("GIT_EDITOR", "true");
-    }
-
-    command.arg("rebase").arg("-i");
-    if let Some(base_ref) = base_ref {
-        command.arg(base_ref);
-    } else {
-        command.arg("--root");
-    }
-
-    let output = command.output().map_err(|e| GitError::OperationFailed {
-        operation: "interactive_rebase_start".to_string(),
-        details: format!("Failed to execute git rebase -i: {e}"),
-    })?;
-
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if stdout.is_empty() {
-            "交互式变基已启动".to_string()
-        } else {
-            stdout
-        });
-    }
-
-    if is_rebase_in_progress(repo) {
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let message = if !stderr.is_empty() { stderr } else { stdout };
-        return Ok(if message.is_empty() {
-            "交互式变基已进入待继续状态".to_string()
-        } else {
-            message
-        });
-    }
-
-    Err(GitError::OperationFailed {
-        operation: "interactive_rebase_start".to_string(),
-        details: format!(
-            "git rebase -i failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
+fn run_foreign_rebase(repo: &Repository, action: &str) -> Result<RebaseResult, GitError> {
+    let output = crate::process::git_command()?
+        .args(["-c", "core.editor=true", "rebase", action])
+        .current_dir(repo.command_cwd())
+        .output()?;
+    Ok(RebaseResult {
+        success: output.status.success(),
+        message: format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .trim()
+        .into(),
     })
 }
 
-/// Continue a rebase after resolving conflicts
+/// Continue a rebase after resolving conflicts (libgit2).
 pub fn rebase_continue(repo: &Repository) -> Result<RebaseResult, GitError> {
     info!("Continuing rebase");
-
-    let repo_path = repo.command_cwd();
-
-    // First add the resolved files
-    let add_output = git_command()?
-        .args(["add", "-A"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "rebase_continue".to_string(),
-            details: format!("Failed to execute git add: {}", e),
-        })?;
-
-    if !add_output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "rebase_continue".to_string(),
-            details: format!(
-                "git add failed: {}",
-                String::from_utf8_lossy(&add_output.stderr)
-            ),
+    if interactive::active(repo) {
+        return interactive::resume(repo, false).map(|message| RebaseResult {
+            success: true,
+            message,
         });
     }
 
-    // Then continue the rebase
-    let output = git_command()?
-        .args(["rebase", "--continue"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "rebase_continue".to_string(),
-            details: format!("Failed to execute git rebase: {}", e),
-        })?;
-
-    let result = RebaseResult {
-        success: output.status.success(),
-        message: command_result_message(&output),
+    if get_rebase_status(repo)?.is_none() {
+        return Err(GitError::InvalidInput {
+            message: "没有进行中的变基".into(),
+        });
+    }
+    let foreign = repo.inner.read().unwrap().open_rebase(None).is_err();
+    if foreign && crate::capability::system_git() {
+        return run_foreign_rebase(repo, "--continue");
+    }
+    let repo_lock = repo.inner.write().unwrap();
+    crate::commit_actions::stage_resolved_conflicts(&repo_lock)?;
+    let signature = signature_from_locked(&repo_lock)?;
+    let mut rebase = match repo_lock.open_rebase(None) {
+        Ok(rebase) => rebase,
+        Err(e) => {
+            // No open libgit2 rebase — finish cherry-pick style state if present.
+            return Ok(RebaseResult {
+                success: false,
+                message: format!("没有进行中的 rebase: {e}"),
+            });
+        }
     };
 
-    if !output.status.success() {
-        info!("Rebase continue failed: {}", result.message);
-    } else {
-        info!("Rebase continued successfully");
+    match rebase.commit(None, &signature, None) {
+        Ok(_) => {}
+        Err(e) if e.code() == git2::ErrorCode::Applied => {}
+        Err(e) => {
+            return Ok(RebaseResult {
+                success: false,
+                message: e.to_string(),
+            });
+        }
     }
 
-    Ok(result)
+    // Keep applying remaining steps when there is no conflict.
+    loop {
+        match rebase.next() {
+            Some(Ok(_)) => {
+                if let Err(e) = rebase.commit(None, &signature, None) {
+                    if e.code() == git2::ErrorCode::Applied {
+                        continue;
+                    }
+                    return Ok(RebaseResult {
+                        success: false,
+                        message: e.to_string(),
+                    });
+                }
+            }
+            Some(Err(e)) => {
+                return Ok(RebaseResult {
+                    success: false,
+                    message: e.to_string(),
+                });
+            }
+            None => break,
+        }
+    }
+
+    match rebase.finish(Some(&signature)) {
+        Ok(()) => {
+            info!("Rebase continued successfully");
+            Ok(RebaseResult {
+                success: true,
+                message: "rebase 已完成".to_string(),
+            })
+        }
+        Err(e) => Ok(RebaseResult {
+            success: false,
+            message: e.to_string(),
+        }),
+    }
 }
 
-/// Abort the current rebase
+/// Abort the current rebase (libgit2).
 pub fn rebase_abort(repo: &Repository) -> Result<(), GitError> {
     info!("Aborting rebase");
+    if interactive::active(repo) {
+        return interactive::abort(repo);
+    }
 
-    let repo_path = repo.command_cwd();
-
-    let output = git_command()?
-        .args(["rebase", "--abort"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
+    let repo_lock = repo.inner.write().unwrap();
+    if let Ok(mut rebase) = repo_lock.open_rebase(None) {
+        rebase.abort().map_err(|e| GitError::OperationFailed {
             operation: "rebase_abort".to_string(),
-            details: format!("Failed to execute git rebase: {}", e),
+            details: e.to_string(),
         })?;
+        info!("Rebase aborted successfully");
+        return Ok(());
+    }
 
-    if !output.status.success() {
+    drop(repo_lock);
+    if crate::capability::system_git() {
+        let result = run_foreign_rebase(repo, "--abort")?;
+        if result.success {
+            return Ok(());
+        }
         return Err(GitError::OperationFailed {
-            operation: "rebase_abort".to_string(),
-            details: format!(
-                "git rebase --abort failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
+            operation: "rebase_abort".into(),
+            details: result.message,
+        });
+    }
+    Err(GitError::OperationFailed {
+        operation: "rebase_abort".into(),
+        details: "无法打开当前变基，保留现场；请在发起操作的工具中中止".into(),
+    })
+}
+
+/// Skip the current commit during rebase (libgit2).
+pub fn rebase_skip(repo: &Repository) -> Result<RebaseResult, GitError> {
+    info!("Skipping current commit during rebase");
+    if interactive::active(repo) {
+        return interactive::resume(repo, true).map(|message| RebaseResult {
+            success: true,
+            message,
         });
     }
 
-    info!("Rebase aborted successfully");
-    Ok(())
-}
-
-/// Skip the current commit during rebase
-pub fn rebase_skip(repo: &Repository) -> Result<RebaseResult, GitError> {
-    info!("Skipping current commit during rebase");
-
-    let repo_path = repo.command_cwd();
-
-    let output = git_command()?
-        .args(["rebase", "--skip"])
-        .current_dir(&repo_path)
-        .output()
+    if get_rebase_status(repo)?.is_none() {
+        return Err(GitError::InvalidInput {
+            message: "没有进行中的变基".into(),
+        });
+    }
+    let foreign = repo.inner.read().unwrap().open_rebase(None).is_err();
+    if foreign && crate::capability::system_git() {
+        return run_foreign_rebase(repo, "--skip");
+    }
+    let repo_lock = repo.inner.write().unwrap();
+    let signature = signature_from_locked(&repo_lock)?;
+    let mut rebase = repo_lock
+        .open_rebase(None)
         .map_err(|e| GitError::OperationFailed {
             operation: "rebase_skip".to_string(),
-            details: format!("Failed to execute git rebase: {}", e),
+            details: e.to_string(),
         })?;
 
-    let result = RebaseResult {
-        success: output.status.success(),
-        message: command_result_message(&output),
-    };
+    // Discard the current step's working tree changes, then advance by
+    // committing an empty change against the current rebase HEAD.
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout.force();
+    repo_lock
+        .checkout_head(Some(&mut checkout))
+        .map_err(|e| GitError::OperationFailed {
+            operation: "rebase_skip".to_string(),
+            details: e.to_string(),
+        })?;
 
-    if !output.status.success() {
-        info!("Rebase skip failed: {}", result.message);
-    } else {
-        info!("Rebase skipped successfully");
+    while let Some(step) = rebase.next() {
+        step?;
+        match rebase.commit(None, &signature, None) {
+            Ok(_) => {}
+            Err(error) if error.code() == git2::ErrorCode::Applied => {}
+            Err(error) => {
+                return Ok(RebaseResult {
+                    success: false,
+                    message: error.to_string(),
+                });
+            }
+        }
     }
-
-    Ok(result)
+    rebase.finish(Some(&signature))?;
+    Ok(RebaseResult {
+        success: true,
+        message: "rebase 已完成".into(),
+    })
 }
 
 /// Get the current rebase status
@@ -694,22 +755,12 @@ pub fn get_current_rebase_step(repo: &Repository) -> Result<Option<RebaseTodoEnt
 
 /// Check if there are rebase conflicts
 pub fn has_rebase_conflicts(repo: &Repository) -> Result<bool, GitError> {
-    let repo_path = repo.command_cwd();
-
-    // Check for conflict markers in the index
-    let output = git_command()?
-        .args(["diff", "--name-only", "--diff-filter=U"])
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "has_rebase_conflicts".to_string(),
-            details: format!("Failed to execute git diff: {}", e),
-        })?;
-
-    let conflicted_files = String::from_utf8_lossy(&output.stdout);
-    let has_conflicts = !conflicted_files.trim().is_empty();
-
-    Ok(has_conflicts)
+    let repo_lock = repo.inner.read().unwrap();
+    let index = repo_lock.index().map_err(|e| GitError::OperationFailed {
+        operation: "has_rebase_conflicts".to_string(),
+        details: e.to_string(),
+    })?;
+    Ok(index.has_conflicts())
 }
 
 /// Rebase status information
@@ -835,7 +886,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "app-store"))]
     fn start_interactive_rebase_exposes_current_step_and_remaining_todo() {
         let (repo, _temp_dir, commits) = create_linear_history_repo();
         let entries = vec![

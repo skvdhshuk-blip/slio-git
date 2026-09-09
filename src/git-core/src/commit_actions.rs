@@ -1,15 +1,16 @@
 //! Commit-level actions for branch/history workflows.
+//!
+//! All operations use libgit2 only — no system `git` process — so they work
+//! in the App Store sandbox.
 
 use crate::commit;
 use crate::error::GitError;
 use crate::git_utils::{current_head_oid, is_ancestor, resolve_commit_oid};
 use crate::index;
-use crate::process::git_command;
 use crate::repository::{Repository, RepositoryState};
 use log::info;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InProgressCommitActionKind {
@@ -32,6 +33,7 @@ pub struct PushCurrentBranchTarget {
     pub upstream_ref: String,
     pub upstream_branch_name: String,
     pub selected_commit: String,
+    pub expected_remote_oid: String,
     pub is_fast_forward: bool,
     pub requires_force_with_lease: bool,
 }
@@ -64,11 +66,6 @@ fn parse_upstream_ref(reference: &str) -> Option<(&str, &str)> {
 
 fn git_dir(repo: &Repository) -> &Path {
     &repo.path
-}
-
-fn has_rebase_in_progress(repo: &Repository) -> bool {
-    let git_dir = git_dir(repo);
-    git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
 }
 
 fn commit_subject(message: &str) -> &str {
@@ -111,32 +108,340 @@ fn ensure_clean_worktree(repo: &Repository, operation: &str) -> Result<(), GitEr
     }
 }
 
-fn run_git_command(repo: &Repository, operation: &str, args: &[String]) -> Result<(), GitError> {
-    let output = git_command()?
-        .args(args)
-        .current_dir(repo.command_cwd())
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: operation.to_string(),
-            details: format!("Failed to execute git {operation}: {e}"),
-        })?;
+fn signature_for(repo_lock: &git2::Repository) -> Result<git2::Signature<'static>, GitError> {
+    commit::signature_from_locked(repo_lock)
+}
 
-    if output.status.success() {
-        return Ok(());
+/// Apply through the repository API: it owns the index, worktree and recovery markers.
+fn apply_commit_replay(
+    repo: &Repository,
+    commit_id: &str,
+    kind: InProgressCommitActionKind,
+) -> Result<(), GitError> {
+    let operation = match kind {
+        InProgressCommitActionKind::CherryPick => "cherry-pick",
+        InProgressCommitActionKind::Revert => "revert",
+    };
+    ensure_no_in_progress_operation(repo, operation)?;
+    let raw = repo.inner.write().unwrap();
+    let source = raw.revparse_single(commit_id)?.peel_to_commit()?;
+    let signature = signature_for(&raw)?;
+    let result = match kind {
+        InProgressCommitActionKind::CherryPick => raw.cherrypick(&source, None),
+        InProgressCommitActionKind::Revert => raw.revert(&source, None),
+    };
+    result.map_err(|error| GitError::OperationFailed {
+        operation: operation.into(),
+        details: error.to_string(),
+    })?;
+    if raw.index()?.has_conflicts() {
+        return Err(GitError::OperationFailed {
+            operation: operation.into(),
+            details: "存在冲突，请解决后继续或中止".into(),
+        });
+    }
+    finish_commit_replay(&raw, kind, &signature)
+}
+
+fn finish_commit_replay(
+    raw: &git2::Repository,
+    kind: InProgressCommitActionKind,
+    signature: &git2::Signature<'_>,
+) -> Result<(), GitError> {
+    let head_file = match kind {
+        InProgressCommitActionKind::CherryPick => "CHERRY_PICK_HEAD",
+        InProgressCommitActionKind::Revert => "REVERT_HEAD",
+    };
+    let source_oid = fs::read_to_string(raw.path().join(head_file))?;
+    let source = raw.find_commit(git2::Oid::from_str(source_oid.trim())?)?;
+    let head = raw.head()?.peel_to_commit()?;
+    let mut index = raw.index()?;
+    if index.has_conflicts() {
+        return Err(GitError::MergeConflict);
+    }
+    let tree = raw.find_tree(index.write_tree()?)?;
+    let message = raw.message()?;
+    let author = match kind {
+        InProgressCommitActionKind::CherryPick => source.author(),
+        InProgressCommitActionKind::Revert => signature.to_owned(),
+    };
+    raw.commit(Some("HEAD"), &author, signature, &message, &tree, &[&head])?;
+    raw.cleanup_state()?;
+    Ok(())
+}
+
+/// Replay `source` onto `onto` (or empty tree when `onto` is None) and return the new commit OID.
+fn cherry_pick_commit_onto(
+    repo_lock: &git2::Repository,
+    source: &git2::Commit<'_>,
+    onto: Option<&git2::Commit<'_>>,
+    message: &str,
+) -> Result<git2::Oid, GitError> {
+    let empty = repo_lock.find_tree(repo_lock.treebuilder(None)?.write()?)?;
+    let base = if source.parent_count() == 0 {
+        None
+    } else {
+        Some(source.parent(0)?.tree()?)
+    };
+    let parent_tree = onto.map(|parent| parent.tree()).transpose()?;
+    let index = repo_lock.merge_trees(
+        base.as_ref().unwrap_or(&empty),
+        parent_tree.as_ref().unwrap_or(&empty),
+        &source.tree()?,
+        None,
+    )?;
+
+    if index.has_conflicts() {
+        return Err(GitError::OperationFailed {
+            operation: "rewrite".to_string(),
+            details: format!("改写历史时 {} 产生冲突，请先清理工作区后重试", source.id()),
+        });
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let details = if stderr.trim().is_empty() {
-        stdout.trim().to_string()
+    let mut index = index;
+    let tree_oid = index
+        .write_tree_to(repo_lock)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "rewrite".to_string(),
+            details: e.to_string(),
+        })?;
+    let tree = repo_lock
+        .find_tree(tree_oid)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "rewrite".to_string(),
+            details: e.to_string(),
+        })?;
+    let signature = signature_for(repo_lock)?;
+    let parents: Vec<&git2::Commit<'_>> = onto.into_iter().collect();
+    Ok(repo_lock.commit(None, &source.author(), &signature, message, &tree, &parents)?)
+}
+
+fn move_head_to_commit(
+    raw: &git2::Repository,
+    commit: &git2::Commit<'_>,
+    branch_name: Option<&str>,
+) -> Result<(), GitError> {
+    let original = raw.head()?.peel_to_commit()?;
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout.safe();
+    raw.checkout_tree(commit.as_object(), Some(&mut checkout))?;
+    let result = if let Some(name) = branch_name {
+        raw.reference_matching(
+            &format!("refs/heads/{name}"),
+            commit.id(),
+            true,
+            original.id(),
+            "rewrite history",
+        )
+        .map(|_| ())
     } else {
-        stderr.trim().to_string()
+        raw.set_head_detached(commit.id())
+    };
+    if let Err(error) = result {
+        // The branch was not published. Restore only this operation's checkout.
+        let mut restore = git2::build::CheckoutBuilder::new();
+        restore.safe();
+        raw.checkout_tree(original.as_object(), Some(&mut restore))?;
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn combine_commit_into(
+    repo_lock: &git2::Repository,
+    parent_oid: git2::Oid,
+    source: &git2::Commit<'_>,
+    message: &str,
+) -> Result<git2::Oid, GitError> {
+    let parent = repo_lock
+        .find_commit(parent_oid)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "squash".to_string(),
+            details: e.to_string(),
+        })?;
+    let index = repo_lock
+        .cherrypick_commit(source, &parent, 0, None)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "squash".to_string(),
+            details: e.to_string(),
+        })?;
+    if index.has_conflicts() {
+        return Err(GitError::OperationFailed {
+            operation: "squash".to_string(),
+            details: "合并提交时产生冲突，请先手动整理历史".to_string(),
+        });
+    }
+    let mut index = index;
+    let tree_oid = index
+        .write_tree_to(repo_lock)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "squash".to_string(),
+            details: e.to_string(),
+        })?;
+    let tree = repo_lock
+        .find_tree(tree_oid)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "squash".to_string(),
+            details: e.to_string(),
+        })?;
+    let signature = signature_for(repo_lock)?;
+    let parents: Vec<_> = parent.parents().collect();
+    let parents: Vec<_> = parents.iter().collect();
+    Ok(repo_lock.commit(None, &parent.author(), &signature, message, &tree, &parents)?)
+}
+
+fn rewrite_first_parent_chain(
+    repo: &Repository,
+    selection: &RewriteSelection,
+    kind: RewriteKind,
+    override_message: Option<&str>,
+) -> Result<RewriteExecution, GitError> {
+    let branch_name = repo
+        .current_branch()
+        .map_err(|e| GitError::OperationFailed {
+            operation: "rewrite".to_string(),
+            details: e.to_string(),
+        })?;
+
+    let repo_lock = repo.inner.write().unwrap();
+    let base_oid = match &selection.base_spec {
+        Some(oid_str) => {
+            Some(
+                git2::Oid::from_str(oid_str).map_err(|_| GitError::CommitNotFound {
+                    id: oid_str.clone(),
+                })?,
+            )
+        }
+        None => None,
     };
 
-    Err(GitError::OperationFailed {
-        operation: operation.to_string(),
-        details: format!("git {operation} failed: {details}"),
-    })
+    let start_index = selection
+        .base_spec
+        .as_ref()
+        .and_then(|base| {
+            selection
+                .chain
+                .iter()
+                .position(|oid| oid.to_string() == *base)
+        })
+        .map(|index| index + 1)
+        .unwrap_or(0);
+
+    let mut new_head_oid = base_oid;
+    for oid in &selection.chain[start_index..] {
+        let source = repo_lock
+            .find_commit(*oid)
+            .map_err(|e| GitError::OperationFailed {
+                operation: "rewrite".to_string(),
+                details: e.to_string(),
+            })?;
+        if source.parent_count() > 1 {
+            return Err(GitError::InvalidInput {
+                message: "整理范围包含 merge 提交，不能按线性历史改写".into(),
+            });
+        }
+        let is_selected = *oid == selection.selected_oid;
+
+        if is_selected {
+            match kind {
+                RewriteKind::Drop => continue,
+                RewriteKind::EditMessage => {
+                    let message = override_message
+                        .map(str::to_string)
+                        .unwrap_or_else(|| source.message().unwrap_or("").to_string());
+                    let parent = match new_head_oid {
+                        Some(pid) => Some(repo_lock.find_commit(pid).map_err(|e| {
+                            GitError::OperationFailed {
+                                operation: "rewrite".to_string(),
+                                details: e.to_string(),
+                            }
+                        })?),
+                        None => None,
+                    };
+                    new_head_oid = Some(cherry_pick_commit_onto(
+                        &repo_lock,
+                        &source,
+                        parent.as_ref(),
+                        &message,
+                    )?);
+                }
+                RewriteKind::Fixup => {
+                    let parent_oid = new_head_oid.ok_or_else(|| GitError::OperationFailed {
+                        operation: "fixup".to_string(),
+                        details: "根提交前面没有可合并的目标提交".to_string(),
+                    })?;
+                    let parent_msg = repo_lock
+                        .find_commit(parent_oid)
+                        .ok()
+                        .and_then(|parent| parent.message().map(str::to_string))
+                        .unwrap_or_default();
+                    new_head_oid = Some(combine_commit_into(
+                        &repo_lock,
+                        parent_oid,
+                        &source,
+                        &parent_msg,
+                    )?);
+                }
+                RewriteKind::Squash => {
+                    let parent_oid = new_head_oid.ok_or_else(|| GitError::OperationFailed {
+                        operation: "squash".to_string(),
+                        details: "根提交前面没有可合并的目标提交".to_string(),
+                    })?;
+                    let parent_msg = repo_lock
+                        .find_commit(parent_oid)
+                        .ok()
+                        .and_then(|parent| parent.message().map(str::to_string))
+                        .unwrap_or_default();
+                    let source_msg = source.message().unwrap_or("").trim();
+                    let parent_trim = parent_msg.trim_end();
+                    let message = if source_msg.is_empty() {
+                        parent_msg
+                    } else if parent_trim.is_empty() {
+                        source_msg.to_string()
+                    } else {
+                        format!("{parent_trim}\n\n{source_msg}")
+                    };
+                    new_head_oid = Some(combine_commit_into(
+                        &repo_lock, parent_oid, &source, &message,
+                    )?);
+                }
+            }
+        } else {
+            let message = source.message().unwrap_or("");
+            let parent = match new_head_oid {
+                Some(pid) => {
+                    Some(
+                        repo_lock
+                            .find_commit(pid)
+                            .map_err(|e| GitError::OperationFailed {
+                                operation: "rewrite".to_string(),
+                                details: e.to_string(),
+                            })?,
+                    )
+                }
+                None => None,
+            };
+            new_head_oid = Some(cherry_pick_commit_onto(
+                &repo_lock,
+                &source,
+                parent.as_ref(),
+                message,
+            )?);
+        }
+    }
+
+    let new_head_oid = new_head_oid.ok_or_else(|| GitError::OperationFailed {
+        operation: "rewrite".to_string(),
+        details: "历史改写结果为空，无法更新分支".to_string(),
+    })?;
+    let new_head = repo_lock
+        .find_commit(new_head_oid)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "rewrite".to_string(),
+            details: e.to_string(),
+        })?;
+    move_head_to_commit(&repo_lock, &new_head, branch_name.as_deref())?;
+    Ok(RewriteExecution::Completed)
 }
 
 fn current_branch_first_parent_chain(
@@ -260,163 +565,6 @@ fn resolve_rewrite_selection(
     })
 }
 
-fn commit_subject_for_oid(
-    repo_lock: &git2::Repository,
-    oid: git2::Oid,
-    operation: &str,
-) -> Result<String, GitError> {
-    let commit = repo_lock
-        .find_commit(oid)
-        .map_err(|e| GitError::OperationFailed {
-            operation: operation.to_string(),
-            details: e.to_string(),
-        })?;
-    Ok(commit
-        .summary()
-        .unwrap_or("(no subject)")
-        .replace(['\n', '\r'], " "))
-}
-
-fn build_rewrite_todo(
-    repo: &Repository,
-    selection: &RewriteSelection,
-    operation: &str,
-    selected_action: &str,
-) -> Result<String, GitError> {
-    let start_index = selection
-        .base_spec
-        .as_ref()
-        .and_then(|base| {
-            selection
-                .chain
-                .iter()
-                .position(|oid| oid.to_string() == *base)
-        })
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    let repo_lock = repo.inner.read().unwrap();
-
-    selection.chain[start_index..]
-        .iter()
-        .map(|oid| {
-            let subject = commit_subject_for_oid(&repo_lock, *oid, operation)?;
-            let action = if *oid == selection.selected_oid {
-                selected_action
-            } else {
-                "pick"
-            };
-            Ok(format!("{action} {oid} {subject}\n"))
-        })
-        .collect()
-}
-
-fn rewrite_temp_dir(operation: &str) -> PathBuf {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    std::env::temp_dir().join(format!(
-        "slio-git-{operation}-{}-{timestamp}",
-        std::process::id()
-    ))
-}
-
-fn write_sequence_editor_script(
-    operation: &str,
-    todo_path: &Path,
-    script_path: &Path,
-) -> Result<(), GitError> {
-    #[cfg(unix)]
-    let contents = format!("#!/bin/sh\ncat '{}' > \"$1\"\n", todo_path.display());
-    #[cfg(windows)]
-    let contents = format!("@echo off\r\ntype \"{}\" > %1\r\n", todo_path.display());
-
-    fs::write(script_path, contents).map_err(GitError::Io)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(script_path)
-            .map_err(GitError::Io)?
-            .permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(script_path, permissions).map_err(GitError::Io)?;
-    }
-
-    let _ = operation;
-    Ok(())
-}
-
-fn run_scripted_interactive_rebase(
-    repo: &Repository,
-    operation: &str,
-    base_spec: Option<&str>,
-    todo_contents: &str,
-    auto_accept_editor: bool,
-) -> Result<RewriteExecution, GitError> {
-    let temp_dir = rewrite_temp_dir(operation);
-    fs::create_dir_all(&temp_dir).map_err(GitError::Io)?;
-
-    let todo_path = temp_dir.join("git-rebase-todo");
-    let script_path = if cfg!(windows) {
-        temp_dir.join("sequence-editor.cmd")
-    } else {
-        temp_dir.join("sequence-editor.sh")
-    };
-
-    fs::write(&todo_path, todo_contents).map_err(GitError::Io)?;
-    write_sequence_editor_script(operation, &todo_path, &script_path)?;
-
-    let mut command = git_command()?;
-    command.current_dir(repo.command_cwd());
-    command.env("GIT_SEQUENCE_EDITOR", &script_path);
-    if auto_accept_editor {
-        command.env("GIT_EDITOR", "true");
-    }
-
-    command.arg("rebase").arg("-i");
-    if let Some(base_spec) = base_spec {
-        command.arg(base_spec);
-    } else {
-        command.arg("--root");
-    }
-
-    let output = command.output().map_err(|e| GitError::OperationFailed {
-        operation: operation.to_string(),
-        details: format!("Failed to execute git {operation}: {e}"),
-    })?;
-
-    let cleanup_result = fs::remove_dir_all(&temp_dir);
-    if cleanup_result.is_err() {
-        let _ = cleanup_result;
-    }
-
-    if output.status.success() {
-        return Ok(if has_rebase_in_progress(repo) {
-            RewriteExecution::InProgress
-        } else {
-            RewriteExecution::Completed
-        });
-    }
-
-    if has_rebase_in_progress(repo) {
-        return Ok(RewriteExecution::InProgress);
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let details = if stderr.trim().is_empty() {
-        stdout.trim().to_string()
-    } else {
-        stderr.trim().to_string()
-    };
-
-    Err(GitError::OperationFailed {
-        operation: operation.to_string(),
-        details: format!("git {operation} failed: {details}"),
-    })
-}
-
 pub fn export_commit_patch(
     repo: &Repository,
     commit_id: &str,
@@ -428,27 +576,14 @@ pub fn export_commit_patch(
         output_path.display()
     );
 
-    let output = git_command()?
-        .args(["format-patch", "--stdout", "-1", commit_id])
-        .current_dir(repo.command_cwd())
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "format-patch".to_string(),
-            details: format!("Failed to execute git format-patch: {e}"),
-        })?;
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "format-patch".to_string(),
-            details: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        });
-    }
+    let repo_lock = repo.inner.read().unwrap();
+    let commit = repo_lock.revparse_single(commit_id)?.peel_to_commit()?;
+    let patch = git2::Email::from_commit(&commit, &mut git2::EmailCreateOptions::new())?;
 
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent)?;
     }
-
-    fs::write(output_path, output.stdout)?;
+    fs::write(output_path, patch.as_slice())?;
     Ok(())
 }
 
@@ -487,27 +622,11 @@ pub fn get_in_progress_commit_action(
 }
 
 pub fn cherry_pick_commit(repo: &Repository, commit_id: &str) -> Result<(), GitError> {
-    info!("Cherry-picking commit '{}'", commit_id);
-    // Let git handle dirty worktree errors naturally with its own messages
-
-    let args = vec![
-        "cherry-pick".to_string(),
-        "--no-edit".to_string(),
-        commit_id.to_string(),
-    ];
-    run_git_command(repo, "cherry-pick", &args)
+    apply_commit_replay(repo, commit_id, InProgressCommitActionKind::CherryPick)
 }
 
 pub fn revert_commit(repo: &Repository, commit_id: &str) -> Result<(), GitError> {
-    info!("Reverting commit '{}'", commit_id);
-    // No clean worktree check — git revert works with dirty worktree (matches IDEA behavior)
-
-    let args = vec![
-        "revert".to_string(),
-        "--no-edit".to_string(),
-        commit_id.to_string(),
-    ];
-    run_git_command(repo, "revert", &args)
+    apply_commit_replay(repo, commit_id, InProgressCommitActionKind::Revert)
 }
 
 pub fn edit_commit_message(
@@ -516,8 +635,52 @@ pub fn edit_commit_message(
 ) -> Result<RewriteExecution, GitError> {
     info!("Starting edit-message rewrite for '{}'", commit_id);
     let selection = resolve_rewrite_selection(repo, commit_id, "reword", RewriteKind::EditMessage)?;
-    let todo = build_rewrite_todo(repo, &selection, "reword", "edit")?;
-    run_scripted_interactive_rebase(repo, "reword", selection.base_spec.as_deref(), &todo, false)
+    let start = selection
+        .base_spec
+        .as_ref()
+        .and_then(|base| {
+            selection
+                .chain
+                .iter()
+                .position(|id| id.to_string() == *base)
+        })
+        .map_or(0, |index| index + 1);
+    let entries: Vec<_> = selection.chain[start..]
+        .iter()
+        .map(|id| crate::RebaseTodoEntry {
+            action: if *id == selection.selected_oid {
+                "edit"
+            } else {
+                "pick"
+            }
+            .into(),
+            commit: id.to_string(),
+            message: String::new(),
+        })
+        .collect();
+    crate::rebase::start_interactive_rebase(repo, selection.base_spec.as_deref(), &entries)?;
+    Ok(RewriteExecution::InProgress)
+}
+
+/// Rewrite a commit message in place (libgit2 chain rewrite).
+pub fn reword_commit(
+    repo: &Repository,
+    commit_id: &str,
+    new_message: &str,
+) -> Result<RewriteExecution, GitError> {
+    info!("Rewording commit '{}'", commit_id);
+    if new_message.trim().is_empty() {
+        return Err(GitError::InvalidInput {
+            message: "提交说明不能为空".into(),
+        });
+    }
+    let selection = resolve_rewrite_selection(repo, commit_id, "reword", RewriteKind::EditMessage)?;
+    rewrite_first_parent_chain(
+        repo,
+        &selection,
+        RewriteKind::EditMessage,
+        Some(new_message),
+    )
 }
 
 pub fn fixup_commit_to_previous(
@@ -526,8 +689,7 @@ pub fn fixup_commit_to_previous(
 ) -> Result<RewriteExecution, GitError> {
     info!("Fixup commit '{}' into its previous commit", commit_id);
     let selection = resolve_rewrite_selection(repo, commit_id, "fixup", RewriteKind::Fixup)?;
-    let todo = build_rewrite_todo(repo, &selection, "fixup", "fixup")?;
-    run_scripted_interactive_rebase(repo, "fixup", selection.base_spec.as_deref(), &todo, false)
+    rewrite_first_parent_chain(repo, &selection, RewriteKind::Fixup, None)
 }
 
 pub fn squash_commit_to_previous(
@@ -536,8 +698,7 @@ pub fn squash_commit_to_previous(
 ) -> Result<RewriteExecution, GitError> {
     info!("Squashing commit '{}' into its previous commit", commit_id);
     let selection = resolve_rewrite_selection(repo, commit_id, "squash", RewriteKind::Squash)?;
-    let todo = build_rewrite_todo(repo, &selection, "squash", "squash")?;
-    run_scripted_interactive_rebase(repo, "squash", selection.base_spec.as_deref(), &todo, true)
+    rewrite_first_parent_chain(repo, &selection, RewriteKind::Squash, None)
 }
 
 pub fn drop_commit_from_history(
@@ -552,75 +713,92 @@ pub fn drop_commit_from_history(
             details: "当前分支只剩下这一条根提交，不能直接删除".to_string(),
         });
     }
-    let todo = build_rewrite_todo(repo, &selection, "drop", "drop")?;
-    run_scripted_interactive_rebase(repo, "drop", selection.base_spec.as_deref(), &todo, false)
+    rewrite_first_parent_chain(repo, &selection, RewriteKind::Drop, None)
 }
 
 pub fn continue_in_progress_commit_action(
     repo: &Repository,
     kind: InProgressCommitActionKind,
 ) -> Result<(), GitError> {
-    let operation = match kind {
-        InProgressCommitActionKind::CherryPick => "cherry-pick",
-        InProgressCommitActionKind::Revert => "revert",
+    require_commit_action(repo, kind)?;
+    let raw = repo.inner.write().unwrap();
+    let signature = signature_for(&raw)?;
+    stage_resolved_conflicts(&raw)?;
+    finish_commit_replay(&raw, kind, &signature)
+}
+
+fn require_commit_action(
+    repo: &Repository,
+    kind: InProgressCommitActionKind,
+) -> Result<(), GitError> {
+    let expected = match kind {
+        InProgressCommitActionKind::CherryPick => RepositoryState::CherryPick,
+        InProgressCommitActionKind::Revert => RepositoryState::Revert,
     };
-
-    let add_output = git_command()?
-        .args(["add", "-A"])
-        .current_dir(repo.command_cwd())
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: format!("{operation}_continue"),
-            details: format!("Failed to execute git add: {e}"),
-        })?;
-
-    if !add_output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: format!("{operation}_continue"),
-            details: format!(
-                "git add failed: {}",
-                String::from_utf8_lossy(&add_output.stderr)
-            ),
+    if repo.get_state() != expected {
+        return Err(GitError::InvalidInput {
+            message: "没有对应的进行中操作".into(),
         });
     }
+    Ok(())
+}
 
-    let args = match kind {
-        InProgressCommitActionKind::CherryPick => {
-            vec![
-                "-c".to_string(),
-                "core.editor=true".to_string(),
-                "cherry-pick".to_string(),
-                "--continue".to_string(),
-            ]
+/// Stage only paths still marked conflicted, leaving unrelated work alone.
+pub(crate) fn stage_resolved_conflicts(raw: &git2::Repository) -> Result<(), GitError> {
+    let mut index = raw.index()?;
+    let paths: Vec<_> = index
+        .conflicts()?
+        .map(|entry| {
+            let entry = entry?;
+            Ok(entry.our.or(entry.their).or(entry.ancestor).unwrap().path)
+        })
+        .collect::<Result<_, git2::Error>>()?;
+    for bytes in paths {
+        #[cfg(unix)]
+        let path = {
+            use std::os::unix::ffi::OsStrExt;
+            Path::new(std::ffi::OsStr::from_bytes(&bytes))
+        };
+        #[cfg(not(unix))]
+        let path = Path::new(
+            std::str::from_utf8(&bytes).map_err(|_| GitError::InvalidInput {
+                message: "invalid conflict path".into(),
+            })?,
+        );
+        let full_path = raw
+            .workdir()
+            .ok_or_else(|| GitError::InvalidInput {
+                message: "bare repository".into(),
+            })?
+            .join(path);
+        if full_path.symlink_metadata().is_ok() {
+            if fs::read(&full_path).is_ok_and(|contents| {
+                contents
+                    .split(|byte| *byte == b'\n')
+                    .any(|line| line.starts_with(b"<<<<<<< "))
+            }) {
+                return Err(GitError::MergeConflict);
+            }
+            index.add_path(path)?;
+        } else {
+            index.remove_path(path)?;
         }
-        InProgressCommitActionKind::Revert => {
-            vec![
-                "-c".to_string(),
-                "core.editor=true".to_string(),
-                "revert".to_string(),
-                "--continue".to_string(),
-            ]
-        }
-    };
-
-    run_git_command(repo, &format!("{operation}_continue"), &args)
+    }
+    index.write()?;
+    Ok(())
 }
 
 pub fn abort_in_progress_commit_action(
     repo: &Repository,
     kind: InProgressCommitActionKind,
 ) -> Result<(), GitError> {
-    let (operation, args) = match kind {
-        InProgressCommitActionKind::CherryPick => (
-            "cherry-pick",
-            vec!["cherry-pick".to_string(), "--abort".to_string()],
-        ),
-        InProgressCommitActionKind::Revert => {
-            ("revert", vec!["revert".to_string(), "--abort".to_string()])
-        }
-    };
-
-    run_git_command(repo, &format!("{operation}_abort"), &args)
+    require_commit_action(repo, kind)?;
+    let raw = repo.inner.write().unwrap();
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout.force();
+    raw.checkout_head(Some(&mut checkout))?;
+    raw.cleanup_state()?;
+    Ok(())
 }
 
 /// Reset mode matching IDEA's GitNewResetDialog.
@@ -650,6 +828,14 @@ impl ResetMode {
             ResetMode::Hard => "Hard",
         }
     }
+
+    fn reset_type(self) -> git2::ResetType {
+        match self {
+            ResetMode::Soft => git2::ResetType::Soft,
+            ResetMode::Mixed => git2::ResetType::Mixed,
+            ResetMode::Hard => git2::ResetType::Hard,
+        }
+    }
 }
 
 pub fn reset_current_branch_to_commit(
@@ -662,7 +848,6 @@ pub fn reset_current_branch_to_commit(
         commit_id, mode
     );
 
-    // Only hard reset requires clean worktree
     if mode == ResetMode::Hard {
         ensure_clean_worktree(repo, "reset")?;
     }
@@ -689,12 +874,19 @@ pub fn reset_current_branch_to_commit(
         });
     }
 
-    let args = vec![
-        "reset".to_string(),
-        mode.git_flag().to_string(),
-        commit_id.to_string(),
-    ];
-    run_git_command(repo, "reset", &args)
+    let repo_lock = repo.inner.write().unwrap();
+    let target = repo_lock
+        .find_commit(target_oid)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "reset".to_string(),
+            details: e.to_string(),
+        })?;
+    repo_lock
+        .reset(target.as_object(), mode.reset_type(), None)
+        .map_err(|e| GitError::OperationFailed {
+            operation: "reset".to_string(),
+            details: e.to_string(),
+        })
 }
 
 pub fn resolve_push_current_branch_target(
@@ -744,7 +936,8 @@ pub fn resolve_push_current_branch_target(
         local_branch_name,
         upstream_ref,
         upstream_branch_name,
-        selected_commit: commit_id.to_string(),
+        selected_commit: selected_oid.to_string(),
+        expected_remote_oid: upstream_oid.to_string(),
         is_fast_forward,
         requires_force_with_lease: !is_fast_forward,
     })
@@ -761,18 +954,27 @@ pub fn push_current_branch_to_commit(
 
     ensure_no_in_progress_operation(repo, "push-to-here")?;
 
+    let selected_oid = resolve_commit_oid(repo, &target.selected_commit, "push-to-here")?;
     let refspec = format!(
         "{}:refs/heads/{}",
-        target.selected_commit, target.upstream_branch_name
+        selected_oid, target.upstream_branch_name
     );
-    let mut args = vec!["push".to_string()];
-    if target.requires_force_with_lease {
-        args.push("--force-with-lease".to_string());
-    }
-    args.push(target.remote_name.clone());
-    args.push(refspec);
 
-    run_git_command(repo, "push", &args)
+    let refspec = if target.requires_force_with_lease {
+        format!("+{refspec}")
+    } else {
+        refspec
+    };
+    crate::remote::push_refspecs(
+        repo,
+        &target.remote_name,
+        &[refspec],
+        Some((
+            &format!("refs/heads/{}", target.upstream_branch_name),
+            git2::Oid::from_str(&target.expected_remote_oid)?,
+        )),
+        None,
+    )
 }
 
 /// Uncommit: soft-reset from HEAD to the parent of the given commit.

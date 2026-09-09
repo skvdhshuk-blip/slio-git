@@ -354,7 +354,9 @@ fn convert_state(state: git2::RepositoryState) -> RepositoryState {
     match state {
         git2::RepositoryState::Clean => OurState::Clean,
         git2::RepositoryState::Merge => OurState::Merging,
-        git2::RepositoryState::Rebase => OurState::Rebasing,
+        git2::RepositoryState::Rebase
+        | git2::RepositoryState::RebaseInteractive
+        | git2::RepositoryState::RebaseMerge => OurState::Rebasing,
         git2::RepositoryState::ApplyMailbox => OurState::ApplyMailbox,
         git2::RepositoryState::Bisect => OurState::Bisect,
         git2::RepositoryState::CherryPick => OurState::CherryPick,

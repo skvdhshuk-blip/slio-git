@@ -530,48 +530,46 @@ fn apply_patch_cached(repo: &Repository, patch: &str) -> Result<(), GitError> {
         return apply_patch_git2(repo, patch, git2::ApplyLocation::Index, "apply_patch_cached");
     }
 
-    let repo_path = repo.command_cwd();
+    apply_patch_command(repo, patch, true)
+}
 
-    // Write patch to a temporary file
-    let mut temp_path = std::env::temp_dir();
-    temp_path.push(format!(
-        "patch_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-
-    std::fs::write(&temp_path, patch).map_err(|e| GitError::OperationFailed {
-        operation: "apply_patch_cached".to_string(),
-        details: format!("Failed to write patch file: {}", e),
-    })?;
-
-    // Run git apply --cached
-    let output = git_command()?
-        .args(["apply", "--cached", "--unidiff-zero", "--whitespace=nowarn"])
-        .arg(temp_path.as_path())
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "apply_patch_cached".to_string(),
-            details: format!("Failed to execute git apply: {}", e),
-        })?;
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_path);
-
+/// Feed each patch through its own process pipe; concurrent repositories must
+/// never share a temporary patch pathname.
+fn apply_patch_command(repo: &Repository, patch: &str, cached: bool) -> Result<(), GitError> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let operation = if cached {
+        "apply_patch_cached"
+    } else {
+        "apply_patch_workdir"
+    };
+    let mut command = git_command()?;
+    command.args(["apply", "--unidiff-zero", "--whitespace=nowarn"]);
+    if cached {
+        command.arg("--cached");
+    }
+    let mut child = command
+        .current_dir(repo.command_cwd())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let write_result = child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(patch.as_bytes());
+    let output = child.wait_with_output()?;
     if !output.status.success() {
         return Err(GitError::OperationFailed {
-            operation: "apply_patch_cached".to_string(),
+            operation: operation.into(),
             details: format!(
                 "git apply failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             ),
         });
     }
-
+    write_result?;
     Ok(())
 }
 
@@ -686,49 +684,7 @@ fn apply_patch_workdir(repo: &Repository, patch: &str) -> Result<(), GitError> {
         );
     }
 
-    let repo_path = repo.command_cwd();
-
-    // Write patch to a temporary file
-    let mut temp_path = std::env::temp_dir();
-    temp_path.push(format!(
-        "patch_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-
-    std::fs::write(&temp_path, patch).map_err(|e| GitError::OperationFailed {
-        operation: "apply_patch_workdir".to_string(),
-        details: format!("Failed to write patch file: {}", e),
-    })?;
-
-    // Run git apply (not --cached, applies to workdir)
-    let output = git_command()?
-        .args(["apply", "--unidiff-zero", "--whitespace=nowarn"])
-        .arg(temp_path.as_path())
-        .current_dir(&repo_path)
-        .output()
-        .map_err(|e| GitError::OperationFailed {
-            operation: "apply_patch_workdir".to_string(),
-            details: format!("Failed to execute git apply: {}", e),
-        })?;
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_path);
-
-    if !output.status.success() {
-        return Err(GitError::OperationFailed {
-            operation: "apply_patch_workdir".to_string(),
-            details: format!(
-                "git apply failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        });
-    }
-
-    Ok(())
+    apply_patch_command(repo, patch, false)
 }
 
 /// Reset a file in the index to HEAD state

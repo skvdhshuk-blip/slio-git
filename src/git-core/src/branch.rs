@@ -401,10 +401,20 @@ impl Repository {
         })
     }
 
-    /// Delete a branch
+    /// Delete a fully merged local branch. Unmerged branches require
+    /// [`Self::force_delete_branch`] after the user confirms the warning.
     pub fn delete_branch(&self, name: &str) -> Result<(), GitError> {
-        info!("Deleting branch '{}'", name);
-        if !self.is_branch_merged(name).unwrap_or(false) {
+        self.delete_local_branch(name, false)
+    }
+
+    /// Delete a local branch even when it is not fully merged.
+    pub fn force_delete_branch(&self, name: &str) -> Result<(), GitError> {
+        self.delete_local_branch(name, true)
+    }
+
+    fn delete_local_branch(&self, name: &str, force: bool) -> Result<(), GitError> {
+        info!("Deleting branch '{name}' (force={force})");
+        if !force && !self.is_branch_merged(name).unwrap_or(false) {
             return Err(GitError::OperationFailed {
                 operation: "delete_branch".to_string(),
                 details: format!("branch '{name}' is not fully merged"),

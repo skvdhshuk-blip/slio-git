@@ -505,10 +505,41 @@ pub fn push_with_options(
     let should_set_upstream =
         options.set_upstream || should_auto_set_upstream(repo, branch_name, target_branch);
     if !crate::capability::system_git() && options.force_with_lease {
-        return Err(GitError::OperationFailed {
-            operation: "push".to_string(),
-            details: "force-with-lease is unavailable in the App Store build".to_string(),
-        });
+        let destination = refspec
+            .split_once(':')
+            .map(|(_, destination)| destination)
+            .ok_or_else(|| GitError::InvalidInput {
+                message: "push requires an explicit destination".into(),
+            })?;
+        let branch =
+            destination
+                .strip_prefix("refs/heads/")
+                .ok_or_else(|| GitError::InvalidInput {
+                    message: "force-with-lease requires a branch destination".into(),
+                })?;
+        let expected = {
+            let raw = repo.inner.read().unwrap();
+            match raw.find_reference(&format!("refs/remotes/{remote_name}/{branch}")) {
+                Ok(reference) => reference.peel_to_commit()?.id(),
+                Err(error) if error.code() == git2::ErrorCode::NotFound => git2::Oid::zero(),
+                Err(error) => return Err(error.into()),
+            }
+        };
+        let mut refspecs = vec![format!("+{refspec}")];
+        if options.push_tags {
+            refspecs.push("refs/tags/*:refs/tags/*".into());
+        }
+        push_refspecs(
+            repo,
+            remote_name,
+            &refspecs,
+            Some((destination, expected)),
+            credentials,
+        )?;
+        if should_set_upstream {
+            set_branch_upstream(repo, branch_name, remote_name, target_branch)?;
+        }
+        return Ok(());
     }
 
     let requires_system_git = crate::capability::system_git()
@@ -545,9 +576,9 @@ pub fn push_with_options(
                 })?;
 
         let mut callbacks = build_remote_callbacks(config, credentials);
-        callbacks.push_update_reference(|refname, msg| {
-            info!("Push update: {} - {:?}", refname, msg);
-            Ok(())
+        callbacks.push_update_reference(|refname, msg| match msg {
+            Some(reason) => Err(Git2Error::from_str(&format!("{refname}: {reason}"))),
+            None => Ok(()),
         });
 
         let mut push_options = Git2PushOptions::new();
@@ -620,6 +651,46 @@ fn set_branch_upstream(
             details: e.to_string(),
         })?;
     Ok(())
+}
+
+/// Validate the server-advertised old OID before transmitting any ref updates.
+/// receive-pack also compares that old OID when publishing, closing the race.
+pub(crate) fn push_refspecs(
+    repo: &Repository,
+    remote_name: &str,
+    refspecs: &[String],
+    lease: Option<(&str, git2::Oid)>,
+    credentials: Option<(&str, &str)>,
+) -> Result<(), GitError> {
+    let raw = repo.inner.write().unwrap();
+    let mut remote = raw.find_remote(remote_name)?;
+    let mut callbacks = build_remote_callbacks(raw.config()?, credentials);
+    let lease = lease.map(|(name, oid)| (name.to_owned(), oid));
+    callbacks.push_negotiation(move |updates| {
+        if let Some((name, expected)) = &lease {
+            for update in updates {
+                if update.dst_refname() == Some(name.as_str()) && update.src() != *expected {
+                    return Err(Git2Error::from_str(
+                        "force-with-lease 校验失败：远端分支已更新，请先获取并检查",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    });
+    callbacks.push_update_reference(|name, status| match status {
+        Some(reason) => Err(Git2Error::from_str(&format!("{name}: {reason}"))),
+        None => Ok(()),
+    });
+    let mut options = Git2PushOptions::new();
+    options.remote_callbacks(callbacks);
+    let refs: Vec<_> = refspecs.iter().map(String::as_str).collect();
+    remote
+        .push(&refs, Some(&mut options))
+        .map_err(|error| GitError::RemoteFailed {
+            remote: remote_name.into(),
+            details: error.to_string(),
+        })
 }
 
 /// Force push with --force-with-lease semantics

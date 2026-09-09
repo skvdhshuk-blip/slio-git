@@ -78,7 +78,7 @@ pub use commit_actions::{
     continue_in_progress_commit_action, drop_commit_from_history, edit_commit_message,
     export_commit_patch, fixup_commit_to_previous, get_in_progress_commit_action,
     push_current_branch_to_commit, reset_current_branch_to_commit,
-    resolve_push_current_branch_target, revert_commit, squash_commit_to_previous,
+    resolve_push_current_branch_target, revert_commit, reword_commit, squash_commit_to_previous,
     uncommit_to_commit,
 };
 pub use diff::{
